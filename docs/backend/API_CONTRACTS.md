@@ -311,3 +311,32 @@ These are proposed contracts; implement only after checking current route conven
 
 ### API invariants
 Rate-limit OTP, application, document upload, quote, order, and location update endpoints. Validate coordinate bounds, active service area, ownership, catalog availability, quote expiry, idempotency, and allowed state transitions server-side. Do not return private verification documents or precise locations to unauthorized actors. Electronic payment confirmation remains webhook/provider-authoritative.
+
+
+---
+
+## 9. Cross-Client Sessions, Order Chat & Voice Notes (2026-10-14)
+
+All contracts below are proposed until implemented. Flutter and web use the same `/api/v1` contracts; do not create separate mobile and web order APIs.
+
+### Conversation and text messages
+- `GET /api/v1/orders/:orderId/conversation` — return conversation metadata only to authorized participants.
+- `GET /api/v1/orders/:orderId/messages?cursor=` — authenticated cursor pagination; authorize order access on every request.
+- `POST /api/v1/orders/:orderId/messages` — request includes `clientMessageId` and either text content or a validated attachment reference. Server derives sender from the verified JWT.
+- `POST /api/v1/orders/:orderId/messages/:messageId/read` — optional read receipt, pending product/privacy approval.
+
+### Voice-note upload
+- `POST /api/v1/orders/:orderId/voice-notes/upload-intent` — authorize participant and return a narrowly scoped, short-lived private upload target.
+- `POST /api/v1/orders/:orderId/voice-notes/complete` — server validates object ownership, actual size, MIME/codec, duration, and metadata before publishing the message.
+- `GET /api/v1/messages/:messageId/audio` — authorized stream/redirect or short-lived URL after membership checks.
+- Object keys are server-generated; the client cannot choose arbitrary storage paths or make a bucket public.
+
+### Realtime events
+Use an authenticated provider adapter for new-message/order-state notifications. Subscription authorization is derived from verified identity and persisted membership. Events contain message IDs and minimal metadata; clients fetch authorized message content over the API. If realtime is unavailable, use bounded polling and explicit connection state.
+
+### Cross-client invariants
+- Mobile and web share account identity, quote/order state, persisted message history and server rules.
+- Idempotency prevents duplicate messages/orders on retries.
+- The server is authoritative; offline drafts are not shown as sent until confirmed.
+- Microphone denial/browser incompatibility falls back to text and order status.
+- All endpoints use rate limits, request validation, audit-safe logging and participant checks.
