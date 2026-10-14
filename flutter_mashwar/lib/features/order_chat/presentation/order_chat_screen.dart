@@ -34,6 +34,7 @@ class _OrderChatScreenState extends State<OrderChatScreen> {
   }
 
   Future<void> _loadMessages() async {
+    if (!mounted) return;
     setState(() { _loading = true; _error = null; });
     try {
       final messages = await _repository.getMessages(widget.orderId);
@@ -51,6 +52,7 @@ class _OrderChatScreenState extends State<OrderChatScreen> {
     setState(() { _sending = true; _error = null; });
     try {
       await _repository.sendText(widget.orderId, text);
+      if (!mounted) return;
       _messageController.clear();
       await _loadMessages();
     } catch (error) {
