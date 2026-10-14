@@ -70,3 +70,12 @@ Do not silently repurpose root `src/App.tsx`; current root Vite/React surface is
 - A user can place a basic order on web without installing Flutter.
 - Chat and voice notes obey the same authorization/storage policies on both clients.
 - No UI claims that GPS, push, payment, realtime, or voice upload is live until its real provider path is tested.
+
+
+## 9. Implementation checkpoint — 2026-10-14
+
+A first customer-web scaffold now exists under `web/customer/`, separate from the root developer preview. It includes a responsive service/order form, server-quote confirmation UI, API-driven service-area selection, text conversation UI, and browser voice recording/preview/upload flow.
+
+A first Flutter order-chat screen and repository now exist under `flutter_mashwar/lib/features/order_chat/`. The order tracking screen links to chat, and Android/iOS microphone permission disclosures were added. The mobile repository expects the authenticated access token in Flutter Secure Storage under `access_token` and an API origin supplied with `--dart-define=MASHWAR_API_BASE_URL=...`.
+
+**Not yet production-connected:** backend auth/session, service-area API, quote/order routes, persisted chat, private audio upload/playback, realtime delivery and authorization/RLS. Both clients must remain non-production until these endpoints are implemented and end-to-end tests pass. Flutter package resolution/analyze/tests and web TypeScript/build checks are pending CI verification; do not infer success from files existing.
