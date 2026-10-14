@@ -49,6 +49,8 @@ export async function apiRequest<T>(path: string, init: RequestInit = {}): Promi
     );
   }
 
+  const envelope = body as { data?: T; success?: boolean } | null;
+  if (envelope && typeof envelope === 'object' && 'data' in envelope) return envelope.data as T;
   return body as T;
 }
 
