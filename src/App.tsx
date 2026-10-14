@@ -760,6 +760,8 @@ export default function App() {
               </div>
             </div>
           </div>
+          </>
+        )}
 
         {/* BACKEND TESTS & QUALITY GATES TAB */}
         {activeTab === 'backend_tests' && (
