@@ -3,6 +3,7 @@ import 'package:go_router/go_router.dart';
 import '../../features/customer_home/presentation/screens/customer_home_screen.dart';
 import '../../features/delivery_booking/presentation/screens/booking_screen.dart';
 import '../../features/order_tracking/presentation/screens/order_tracking_screen.dart';
+import '../../features/order_chat/presentation/order_chat_screen.dart';
 import '../../features/order_history/presentation/screens/order_history_screen.dart';
 import '../../features/captain/presentation/screens/captain_dashboard_screen.dart';
 import '../../features/merchant/presentation/screens/merchant_workspace_screen.dart';
@@ -29,6 +30,15 @@ final GoRouter appRouter = GoRouter(
             final orderId = state.pathParameters['id'] ?? '';
             return OrderTrackingScreen(orderId: orderId);
           },
+          routes: [
+            GoRoute(
+              path: 'chat',
+              builder: (context, state) {
+                final orderId = state.pathParameters['id'] ?? '';
+                return OrderChatScreen(orderId: orderId);
+              },
+            ),
+          ],
         ),
         GoRoute(
           path: 'history',
