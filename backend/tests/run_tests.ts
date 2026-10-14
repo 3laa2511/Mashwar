@@ -15,7 +15,7 @@
  * 10. Webhook Replay Deduplication & Idempotency Store
  */
 
-import { PricingEngine } from '../src/pricing/pricingEngine.js';
+import { PricingEngine, DEFAULT_PRICING_CONFIG } from '../src/pricing/pricingEngine.js';
 import { OrderFsm } from '../src/orders/orderFsm.js';
 import { CaptainEligibilityEngine } from '../src/captain/captainEligibility.js';
 import { AssignmentService } from '../src/dispatch/assignmentService.js';
@@ -105,7 +105,7 @@ export async function runAllTests(): Promise<{
   // SUITE 1: Authoritative Pricing & Piasters Precision
   // --------------------------------------------------------------------------
   console.log('▶ SUITE 1: Authoritative Pricing Engine & Currency Invariants');
-  const pricing = new PricingEngine();
+  const pricing = new PricingEngine({ ...DEFAULT_PRICING_CONFIG, hmacSecret: 'unit-test-only-pricing-signing-secret-2026' });
 
   await runTest('Pricing', 'Calculates exact urban fare within 1.5km baseline (1,700 piasters)', () => {
     const quote = pricing.generateQuote({
@@ -472,6 +472,8 @@ export async function runAllTests(): Promise<{
   console.log('\n▶ SUITE 7: Webhook Cryptographic Security & Idempotent Deduplication');
 
   WebhookService.clearCache();
+  // Explicit synthetic secret for isolated unit tests only; production has no fallback secret.
+  process.env.PAYMOB_HMAC_SECRET = 'unit-test-only-paymob-webhook-secret-2026';
   const webhookPayload: WebhookEventPayload = {
     eventId: 'evt_paymob_test_8812',
     provider: 'paymob',
