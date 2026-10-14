@@ -15,7 +15,7 @@
  * 10. Webhook Replay Deduplication & Idempotency Store
  */
 
-import { PricingEngine } from '../src/pricing/pricingEngine.js';
+import { PricingEngine, requireEnvSecret } from '../src/pricing/pricingEngine.js';
 import { OrderFsm } from '../src/orders/orderFsm.js';
 import { CaptainEligibilityEngine } from '../src/captain/captainEligibility.js';
 import { AssignmentService } from '../src/dispatch/assignmentService.js';
@@ -100,6 +100,27 @@ export async function runAllTests(): Promise<{
   console.log(' MASHWAR — BACKEND INTEGRATION TEST SUITE (EL BAGOUR HUB)');
   console.log(' Execution Environment: Node.js / TypeScript / Pure Integer Units');
   console.log('================================================================\n');
+
+  // --------------------------------------------------------------------------
+  // SUITE 0: Required Signing Secret Configuration
+  // --------------------------------------------------------------------------
+  console.log('▶ SUITE 0: Required Signing Secret Configuration');
+
+  await runTest('Security config', 'Fails clearly when a required signing secret is missing', () => {
+    const pricingFixture = process.env.PRICING_HMAC_SECRET;
+    const webhookFixture = process.env.PAYMOB_HMAC_SECRET;
+    delete process.env.PRICING_HMAC_SECRET;
+    delete process.env.PAYMOB_HMAC_SECRET;
+    try {
+      assertThrows(() => requireEnvSecret('PRICING_HMAC_SECRET'), 'MISSING_REQUIRED_SECRET');
+      assertThrows(() => WebhookService.getRequiredSecret('paymob'), 'MISSING_REQUIRED_SECRET');
+    } finally {
+      if (pricingFixture === undefined) delete process.env.PRICING_HMAC_SECRET;
+      else process.env.PRICING_HMAC_SECRET = pricingFixture;
+      if (webhookFixture === undefined) delete process.env.PAYMOB_HMAC_SECRET;
+      else process.env.PAYMOB_HMAC_SECRET = webhookFixture;
+    }
+  });
 
   // --------------------------------------------------------------------------
   // SUITE 1: Authoritative Pricing & Piasters Precision
