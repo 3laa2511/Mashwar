@@ -88,3 +88,30 @@ CREATE POLICY prevent_direct_client_updates ON orders
    - Structured logging filters strip Egyptian mobile numbers (`+2010...`) and authorization tokens before emitting logs to disk or monitoring tools.
 3. **Session Revocation:**
    - Suspended captains or deactivated users have their refresh tokens immediately revoked in the database (`users.is_active = FALSE`).
+
+
+---
+
+## 5. Marketplace, Captain Identity & Location Privacy (Scope Addendum — 2026-10-14)
+
+### Merchant boundaries
+- Public reads are restricted to approved, active merchants/branches and public catalog fields.
+- Merchant owner/staff permissions are scoped through persisted memberships and branch access; never trust a client-supplied merchant ID alone.
+- Merchant subscription is not a verification bypass. Suspended/unapproved merchants cannot publish or accept orders.
+- Price, stock, approval state, entitlement, and audit fields are server-owned. Validate catalog uploads and use least-privilege storage policies.
+
+### Captain identity data
+- Public profile DTOs contain only necessary display name/photo, verification badge, vehicle category, and persisted rating/completion aggregates.
+- National ID numbers, ID/license images, private phone, home address, date of birth, internal review notes and risk flags are private and never included in customer/merchant API responses.
+- Identity files live in private storage with short-lived signed URLs created only after authorization. Audit access and review decisions; redact signed URL tokens and PII from logs.
+- Define legal basis, retention/deletion, staff access and incident response before collecting real documents. Use synthetic fixtures only.
+
+### Location and dispatch
+- Exact customer addresses and captain coordinates are access-controlled by order relationship and operational need.
+- Validate coordinates and timestamps, rate-limit updates, reject stale/impossible jumps for dispatch eligibility, and record minimal data.
+- A routing provider or GPS stream must not be represented as live/accurate unless actually integrated. Keep routing credentials server-side.
+- Assignment uses durable database transactions and constraints; process-local locks are not a security or consistency boundary.
+- Include authorization tests for cross-merchant reads, unassigned address access, captain spoofing, and concurrent acceptance.
+
+### Region boundaries
+Service-area activation is an operations privilege. Orders, merchants and captains must be checked against the authoritative active area. Never allow a request body to override the region selected from trusted order/branch configuration. Add cross-area isolation tests and preserve passenger transport lock.
