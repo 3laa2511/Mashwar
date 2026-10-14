@@ -220,6 +220,8 @@ class HttpOrderRepository implements IOrderRepository {
         return OrderServiceType.passengerRestricted;
       case 'package':
         return OrderServiceType.package;
+      default:
+        throw FormatException('نوع خدمة غير معروف من الخادم: ${type ?? 'null'}');
     }
   }
 
