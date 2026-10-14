@@ -1,14 +1,17 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 import '../../../app/theme/app_colors.dart';
+import '../../../shared/providers/role_provider.dart';
 
-class MerchantWorkspaceScreen extends StatefulWidget {
+class MerchantWorkspaceScreen extends ConsumerStatefulWidget {
   const MerchantWorkspaceScreen({super.key});
 
   @override
-  State<MerchantWorkspaceScreen> createState() => _MerchantWorkspaceScreenState();
+  ConsumerState<MerchantWorkspaceScreen> createState() => _MerchantWorkspaceScreenState();
 }
 
-class _MerchantWorkspaceScreenState extends State<MerchantWorkspaceScreen> {
+class _MerchantWorkspaceScreenState extends ConsumerState<MerchantWorkspaceScreen> {
   bool _isStoreOpen = true;
 
   final List<Map<String, dynamic>> _merchantOrders = [
@@ -17,7 +20,7 @@ class _MerchantWorkspaceScreenState extends State<MerchantWorkspaceScreen> {
       'customer': 'أحمد سعيد',
       'items': '٢ فطير بالسجق والجبن الكيري + ١ لتر بيبسي',
       'total': '145.00 ج.م',
-      'status': 'preparing', // incoming, preparing, ready
+      'status': 'preparing', // preparing, ready
       'time': 'منذ 8 دقائق',
       'captain': 'كابتن محمود السيد (في الطريق للمتجر)',
     },
@@ -44,6 +47,33 @@ class _MerchantWorkspaceScreenState extends State<MerchantWorkspaceScreen> {
             onChanged: (val) {
               setState(() => _isStoreOpen = val);
             },
+          ),
+          PopupMenuButton<AppRole>(
+            tooltip: 'تبديل الدور للتجربة',
+            icon: const Icon(Icons.swap_horiz_rounded),
+            onSelected: (role) {
+              ref.read(roleProvider.notifier).switchRole(role);
+              switch (role) {
+                case AppRole.customer:
+                  context.go('/customer');
+                  break;
+                case AppRole.captain:
+                  context.go('/captain');
+                  break;
+                case AppRole.merchant:
+                  context.go('/merchant');
+                  break;
+                case AppRole.operations:
+                  context.go('/operations');
+                  break;
+              }
+            },
+            itemBuilder: (context) => const [
+              PopupMenuItem(value: AppRole.customer, child: Text('تطبيق العميل')),
+              PopupMenuItem(value: AppRole.captain, child: Text('تطبيق الكابتن')),
+              PopupMenuItem(value: AppRole.merchant, child: Text('متجر التاجر')),
+              PopupMenuItem(value: AppRole.operations, child: Text('غرفة العمليات')),
+            ],
           ),
         ],
       ),
@@ -81,7 +111,7 @@ class _MerchantWorkspaceScreenState extends State<MerchantWorkspaceScreen> {
                           ),
                         ),
                         Text(
-                          _isStoreOpen ? 'متوسط سرعة التجهيز الحالية: 15 دقيقة' : 'لن يتم استقبال طلبات جديدة على مشوار',
+                          _isStoreOpen ? 'متوسط سرعة التجهيز الحالية: 15 دقيقة (بيانات تجريبية)' : 'لن يتم استقبال طلبات جديدة على مشوار',
                           style: const TextStyle(fontSize: 12, color: AppColors.slate500),
                         ),
                       ],
@@ -102,7 +132,7 @@ class _MerchantWorkspaceScreenState extends State<MerchantWorkspaceScreen> {
                     color: AppColors.primary.withOpacity(0.2),
                     borderRadius: BorderRadius.circular(12),
                   ),
-                  child: Text('${_merchantOrders.length} طلبات نشطة', style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
+                  child: Text('${_merchantOrders.length} طلبات تجريبية', style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
                 ),
               ],
             ),

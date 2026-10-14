@@ -1,18 +1,21 @@
 import 'package:flutter/material.dart';
-import '../../../app/localization/app_strings.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 import '../../../app/theme/app_colors.dart';
+import '../../../shared/models/order_model.dart';
+import '../../../shared/providers/orders_provider.dart';
+import '../../../shared/providers/role_provider.dart';
 
-class CaptainDashboardScreen extends StatefulWidget {
+class CaptainDashboardScreen extends ConsumerStatefulWidget {
   const CaptainDashboardScreen({super.key});
 
   @override
-  State<CaptainDashboardScreen> createState() => _CaptainDashboardScreenState();
+  ConsumerState<CaptainDashboardScreen> createState() => _CaptainDashboardScreenState();
 }
 
-class _CaptainDashboardScreenState extends State<CaptainDashboardScreen> {
+class _CaptainDashboardScreenState extends ConsumerState<CaptainDashboardScreen> {
   bool _isOnline = true;
-  bool _hasActiveOrder = true;
-  int _deliveryStep = 1; // 0: accepted, 1: at pickup, 2: in transit, 3: delivered
+  bool _showRadarAlert = true;
 
   final double _todayEarnings = 240.0;
   final int _completedTrips = 9;
@@ -21,6 +24,12 @@ class _CaptainDashboardScreenState extends State<CaptainDashboardScreen> {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final orders = ref.watch(ordersProvider);
+    // Find an active order assigned or in progress
+    final activeOrder = orders.firstWhere(
+      (o) => o.status != OrderStatus.delivered && o.status != OrderStatus.cancelled,
+      orElse: () => orders.first,
+    );
 
     return Scaffold(
       appBar: AppBar(
@@ -39,6 +48,33 @@ class _CaptainDashboardScreenState extends State<CaptainDashboardScreen> {
                 ),
               );
             },
+          ),
+          PopupMenuButton<AppRole>(
+            tooltip: 'تبديل الدور للتجربة',
+            icon: const Icon(Icons.swap_horiz_rounded),
+            onSelected: (role) {
+              ref.read(roleProvider.notifier).switchRole(role);
+              switch (role) {
+                case AppRole.customer:
+                  context.go('/customer');
+                  break;
+                case AppRole.captain:
+                  context.go('/captain');
+                  break;
+                case AppRole.merchant:
+                  context.go('/merchant');
+                  break;
+                case AppRole.operations:
+                  context.go('/operations');
+                  break;
+              }
+            },
+            itemBuilder: (context) => const [
+              PopupMenuItem(value: AppRole.customer, child: Text('تطبيق العميل')),
+              PopupMenuItem(value: AppRole.captain, child: Text('تطبيق الكابتن')),
+              PopupMenuItem(value: AppRole.merchant, child: Text('متجر التاجر')),
+              PopupMenuItem(value: AppRole.operations, child: Text('غرفة العمليات')),
+            ],
           ),
         ],
       ),
@@ -87,7 +123,7 @@ class _CaptainDashboardScreenState extends State<CaptainDashboardScreen> {
             ),
 
             const SizedBox(height: 16),
-            // Today Earnings summary
+            // Today Earnings summary (clearly marked as demo)
             Card(
               child: Padding(
                 padding: const EdgeInsets.all(16),
@@ -96,8 +132,12 @@ class _CaptainDashboardScreenState extends State<CaptainDashboardScreen> {
                     Row(
                       mainAxisAlignment: MainAxisAlignment.spaceBetween,
                       children: [
-                        const Text('ملخص دخل اليوم', style: TextStyle(fontWeight: FontWeight.bold)),
-                        Text('13 أكتوبر', style: TextStyle(color: Colors.grey.shade600, fontSize: 12)),
+                        const Text('ملخص دخل اليوم (أرقام استرشادية)', style: TextStyle(fontWeight: FontWeight.bold)),
+                        Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                          decoration: BoxDecoration(color: AppColors.slate200, borderRadius: BorderRadius.circular(6)),
+                          child: const Text('تجريبي', style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold)),
+                        ),
                       ],
                     ),
                     const Divider(height: 20),
@@ -115,115 +155,174 @@ class _CaptainDashboardScreenState extends State<CaptainDashboardScreen> {
             ),
 
             const SizedBox(height: 20),
-            if (_hasActiveOrder) ...[
-              Text(
-                'المشوار الجاري حالياً',
-                style: theme.textTheme.titleMedium?.copyWith(fontWeight: FontWeight.bold),
-              ),
-              const SizedBox(height: 10),
-              Card(
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(16),
-                  side: const BorderSide(color: AppColors.primary, width: 1.5),
-                ),
-                child: Padding(
-                  padding: const EdgeInsets.all(16),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Row(
-                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                        children: [
-                          Container(
-                            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                            decoration: BoxDecoration(
-                              color: AppColors.primary.withOpacity(0.15),
-                              borderRadius: BorderRadius.circular(8),
-                            ),
-                            child: const Text('طلب #MSH-8102', style: TextStyle(fontWeight: FontWeight.bold)),
-                          ),
-                          const Text('أجرة التوصيل: 22.00 ج.م', style: TextStyle(fontWeight: FontWeight.bold, color: AppColors.secondaryDark)),
-                        ],
-                      ),
-                      const SizedBox(height: 12),
-                      Row(
-                        children: const [
-                          Icon(Icons.trip_origin_rounded, size: 18, color: AppColors.secondary),
-                          SizedBox(width: 8),
-                          Expanded(child: Text('الاستلام: ميدان المحطة - وسط الباجور', style: TextStyle(fontWeight: FontWeight.w600))),
-                        ],
-                      ),
-                      const SizedBox(height: 6),
-                      Row(
-                        children: const [
-                          Icon(Icons.location_on_rounded, size: 18, color: AppColors.error),
-                          SizedBox(width: 8),
-                          Expanded(child: Text('التسليم: مستشفى الباجور العام (الدور الثاني)', style: TextStyle(fontWeight: FontWeight.w600))),
-                        ],
-                      ),
-                      const Divider(height: 24),
-                      Row(
-                        children: [
-                          Expanded(
-                            child: OutlinedButton.icon(
-                              onPressed: () {},
-                              icon: const Icon(Icons.phone_rounded, size: 18),
-                              label: const Text('اتصال بالعميل'),
-                            ),
-                          ),
-                          const SizedBox(width: 12),
-                          Expanded(
-                            child: ElevatedButton(
-                              onPressed: () {
-                                setState(() {
-                                  if (_deliveryStep < 3) {
-                                    _deliveryStep++;
-                                  } else {
-                                    _hasActiveOrder = false;
-                                  }
-                                });
-                              },
-                              child: Text(
-                                _deliveryStep == 0
-                                    ? 'وصلت لمكان الاستلام'
-                                    : _deliveryStep == 1
-                                        ? 'تم استلام الشحنة'
-                                        : _deliveryStep == 2
-                                            ? 'تم التسليم وتحصيل 22 ج.م'
-                                            : 'تم إنهاء المشوار',
-                                style: const TextStyle(fontSize: 13),
-                              ),
-                            ),
-                          ),
-                        ],
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-            ] else ...[
+
+            // Incoming radar request simulation
+            if (_isOnline && _showRadarAlert) ...[
               Container(
-                padding: const EdgeInsets.all(28),
+                padding: const EdgeInsets.all(14),
                 decoration: BoxDecoration(
-                  color: Colors.white,
+                  color: AppColors.primary.withOpacity(0.12),
                   borderRadius: BorderRadius.circular(16),
-                  border: Border.all(color: AppColors.borderLight),
+                  border: Border.all(color: AppColors.primary, width: 1.5),
                 ),
                 child: Column(
-                  children: const [
-                    Icon(Icons.done_all_rounded, size: 48, color: AppColors.secondary),
-                    SizedBox(height: 12),
-                    Text('لا توجد مشاوير نشطة حالياً', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
-                    SizedBox(height: 6),
-                    Text('الرادار جاهز لتلقي طلبات جديدة في الباجور فور وصولها', style: TextStyle(fontSize: 12, color: AppColors.slate500)),
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        const Row(
+                          children: [
+                            Icon(Icons.sensors, color: AppColors.primaryDark),
+                            SizedBox(width: 6),
+                            Text('طلب رادار جديد قريب منك!', style: TextStyle(fontWeight: FontWeight.bold)),
+                          ],
+                        ),
+                        Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                          decoration: BoxDecoration(
+                            color: AppColors.secondary,
+                            borderRadius: BorderRadius.circular(8),
+                          ),
+                          child: const Text('28.00 ج.م', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 12)),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 8),
+                    const Text('الاستلام: مجلس مدينة الباجور ➔ التسليم: قرية كفر الباجور (3.2 كم)', style: TextStyle(fontSize: 12)),
+                    const SizedBox(height: 12),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: ElevatedButton(
+                            style: ElevatedButton.styleFrom(backgroundColor: AppColors.secondary, foregroundColor: Colors.white),
+                            onPressed: () {
+                              setState(() => _showRadarAlert = false);
+                              ref.read(ordersProvider.notifier).advanceOrderStatus(activeOrder.id);
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                const SnackBar(content: Text('تم قبول المشوار بنجاح!'), backgroundColor: AppColors.secondary),
+                              );
+                            },
+                            child: const Text('قبول المشوار'),
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        OutlinedButton(
+                          onPressed: () => setState(() => _showRadarAlert = false),
+                          child: const Text('تجاهل'),
+                        ),
+                      ],
+                    ),
                   ],
                 ),
               ),
+              const SizedBox(height: 20),
             ],
+
+            Text(
+              'المشوار الجاري حالياً',
+              style: theme.textTheme.titleMedium?.copyWith(fontWeight: FontWeight.bold),
+            ),
+            const SizedBox(height: 10),
+            Card(
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(16),
+                side: const BorderSide(color: AppColors.primary, width: 1.5),
+              ),
+              child: Padding(
+                padding: const EdgeInsets.all(16),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                          decoration: BoxDecoration(
+                            color: AppColors.primary.withOpacity(0.15),
+                            borderRadius: BorderRadius.circular(8),
+                          ),
+                          child: Text('طلب #${activeOrder.id}', style: const TextStyle(fontWeight: FontWeight.bold)),
+                        ),
+                        Text(
+                          'أجرة التوصيل: ${activeOrder.estimatedFareEGP} ج.م',
+                          style: const TextStyle(fontWeight: FontWeight.bold, color: AppColors.secondaryDark),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 12),
+                    Row(
+                      children: [
+                        const Icon(Icons.trip_origin_rounded, size: 18, color: AppColors.secondary),
+                        const SizedBox(width: 8),
+                        Expanded(child: Text('الاستلام: ${activeOrder.pickupAddress}', style: const TextStyle(fontWeight: FontWeight.w600))),
+                      ],
+                    ),
+                    const SizedBox(height: 6),
+                    Row(
+                      children: [
+                        const Icon(Icons.location_on_rounded, size: 18, color: AppColors.error),
+                        const SizedBox(width: 8),
+                        Expanded(child: Text('التسليم: ${activeOrder.dropoffAddress}', style: const TextStyle(fontWeight: FontWeight.w600))),
+                      ],
+                    ),
+                    const Divider(height: 24),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: OutlinedButton.icon(
+                            onPressed: () {
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                SnackBar(content: Text('محاكاة اتصال بالعميل: ${activeOrder.customerPhone}')),
+                              );
+                            },
+                            icon: const Icon(Icons.phone_rounded, size: 18),
+                            label: const Text('اتصال بالعميل'),
+                          ),
+                        ),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: ElevatedButton(
+                            onPressed: activeOrder.status == OrderStatus.delivered
+                                ? null
+                                : () {
+                                    ref.read(ordersProvider.notifier).advanceOrderStatus(activeOrder.id);
+                                  },
+                            child: Text(
+                              _getCaptainActionLabel(activeOrder.status),
+                              style: const TextStyle(fontSize: 12),
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+            ),
           ],
         ),
       ),
     );
+  }
+
+  String _getCaptainActionLabel(OrderStatus status) {
+    switch (status) {
+      case OrderStatus.created:
+      case OrderStatus.searchingCaptain:
+        return 'قبول المشوار';
+      case OrderStatus.captainAssigned:
+        return 'وصلت لمكان الاستلام';
+      case OrderStatus.atPickup:
+        return 'تم استلام الشحنة';
+      case OrderStatus.inTransit:
+        return 'تم التسليم وتحصيل المبلغ';
+      case OrderStatus.delivered:
+        return 'المشوار مكتمل ✓';
+      case OrderStatus.cancelled:
+        return 'ملغي';
+    }
   }
 
   Widget _buildMetricCol(String label, String value, Color color) {

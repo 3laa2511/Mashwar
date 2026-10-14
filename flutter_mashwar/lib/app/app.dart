@@ -1,14 +1,14 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
+import 'router/app_router.dart';
 import 'theme/app_theme.dart';
-import '../features/customer_home/presentation/screens/customer_home_screen.dart';
 
 class MashwarApp extends StatelessWidget {
   const MashwarApp({super.key});
 
   @override
   Widget build(BuildContext context) {
-    return MaterialApp(
+    return MaterialApp.router(
       title: 'مشوار — Mashwar',
       debugShowCheckedModeBanner: false,
       theme: AppTheme.lightTheme,
@@ -25,7 +25,7 @@ class MashwarApp extends StatelessWidget {
         GlobalWidgetsLocalizations.delegate,
         GlobalCupertinoLocalizations.delegate,
       ],
-      home: const CustomerHomeScreen(),
+      routerConfig: appRouter,
     );
   }
 }

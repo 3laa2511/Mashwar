@@ -1,25 +1,28 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 import '../../../app/localization/app_strings.dart';
 import '../../../app/theme/app_colors.dart';
-import '../../../shared/services/mock_data_repository.dart';
 import '../../../shared/models/order_model.dart';
+import '../../../shared/providers/orders_provider.dart';
+import '../../../shared/providers/role_provider.dart';
 
-class CustomerHomeScreen extends StatefulWidget {
+class CustomerHomeScreen extends ConsumerStatefulWidget {
   const CustomerHomeScreen({super.key});
 
   @override
-  State<CustomerHomeScreen> createState() => _CustomerHomeScreenState();
+  ConsumerState<CustomerHomeScreen> createState() => _CustomerHomeScreenState();
 }
 
-class _CustomerHomeScreenState extends State<CustomerHomeScreen> {
+class _CustomerHomeScreenState extends ConsumerState<CustomerHomeScreen> {
   int _selectedTabIndex = 0;
-  String _selectedPickup = 'ميدان المحطة - وسط الباجور';
-  String _selectedDropoff = 'مستشفى الباجور العام';
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final isDark = theme.brightness == Brightness.dark;
+    final orders = ref.watch(ordersProvider);
+    final activeOrders = orders.where((o) => o.status != OrderStatus.delivered && o.status != OrderStatus.cancelled).toList();
 
     return Scaffold(
       appBar: AppBar(
@@ -31,7 +34,6 @@ class _CustomerHomeScreenState extends State<CustomerHomeScreen> {
               decoration: BoxDecoration(
                 color: AppColors.primary.withOpacity(0.15),
                 borderRadius: BorderRadius.circular(20),
-                border: Border.pad(EdgeInsets.zero),
               ),
               child: Row(
                 children: [
@@ -51,9 +53,76 @@ class _CustomerHomeScreenState extends State<CustomerHomeScreen> {
           ],
         ),
         actions: [
-          IconButton(
-            icon: const Icon(Icons.notifications_none_rounded),
-            onPressed: () {},
+          // Role switch popup menu for demo environment
+          PopupMenuButton<AppRole>(
+            tooltip: 'تبديل الدور للتجربة (Demo Role Switcher)',
+            icon: Container(
+              padding: const EdgeInsets.all(6),
+              decoration: BoxDecoration(
+                color: AppColors.slate200,
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: const Icon(Icons.swap_horiz_rounded, size: 20, color: AppColors.slate800),
+            ),
+            onSelected: (role) {
+              ref.read(roleProvider.notifier).switchRole(role);
+              switch (role) {
+                case AppRole.customer:
+                  context.go('/customer');
+                  break;
+                case AppRole.captain:
+                  context.go('/captain');
+                  break;
+                case AppRole.merchant:
+                  context.go('/merchant');
+                  break;
+                case AppRole.operations:
+                  context.go('/operations');
+                  break;
+              }
+            },
+            itemBuilder: (context) => [
+              const PopupMenuItem(
+                value: AppRole.customer,
+                child: Row(
+                  children: [
+                    Icon(Icons.person, color: AppColors.primaryDark, size: 18),
+                    SizedBox(width: 8),
+                    Text('تطبيق العميل (Customer)', style: TextStyle(fontSize: 13)),
+                  ],
+                ),
+              ),
+              const PopupMenuItem(
+                value: AppRole.captain,
+                child: Row(
+                  children: [
+                    Icon(Icons.two_wheeler, color: AppColors.secondary, size: 18),
+                    SizedBox(width: 8),
+                    Text('تطبيق الكابتن (Captain)', style: TextStyle(fontSize: 13)),
+                  ],
+                ),
+              ),
+              const PopupMenuItem(
+                value: AppRole.merchant,
+                child: Row(
+                  children: [
+                    Icon(Icons.storefront, color: Colors.blueAccent, size: 18),
+                    SizedBox(width: 8),
+                    Text('متجر التاجر (Merchant)', style: TextStyle(fontSize: 13)),
+                  ],
+                ),
+              ),
+              const PopupMenuItem(
+                value: AppRole.operations,
+                child: Row(
+                  children: [
+                    Icon(Icons.admin_panel_settings, color: Colors.purple, size: 18),
+                    SizedBox(width: 8),
+                    Text('غرفة العمليات (Operations)', style: TextStyle(fontSize: 13)),
+                  ],
+                ),
+              ),
+            ],
           ),
         ],
       ),
@@ -129,7 +198,7 @@ class _CustomerHomeScreenState extends State<CustomerHomeScreen> {
               badgeText: 'أسرع كابتن',
               badgeColor: AppColors.secondary,
               isEnabled: true,
-              onTap: () => _openBookingDialog(context, OrderServiceType.package),
+              onTap: () => context.push('/customer/book'),
             ),
 
             const SizedBox(height: 12),
@@ -141,7 +210,7 @@ class _CustomerHomeScreenState extends State<CustomerHomeScreen> {
               badgeText: 'متاجر الباجور',
               badgeColor: AppColors.primaryDark,
               isEnabled: true,
-              onTap: () => _openBookingDialog(context, OrderServiceType.restaurantStore),
+              onTap: () => context.push('/customer/book'),
             ),
 
             const SizedBox(height: 12),
@@ -153,7 +222,7 @@ class _CustomerHomeScreenState extends State<CustomerHomeScreen> {
               badgeText: 'تخليص فوري',
               badgeColor: Colors.blueAccent,
               isEnabled: true,
-              onTap: () => _openBookingDialog(context, OrderServiceType.errand),
+              onTap: () => context.push('/customer/book'),
             ),
 
             const SizedBox(height: 12),
@@ -166,10 +235,23 @@ class _CustomerHomeScreenState extends State<CustomerHomeScreen> {
               badgeColor: AppColors.error,
               isEnabled: false,
               onTap: () {
-                ScaffoldMessenger.of(context).showSnackBar(
-                  SnackBar(
+                showDialog(
+                  context: context,
+                  builder: (ctx) => AlertDialog(
+                    title: const Row(
+                      children: [
+                        Icon(Icons.gavel_rounded, color: AppColors.error),
+                        SizedBox(width: 8),
+                        Text('امتثال تنظيمي وقانوني', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+                      ],
+                    ),
                     content: Text(AppStrings.get('passengerDisabledNotice')),
-                    backgroundColor: AppColors.error,
+                    actions: [
+                      TextButton(
+                        onPressed: () => Navigator.pop(ctx),
+                        child: const Text('حسناً'),
+                      ),
+                    ],
                   ),
                 );
               },
@@ -181,79 +263,115 @@ class _CustomerHomeScreenState extends State<CustomerHomeScreen> {
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
                 Text(
-                  'آخر الطلبات النشطة',
+                  'الطلبات النشطة (${activeOrders.length})',
                   style: theme.textTheme.titleMedium?.copyWith(fontWeight: FontWeight.bold),
                 ),
                 TextButton(
-                  onPressed: () {},
-                  child: const Text('عرض الكل'),
+                  onPressed: () => context.push('/customer/history'),
+                  child: const Text('عرض السجل بالكامل'),
                 ),
               ],
             ),
             const SizedBox(height: 8),
 
-            // Example active order card
-            Card(
-              child: Padding(
-                padding: const EdgeInsets.all(16),
-                child: Column(
-                  children: [
-                    Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                      children: [
-                        Row(
-                          children: [
-                            Container(
-                              padding: const EdgeInsets.all(8),
-                              decoration: BoxDecoration(
-                                color: AppColors.secondary.withOpacity(0.12),
-                                shape: BoxShape.circle,
-                              ),
-                              child: const Icon(Icons.two_wheeler_rounded, color: AppColors.secondary, size: 20),
-                            ),
-                            const SizedBox(width: 10),
-                            Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: const [
-                                Text('طلب #MSH-8102', style: TextStyle(fontWeight: FontWeight.bold)),
-                                Text('طرد مستعجل • في الطريق إليك', style: TextStyle(fontSize: 12, color: AppColors.slate500)),
-                              ],
-                            ),
-                          ],
-                        ),
-                        Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                          decoration: BoxDecoration(
-                            color: AppColors.secondary.withOpacity(0.15),
-                            borderRadius: BorderRadius.circular(12),
-                          ),
-                          child: const Text('22.00 ج.م', style: TextStyle(fontWeight: FontWeight.bold, color: AppColors.secondaryDark)),
-                        ),
-                      ],
-                    ),
-                    const Divider(height: 24),
-                    Row(
-                      children: const [
-                        Icon(Icons.person_pin_circle_outlined, size: 16, color: AppColors.slate400),
-                        SizedBox(width: 6),
-                        Expanded(child: Text('كابتن طارق الغريب • دراجة هوجان سوداء', style: TextStyle(fontSize: 13))),
-                      ],
-                    ),
-                  ],
+            if (activeOrders.isEmpty)
+              Container(
+                padding: const EdgeInsets.all(20),
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  borderRadius: BorderRadius.circular(16),
+                  border: Border.all(color: AppColors.borderLight),
                 ),
-              ),
-            ),
+                child: const Center(
+                  child: Text('لا توجد طلبات جارية حالياً • ابدأ بحجز مشوارك الأول!'),
+                ),
+              )
+            else
+              ...activeOrders.map((order) {
+                return Card(
+                  margin: const EdgeInsets.only(bottom: 10),
+                  child: InkWell(
+                    borderRadius: BorderRadius.circular(16),
+                    onTap: () => context.push('/customer/order/${order.id}'),
+                    child: Padding(
+                      padding: const EdgeInsets.all(16),
+                      child: Column(
+                        children: [
+                          Row(
+                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                            children: [
+                              Row(
+                                children: [
+                                  Container(
+                                    padding: const EdgeInsets.all(8),
+                                    decoration: BoxDecoration(
+                                      color: AppColors.secondary.withOpacity(0.12),
+                                      shape: BoxShape.circle,
+                                    ),
+                                    child: const Icon(Icons.two_wheeler_rounded, color: AppColors.secondary, size: 20),
+                                  ),
+                                  const SizedBox(width: 10),
+                                  Column(
+                                    crossAxisAlignment: CrossAxisAlignment.start,
+                                    children: [
+                                      Text('طلب #${order.id}', style: const TextStyle(fontWeight: FontWeight.bold)),
+                                      Text(
+                                        order.itemDescription,
+                                        style: const TextStyle(fontSize: 12, color: AppColors.slate500),
+                                        maxLines: 1,
+                                        overflow: TextOverflow.ellipsis,
+                                      ),
+                                    ],
+                                  ),
+                                ],
+                              ),
+                              Container(
+                                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                                decoration: BoxDecoration(
+                                  color: AppColors.secondary.withOpacity(0.15),
+                                  borderRadius: BorderRadius.circular(12),
+                                ),
+                                child: Text('${order.estimatedFareEGP} ج.م', style: const TextStyle(fontWeight: FontWeight.bold, color: AppColors.secondaryDark)),
+                              ),
+                            ],
+                          ),
+                          const Divider(height: 20),
+                          Row(
+                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                            children: [
+                              Text(
+                                'من: ${order.pickupAddress} ➔ ${order.dropoffAddress}',
+                                style: const TextStyle(fontSize: 11, color: AppColors.slate600),
+                              ),
+                              const Icon(Icons.arrow_forward_ios, size: 12, color: AppColors.slate400),
+                            ],
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                );
+              }),
             const SizedBox(height: 32),
           ],
         ),
       ),
       bottomNavigationBar: NavigationBar(
         selectedIndex: _selectedTabIndex,
-        onDestinationSelected: (index) => setState(() => _selectedTabIndex = index),
+        onDestinationSelected: (index) {
+          setState(() => _selectedTabIndex = index);
+          if (index == 0) {
+            context.go('/customer');
+          } else if (index == 1) {
+            context.push('/customer/history');
+          } else if (index == 2) {
+            context.push('/customer/book');
+          }
+        },
         destinations: const [
           NavigationDestination(icon: Icon(Icons.home_rounded), label: 'الرئيسية'),
           NavigationDestination(icon: Icon(Icons.receipt_long_rounded), label: 'طلباتي'),
-          NavigationDestination(icon: Icon(Icons.person_outline_rounded), label: 'حسابي'),
+          NavigationDestination(icon: Icon(Icons.add_circle_outline_rounded), label: 'طلب مشوار'),
         ],
       ),
     );
@@ -349,71 +467,6 @@ class _CustomerHomeScreenState extends State<CustomerHomeScreen> {
           ],
         ),
       ),
-    );
-  }
-
-  void _openBookingDialog(BuildContext context, OrderServiceType serviceType) {
-    showModalBottomSheet(
-      context: context,
-      isScrollControlled: true,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
-      ),
-      builder: (ctx) {
-        return Padding(
-          padding: EdgeInsets.only(
-            top: 20,
-            left: 20,
-            right: 20,
-            bottom: MediaQuery.of(ctx).viewInsets.bottom + 24,
-          ),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              Text(
-                'طلب مشوار جديد',
-                style: Theme.of(context).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.bold),
-              ),
-              const SizedBox(height: 16),
-              DropdownButtonFormField<String>(
-                value: _selectedPickup,
-                decoration: const InputDecoration(labelText: 'نقطة الاستلام في الباجور'),
-                items: MockDataRepository.elBagourLandmarks
-                    .map((item) => DropdownMenuItem(value: item, child: Text(item, style: const TextStyle(fontSize: 13))))
-                    .toList(),
-                onChanged: (val) {
-                  if (val != null) setState(() => _selectedPickup = val);
-                },
-              ),
-              const SizedBox(height: 12),
-              DropdownButtonFormField<String>(
-                value: _selectedDropoff,
-                decoration: const InputDecoration(labelText: 'نقطة التسليم في الباجور'),
-                items: MockDataRepository.elBagourLandmarks
-                    .map((item) => DropdownMenuItem(value: item, child: Text(item, style: const TextStyle(fontSize: 13))))
-                    .toList(),
-                onChanged: (val) {
-                  if (val != null) setState(() => _selectedDropoff = val);
-                },
-              ),
-              const SizedBox(height: 16),
-              ElevatedButton(
-                onPressed: () {
-                  Navigator.pop(ctx);
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(
-                      content: Text('تم إرسال الطلب بنجاح وجاري إشعار الكباتن بالباجور!'),
-                      backgroundColor: AppColors.secondary,
-                    ),
-                  );
-                },
-                child: const Text('حساب التسعيرة والبحث عن كابتن'),
-              ),
-            ],
-          ),
-        );
-      },
     );
   }
 }

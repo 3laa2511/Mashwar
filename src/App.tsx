@@ -78,7 +78,6 @@ dependencies:
   flutter_localizations:
     sdk: flutter
   flutter_riverpod: ^2.5.1
-  riverpod_annotation: ^2.3.5
   go_router: ^14.0.0
   dio: ^5.4.1
   flutter_secure_storage: ^9.0.0
@@ -86,8 +85,44 @@ dependencies:
   intl: ^0.19.0
   geolocator: ^11.0.0
 
-flutter:
-  uses-material-design: true`
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^3.0.1`
+  },
+  {
+    path: 'android/app/src/main/AndroidManifest.xml',
+    language: 'xml',
+    content: `<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="com.mashwar.app">
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+    <uses-permission android:name="android.permission.CALL_PHONE" />
+    <application android:label="مشوار" android:icon="@mipmap/ic_launcher">
+        <activity android:name=".MainActivity" android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN"/>
+                <category android:name="android.intent.category.LAUNCHER"/>
+            </intent-filter>
+        </activity>
+    </application>
+</manifest>`
+  },
+  {
+    path: 'ios/Runner/Info.plist',
+    language: 'xml',
+    content: `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleDisplayName</key>
+	<string>مشوار</string>
+	<key>CFBundleName</key>
+	<string>mashwar</string>
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>يحتاج تطبيق مشوار للوصول إلى موقعك لتحديد نقطة استلام وتسليم الطرود بدقة في مدينة الباجور والقرى المجاورة.</string>
+</dict>
+</plist>`
   },
   {
     path: 'lib/main.dart',
@@ -106,21 +141,134 @@ void main() {
 }`
   },
   {
-    path: 'lib/app/theme/app_colors.dart',
+    path: 'lib/app/app.dart',
     language: 'dart',
     content: `import 'package:flutter/material.dart';
+import 'package:flutter_localizations/flutter_localizations.dart';
+import 'router/app_router.dart';
+import 'theme/app_theme.dart';
 
-class AppColors {
-  static const Color primary = Color(0xFFF59E0B);
-  static const Color primaryDark = Color(0xFFD97706);
-  static const Color secondary = Color(0xFF059669);
-  static const Color secondaryDark = Color(0xFF047857);
-  static const Color slate950 = Color(0xFF020617);
-  static const Color slate900 = Color(0xFF0F172A);
-  static const Color slate800 = Color(0xFF1E293B);
-  static const Color slate100 = Color(0xFFF1F5F9);
-  static const Color error = Color(0xFFEF4444);
+class MashwarApp extends StatelessWidget {
+  const MashwarApp({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return MaterialApp.router(
+      title: 'مشوار — Mashwar',
+      debugShowCheckedModeBanner: false,
+      theme: AppTheme.lightTheme,
+      darkTheme: AppTheme.darkTheme,
+      locale: const Locale('ar', 'EG'),
+      supportedLocales: const [
+        Locale('ar', 'EG'),
+        Locale('en', 'US'),
+      ],
+      localizationsDelegates: const [
+        GlobalMaterialLocalizations.delegate,
+        GlobalWidgetsLocalizations.delegate,
+        GlobalCupertinoLocalizations.delegate,
+      ],
+      routerConfig: appRouter,
+    );
+  }
 }`
+  },
+  {
+    path: 'lib/app/router/app_router.dart',
+    language: 'dart',
+    content: `import 'package:flutter/material.dart';
+import 'package:go_router/go_router.dart';
+import '../../features/customer_home/presentation/screens/customer_home_screen.dart';
+import '../../features/delivery_booking/presentation/screens/booking_screen.dart';
+import '../../features/order_tracking/presentation/screens/order_tracking_screen.dart';
+import '../../features/order_history/presentation/screens/order_history_screen.dart';
+import '../../features/captain/presentation/screens/captain_dashboard_screen.dart';
+import '../../features/merchant/presentation/screens/merchant_workspace_screen.dart';
+import '../../features/operations/presentation/screens/operations_dashboard_screen.dart';
+
+final GoRouter appRouter = GoRouter(
+  initialLocation: '/customer',
+  routes: [
+    GoRoute(
+      path: '/',
+      redirect: (context, state) => '/customer',
+    ),
+    GoRoute(
+      path: '/customer',
+      builder: (context, state) => const CustomerHomeScreen(),
+      routes: [
+        GoRoute(
+          path: 'book',
+          builder: (context, state) => const BookingScreen(),
+        ),
+        GoRoute(
+          path: 'order/:id',
+          builder: (context, state) => OrderTrackingScreen(orderId: state.pathParameters['id'] ?? ''),
+        ),
+        GoRoute(
+          path: 'history',
+          builder: (context, state) => const OrderHistoryScreen(),
+        ),
+      ],
+    ),
+    GoRoute(
+      path: '/captain',
+      builder: (context, state) => const CaptainDashboardScreen(),
+    ),
+    GoRoute(
+      path: '/merchant',
+      builder: (context, state) => const MerchantWorkspaceScreen(),
+    ),
+    GoRoute(
+      path: '/operations',
+      builder: (context, state) => const OperationsDashboardScreen(),
+    ),
+  ],
+);`
+  },
+  {
+    path: 'lib/shared/providers/orders_provider.dart',
+    language: 'dart',
+    content: `import 'package:flutter_riverpod/flutter_riverpod.dart';
+import '../models/order_model.dart';
+import '../services/mock_data_repository.dart';
+
+class OrdersNotifier extends StateNotifier<List<OrderModel>> {
+  OrdersNotifier() : super(MockDataRepository.getInitialMockOrders());
+
+  void addOrder(OrderModel newOrder) {
+    state = [newOrder, ...state];
+  }
+
+  void advanceOrderStatus(String orderId) {
+    state = [
+      for (final order in state)
+        if (order.id == orderId) _getNextOrderState(order) else order
+    ];
+  }
+
+  OrderModel _getNextOrderState(OrderModel order) {
+    switch (order.status) {
+      case OrderStatus.created:
+        return order.copyWith(status: OrderStatus.searchingCaptain);
+      case OrderStatus.searchingCaptain:
+        return order.copyWith(status: OrderStatus.captainAssigned, captainName: 'كابتن طارق الغريب');
+      case OrderStatus.captainAssigned:
+        return order.copyWith(status: OrderStatus.atPickup);
+      case OrderStatus.atPickup:
+        return order.copyWith(status: OrderStatus.inTransit);
+      case OrderStatus.inTransit:
+        return order.copyWith(status: OrderStatus.delivered);
+      case OrderStatus.delivered:
+      case OrderStatus.cancelled:
+        return order;
+    }
+  }
+}
+
+final ordersProvider = StateNotifierProvider<OrdersNotifier, List<OrderModel>>((ref) {
+  return OrdersNotifier();
+});`
   },
   {
     path: 'lib/core/utils/price_calculator.dart',
@@ -157,25 +305,74 @@ class PriceCalculator {
 }`
   },
   {
-    path: 'test/unit/price_calculator_test.dart',
+    path: 'lib/core/utils/input_validator.dart',
+    language: 'dart',
+    content: `class InputValidator {
+  static String? validateEgyptianPhone(String? value) {
+    if (value == null || value.trim().isEmpty) return 'يرجى إدخال رقم الموبايل';
+    final clean = value.replaceAll(RegExp(r'\\s+'), '');
+    final regex = RegExp(r'^(010|011|012|015)[0-9]{8}$');
+    if (!regex.hasMatch(clean)) return 'رقم موبايل غير صحيح (مثال: 01012345678)';
+    return null;
+  }
+
+  static String? validateLocations({required String? pickup, required String? dropoff}) {
+    if (pickup == null || pickup.trim().isEmpty) return 'يرجى تحديد مكان الاستلام بالباجور';
+    if (dropoff == null || dropoff.trim().isEmpty) return 'يرجى تحديد مكان التسليم بالباجور';
+    if (pickup.trim() == dropoff.trim()) return 'مكان الاستلام والتسليم لا يمكن أن يكونا متطابقين';
+    return null;
+  }
+}`
+  },
+  {
+    path: 'test/unit/order_state_transitions_test.dart',
     language: 'dart',
     content: `import 'package:flutter_test/flutter_test.dart';
-import '../../lib/core/utils/price_calculator.dart';
+import '../../lib/shared/models/order_model.dart';
+import '../../lib/shared/providers/orders_provider.dart';
 
 void main() {
-  group('PriceCalculator Tests for El Bagour Delivery Model', () {
-    test('Calculates base fare within 1.5km urban radius', () {
-      final quote = PriceCalculator.calculateQuote(distanceKm: 1.2, isRuralOrVillage: false);
-      expect(quote.baseFare, 15.0);
-      expect(quote.distanceFare, 0.0);
-      expect(quote.totalFare, 17.0);
-    });
+  group('OrdersNotifier State Transition Tests', () {
+    test('Correctly progresses order states from created to delivered', () {
+      final notifier = OrdersNotifier();
+      final newOrder = OrderModel(
+        id: 'TEST-101',
+        customerName: 'علي حسن',
+        customerPhone: '01011112222',
+        serviceType: OrderServiceType.package,
+        status: OrderStatus.created,
+        pickupAddress: 'ميدان المحطة',
+        dropoffAddress: 'مجلس المدينة',
+        itemDescription: 'أوراق مهمة',
+        estimatedFareEGP: 17.0,
+        distanceKm: 1.2,
+        createdAt: DateTime.now(),
+      );
 
-    test('Calculates distance fare and rural surcharge', () {
-      final quote = PriceCalculator.calculateQuote(distanceKm: 3.5, isRuralOrVillage: true);
-      expect(quote.ruralOrUnpavedSurcharge, 5.0);
-      expect(quote.totalFare, 30.0);
+      notifier.addOrder(newOrder);
+      expect(notifier.state.first.status, OrderStatus.created);
+      notifier.advanceOrderStatus('TEST-101');
+      expect(notifier.state.first.status, OrderStatus.searchingCaptain);
     });
+  });
+}`
+  },
+  {
+    path: 'test/widget/app_smoke_test.dart',
+    language: 'dart',
+    content: `import 'package:flutter_test/flutter_test.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import '../../lib/app/app.dart';
+
+void main() {
+  testWidgets('MashwarApp smoke test: mounts MaterialApp.router with ProviderScope', (WidgetTester tester) async {
+    await tester.pumpWidget(
+      const ProviderScope(
+        child: MashwarApp(),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('الباجور، المنوفية'), findsOneWidget);
   });
 }`
   }
