@@ -5,6 +5,8 @@ import { ApiError, apiRequest, getApiHealth, requestVoiceUploadIntent } from './
 type Service = 'store' | 'parcel' | 'errand';
 type RecordingState = 'idle' | 'recording' | 'ready' | 'unsupported' | 'error';
 type ChatMessage = { id: string; messageType: 'text' | 'voice_note'; textBody?: string; audioUrl?: string; senderLabel?: string; createdAt: string };
+type ServiceArea = { id: string; displayName: string; status?: 'active' | 'inactive' };
+type FareQuote = { quoteId: string; totalFarePiasters: number; formattedTotalEgp?: string; currency: 'EGP'; expiresAt: string; lineItems?: Array<{ title: string; amountPiasters: number }> };
 
 const serviceCards: { id: Service; title: string; detail: string; icon: typeof Package }[] = [
   { id: 'store', title: 'اطلب من محل', detail: 'محلات وخدمات قريبة منك', icon: ShoppingBag },
@@ -14,7 +16,11 @@ const serviceCards: { id: Service; title: string; detail: string; icon: typeof P
 
 function App() {
   const [service, setService] = useState<Service>('parcel');
-  const [area] = useState('الباجور');
+  const [area, setArea] = useState('');
+  const [serviceAreas, setServiceAreas] = useState<ServiceArea[]>([]);
+  const [quote, setQuote] = useState<FareQuote | null>(null);
+  const [pickupPhone, setPickupPhone] = useState('');
+  const [dropoffPhone, setDropoffPhone] = useState('');
   const [pickup, setPickup] = useState('');
   const [dropoff, setDropoff] = useState('');
   const [details, setDetails] = useState('');
@@ -44,7 +50,23 @@ function App() {
   useEffect(() => () => {
     if (timer.current !== null) window.clearInterval(timer.current);
     stream.current?.getTracks().forEach(track => track.stop());
+  }, []);
+
+  useEffect(() => () => {
     if (audioPreviewUrl) URL.revokeObjectURL(audioPreviewUrl);
+  }, [audioPreviewUrl]);
+
+  useEffect(() => {
+    let cancelled = false;
+    apiRequest<{ serviceAreas: ServiceArea[] }>('/api/v1/service-areas')
+      .then(response => {
+        if (cancelled) return;
+        const activeAreas = (response.serviceAreas ?? []).filter(item => item.status === 'active');
+        setServiceAreas(activeAreas);
+        if (activeAreas.length > 0) setArea(activeAreas[0].id);
+      })
+      .catch(() => { if (!cancelled) setServiceAreas([]); });
+    return () => { cancelled = true; };
   }, []);
 
   const startRecording = async () => {
@@ -105,34 +127,40 @@ function App() {
 
   const sendRequest = async () => {
     setNotice('');
-    if (!pickup.trim() || !dropoff.trim()) {
-      setNoticeKind('error');
-      setNotice(t('اكتب مكان الاستلام والتوصيل الأول.', 'Please enter pickup and drop-off locations first.'));
-      return;
-    }
+    if (!area) { setNoticeKind('error'); setNotice(t('اختار منطقة خدمة متاحة الأول.', 'Choose an available service area first.')); return; }
+    if (!pickup.trim() || !dropoff.trim()) { setNoticeKind('error'); setNotice(t('اكتب مكان الاستلام والتوصيل الأول.', 'Please enter pickup and drop-off locations first.')); return; }
+    if (!pickupPhone.trim() || !dropoffPhone.trim()) { setNoticeKind('error'); setNotice(t('اكتب رقم تواصل للاستلام والتوصيل.', 'Enter contact phone numbers for pickup and drop-off.')); return; }
     setBusy(true);
     try {
-      // Intentionally no mock success. This endpoint must be implemented and authenticated by the trusted API.
+      if (!quote) {
+        const result = await apiRequest<FareQuote>('/api/v1/quotes', {
+          method: 'POST',
+          body: JSON.stringify({ serviceTypeId: service === 'parcel' ? 'package' : service === 'store' ? 'restaurant_store' : 'errand', serviceAreaId: area, pickupAddress: pickup.trim(), dropoffAddress: dropoff.trim(), description: details.trim() }),
+        });
+        setQuote(result); setNoticeKind('success');
+        setNotice(t('السعر وصل من الخادم. راجعه واضغط تأكيد الطلب.', 'Quote received from the server. Review it and confirm your order.'));
+        return;
+      }
+      if (new Date(quote.expiresAt).getTime() <= Date.now()) { setQuote(null); setNoticeKind('error'); setNotice(t('انتهت صلاحية السعر. اطلب تسعيرة جديدة.', 'This quote expired. Request a new quote.')); return; }
       const result = await apiRequest<{ orderId?: string; message?: string }>('/api/v1/orders', {
         method: 'POST',
+        headers: { 'Idempotency-Key': crypto.randomUUID() },
         body: JSON.stringify({
           serviceTypeId: service === 'parcel' ? 'package' : service === 'store' ? 'restaurant_store' : 'errand',
-          serviceAreaCode: area,
-          pickupAddress: pickup.trim(),
-          dropoffAddress: dropoff.trim(),
-          description: details.trim(),
+          quoteId: quote.quoteId,
+          itemDescription: details.trim() || (service === 'parcel' ? 'طرد / مستند' : service === 'store' ? 'طلب من متجر' : 'قضاء غرض'),
+          pickup: { landmarkName: pickup.trim(), detailedAddress: pickup.trim(), contactPhone: pickupPhone.trim() },
+          dropoff: { landmarkName: dropoff.trim(), detailedAddress: dropoff.trim(), contactPhone: dropoffPhone.trim() },
+          paymentMethod: 'cash_on_delivery',
         }),
       });
       setNoticeKind('success');
-      setNotice(result.message ?? t('تم إرسال الطلب للخادم.', 'Request sent to the server.'));
+      setNotice(result.message ?? (result.orderId ? t('تم تأكيد الطلب رقم ', 'Order confirmed: ') + result.orderId : t('الخادم أكد استلام الطلب.', 'The server confirmed the order.')));
+      setQuote(null);
     } catch (error) {
-      setNoticeKind('error');
-      setNotice(error instanceof ApiError ? error.message : t('الطلب ما اتبعتش. اتأكد من الاتصال وحاول تاني.', 'Request was not sent. Check your connection and try again.'));
-    } finally {
-      setBusy(false);
-    }
+      setNoticeKind('error'); setNotice(error instanceof ApiError ? error.message : t('الطلب ما اتبعتش. اتأكد من الاتصال وحاول تاني.', 'Request was not sent. Check your connection and try again.'));
+    } finally { setBusy(false); }
   };
-
   const loadConversation = async () => {
     if (!chatOrderId.trim()) { setChatNotice(t('اكتب رقم الطلب الأول.', 'Enter an order ID first.')); return; }
     setChatBusy(true); setChatNotice('');
