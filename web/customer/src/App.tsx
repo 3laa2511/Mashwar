@@ -23,6 +23,7 @@ function App() {
   const [busy, setBusy] = useState(false);
   const [recordingState, setRecordingState] = useState<RecordingState>('idle');
   const [audioFile, setAudioFile] = useState<File | null>(null);
+  const [audioPreviewUrl, setAudioPreviewUrl] = useState<string | null>(null);
   const [isArabic, setIsArabic] = useState(true);
   const [showSignIn, setShowSignIn] = useState(false);
   const [phone, setPhone] = useState('');
@@ -43,14 +44,14 @@ function App() {
   useEffect(() => () => {
     if (timer.current !== null) window.clearInterval(timer.current);
     stream.current?.getTracks().forEach(track => track.stop());
+    if (audioPreviewUrl) URL.revokeObjectURL(audioPreviewUrl);
   }, []);
 
   const startRecording = async () => {
-    setNotice('');
+    setChatNotice('');
     if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === 'undefined') {
       setRecordingState('unsupported');
-      setNoticeKind('error');
-      setNotice(t('المتصفح ده مش بيدعم التسجيل الصوتي. تقدر تكتب رسالتك بدلًا منه.', 'This browser does not support audio recording. You can type your message instead.'));
+      setChatNotice(t('المتصفح ده مش بيدعم التسجيل الصوتي. تقدر تكتب رسالتك بدلًا منه.', 'This browser does not support audio recording. You can type your message instead.'));
       return;
     }
     try {
@@ -63,7 +64,9 @@ function App() {
       mediaRecorder.onstop = () => {
         const type = mediaRecorder.mimeType || 'audio/webm';
         const blob = new Blob(chunks.current, { type });
-        setAudioFile(new File([blob], `mashwar-voice-${Date.now()}.webm`, { type }));
+        const file = new File([blob], `mashwar-voice-${Date.now()}.webm`, { type });
+        setAudioFile(file);
+        setAudioPreviewUrl(URL.createObjectURL(file));
         setRecordingState('ready');
         stream.current?.getTracks().forEach(track => track.stop());
         stream.current = null;
@@ -74,8 +77,7 @@ function App() {
       timer.current = window.setInterval(() => setRecordSeconds(value => value + 1), 1000);
     } catch {
       setRecordingState('error');
-      setNoticeKind('error');
-      setNotice(t('مش قادرين نوصل للميكروفون. راجع إذن التسجيل أو اكتب رسالتك.', 'Microphone access failed. Check permission or type your message instead.'));
+      setChatNotice(t('مش قادرين نوصل للميكروفون. راجع إذن التسجيل أو اكتب رسالتك.', 'Microphone access failed. Check permission or type your message instead.'));
     }
   };
 
@@ -95,6 +97,8 @@ function App() {
     recorder.current = null;
     chunks.current = [];
     setAudioFile(null);
+    if (audioPreviewUrl) URL.revokeObjectURL(audioPreviewUrl);
+    setAudioPreviewUrl(null);
     setRecordingState('idle');
     setRecordSeconds(0);
   };
@@ -171,6 +175,8 @@ function App() {
       });
       setChatNotice(t('الخادم أكد إرسال التسجيل.', 'Server confirmed the voice note.'));
       setAudioFile(null);
+      if (audioPreviewUrl) URL.revokeObjectURL(audioPreviewUrl);
+      setAudioPreviewUrl(null);
       setRecordingState('idle');
       await loadConversation();
     } catch (error) {
@@ -253,7 +259,7 @@ function App() {
           <div className="chat-panel">
             <div className="chat-intro"><span className="chat-head-icon"><Headphones size={22} /></span><div><b>{t('محادثة مرتبطة بالطلب', 'Order-linked conversation')}</b><small>{t('المحادثة هتظهر بعد تسجيل الدخول والتحقق من صلاحيتك على الطلب.', 'Conversation loads only after the API verifies your access to the order.')}</small></div></div>
             <div className="chat-order-input"><label htmlFor="chat-order-id">{t('رقم الطلب', 'Order ID')}</label><div><input id="chat-order-id" value={chatOrderId} onChange={event => setChatOrderId(event.target.value)} placeholder={t('رقم الطلب اللي عايز تتابعه', 'Order ID')} /><button className="record-button" onClick={loadConversation} disabled={chatBusy}>{chatBusy ? t('جاري التحميل...', 'Loading...') : t('فتح المحادثة', 'Open chat')}</button></div></div>
-            <div className="voice-box"><div className="voice-copy"><span className="voice-icon"><Mic size={20} /></span><div><b>{t('مش حابب تكتب؟', 'Prefer not to type?')}</b><small>{t('سجّل رسالة صوتية بدل الكتابة', 'Record a voice note instead')}</small></div></div><div className="record-actions">{recordingState === 'recording' ? <><span className="recording-live"><span /> {Math.floor(recordSeconds / 60).toString().padStart(2,'0')}:{(recordSeconds % 60).toString().padStart(2,'0')}</span><button className="record-button stop" onClick={stopRecording}>{t('إيقاف', 'Stop')}</button><button className="icon-button" onClick={cancelRecording} aria-label={t('إلغاء التسجيل', 'Cancel recording')}><X size={17} /></button></> : recordingState === 'ready' && audioFile ? <><span className="audio-ready"><AudioLines size={18} /> {t('التسجيل جاهز', 'Recording ready')}</span><audio controls src={URL.createObjectURL(audioFile)} /><button className="icon-button" onClick={cancelRecording} aria-label={t('حذف التسجيل', 'Discard recording')}><X size={17} /></button></> : <button className="record-button" onClick={startRecording}><Mic size={16} /> {t('ابدأ تسجيل', 'Record voice')}</button>}</div>{recordingState === 'ready' && audioFile && <button className="send-voice" disabled={busy} onClick={sendVoiceNote}><Upload size={15} /> {t('إرسال التسجيل للطلب', 'Send voice note to order')}</button>}</div>
+            <div className="voice-box"><div className="voice-copy"><span className="voice-icon"><Mic size={20} /></span><div><b>{t('مش حابب تكتب؟', 'Prefer not to type?')}</b><small>{t('سجّل رسالة صوتية بدل الكتابة', 'Record a voice note instead')}</small></div></div><div className="record-actions">{recordingState === 'recording' ? <><span className="recording-live"><span /> {Math.floor(recordSeconds / 60).toString().padStart(2,'0')}:{(recordSeconds % 60).toString().padStart(2,'0')}</span><button className="record-button stop" onClick={stopRecording}>{t('إيقاف', 'Stop')}</button><button className="icon-button" onClick={cancelRecording} aria-label={t('إلغاء التسجيل', 'Cancel recording')}><X size={17} /></button></> : recordingState === 'ready' && audioFile ? <><span className="audio-ready"><AudioLines size={18} /> {t('التسجيل جاهز', 'Recording ready')}</span><audio controls src={audioPreviewUrl ?? undefined} /><button className="icon-button" onClick={cancelRecording} aria-label={t('حذف التسجيل', 'Discard recording')}><X size={17} /></button></> : <button className="record-button" onClick={startRecording}><Mic size={16} /> {t('ابدأ تسجيل', 'Record voice')}</button>}</div>{recordingState === 'ready' && audioFile && <button className="send-voice" disabled={chatBusy} onClick={sendVoiceNote}><Upload size={15} /> {t('إرسال التسجيل للطلب', 'Send voice note to order')}</button>}</div>
             <div className="chat-messages" aria-live="polite">{chatMessages.length === 0 ? <div className="chat-empty"><AudioLines size={22} /><span>{t('مفيش رسائل معروضة. افتح محادثة طلب حقيقية علشان نجيب الرسائل من الخادم.', 'No messages shown. Open an authorized order conversation to load messages from the server.')}</span></div> : chatMessages.map(message => <div className="chat-message" key={message.id}><small>{message.senderLabel ?? t('مشارك في الطلب', 'Order participant')} · {new Date(message.createdAt).toLocaleString(isArabic ? 'ar-EG' : 'en-US')}</small>{message.messageType === 'voice_note' && message.audioUrl ? <audio controls src={message.audioUrl} /> : message.messageType === 'voice_note' ? <span className="chat-voice-placeholder"><AudioLines size={17} /> {t('رسالة صوتية (رابط التشغيل يحتاج صلاحية من الخادم)', 'Voice note (playback requires an authorized server URL)')}</span> : <p>{message.textBody}</p>}</div>)}</div>
             <div className="chat-compose"><textarea rows={2} value={chatDraft} onChange={event => setChatDraft(event.target.value)} placeholder={t('اكتب رسالتك للكابتن...', 'Write a message to the captain...')} /><button className="submit-order" disabled={chatBusy || !chatOrderId.trim() || !chatDraft.trim()} onClick={sendChatMessage}>{t('إرسال الرسالة', 'Send message')} <ArrowLeft size={17} /></button></div>
             {chatNotice && <div className="notice info" role="status">{chatNotice}</div>}
