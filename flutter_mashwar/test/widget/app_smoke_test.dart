@@ -14,6 +14,6 @@ void main() {
     // Verify presence of title or core landmarks
     expect(find.text('الباجور، المنوفية'), findsOneWidget);
     expect(find.text('توصيل طرد أو أمانة'), findsOneWidget);
-    expect(find.text('توصيل ركاب (معلق مؤقتاً)'), findsOneWidget);
+    expect(find.text('معلق نظامياً'), findsOneWidget);
   });
 }
