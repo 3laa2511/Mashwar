@@ -9,6 +9,8 @@ export interface StateTransitionResult {
   previousStatus: OrderStatus;
   newStatus: OrderStatus;
   order: Order;
+  transitionedAt: string;
+  messageAr: string;
   auditLog: {
     orderId: string;
     fromStatus: OrderStatus;
@@ -154,6 +156,10 @@ export class OrderFsm {
       previousStatus: currentStatus,
       newStatus: targetStatus,
       order: updatedOrder,
+      transitionedAt: nowIso,
+      messageAr: targetStatus === 'cancelled'
+        ? 'تم إلغاء الطلب بنجاح.'
+        : `تم تحديث حالة الطلب إلى ${targetStatus}.`,
       auditLog,
     };
   }
