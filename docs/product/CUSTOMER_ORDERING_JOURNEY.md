@@ -35,3 +35,12 @@ Record payment state only from trusted cash-confirmation flows or verified payme
 - Do not hard-code El Bagour landmarks as the production discovery source.
 - No fake GPS, fabricated map routes, placeholder success notifications, or simulated payment confirmations presented as real.
 - Every visible action should be wired to a real supported capability or clearly marked as unavailable during development.
+
+
+## 7. Web access and accessible communication
+
+The customer journey must work in a responsive browser without requiring app installation. Mobile and web share the same account, quote, order history and status through the trusted API. Area choices are loaded from active service-area configuration rather than hard-coded into the client.
+
+Within an authorized order conversation, customers and assigned captains can exchange text and recorded voice notes. Recording starts only after an explicit user action and microphone permission; if unsupported or denied, text remains available. Audio is private and served only after order/conversation authorization. No fake sent status is shown before server confirmation.
+
+The current `web/customer` directory is an initial responsive client scaffold. Auth, service-area API, quotes, order creation, persisted messages and private audio storage must be connected and integration-tested before public launch.
