@@ -282,3 +282,32 @@
   "overrideReason": "إعادة توجيه يدوية بسبب تعطل دراجة الكابتن السابق"
 }
 ```
+
+
+---
+
+## 8. Marketplace, Service Areas & Dispatch API Addendum (2026-10-14)
+
+These are proposed contracts; implement only after checking current route conventions and authentication middleware. All endpoints require authenticated identity and server-side authorization unless explicitly marked public.
+
+### Service area and merchant discovery
+- `GET /v1/service-areas?lat=&lng=` — return only enabled areas and coverage result; manual area selection must also be supported.
+- `GET /v1/merchants?serviceAreaId=&category=&query=` — public, approved, active branches only.
+- `GET /v1/merchants/:merchantId/branches` and `GET /v1/branches/:branchId/catalog` — expose public fields only.
+- `POST /v1/merchant/applications`, `PATCH /v1/merchant/profile`, `POST /v1/merchant/branches`, `POST /v1/merchant/catalog-items` — scoped to the authenticated merchant membership; approval/status/entitlement fields are server-owned.
+- `POST /v1/operations/merchants/:id/review` — privileged review action with required reason and audit event.
+
+### Captain onboarding
+- `POST /v1/captain/applications`, `POST /v1/captain/documents`, `GET /v1/captain/profile`.
+- `POST /v1/operations/captains/:id/review` — privileged verification decision with reviewer, reason and audit event.
+- Customer-facing profile response must use a dedicated public DTO and exclude private phone, national ID, document URLs, reviewer notes, and risk flags.
+
+### Quotes and orders
+- `POST /v1/quotes` accepts service type, pickup/drop-off, area and catalog references; server returns quote ID, expiry, itemized amounts in piasters and currency.
+- `POST /v1/orders` accepts quote ID, order details and idempotency key, never a client-authoritative total.
+- `POST /v1/orders/:id/cancel`, merchant accept/reject/readiness, and captain accept/decline routes must use the shared order FSM and actor authorization.
+- `POST /v1/dispatch/offers/:id/accept` must be backed by durable transactional assignment and a unique active-assignment constraint.
+- Route contracts must specify error envelopes for unsupported area, no available captain, stale quote, out-of-stock item, expired offer, duplicate request, and forbidden state transition.
+
+### API invariants
+Rate-limit OTP, application, document upload, quote, order, and location update endpoints. Validate coordinate bounds, active service area, ownership, catalog availability, quote expiry, idempotency, and allowed state transitions server-side. Do not return private verification documents or precise locations to unauthorized actors. Electronic payment confirmation remains webhook/provider-authoritative.
