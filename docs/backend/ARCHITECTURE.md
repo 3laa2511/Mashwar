@@ -99,3 +99,24 @@ Every operation in Mashwar is explicitly mapped to its authoritative execution t
 1. **Anonymous / Client Role (`anon`):** Has zero table permissions. Direct PostgREST access from the Flutter mobile app is disabled or restricted strictly to public read-only lookup of active service types.
 2. **Authenticated Role (`authenticated`):** Bound by Row-Level Security (RLS) policies. Even if a compromised client attempts to issue direct SQL/PostgREST queries, RLS enforces that customers only see their own orders, and captains only see orders currently assigned to them.
 3. **Trusted API Service Role (`service_role`):** Used exclusively by the trusted backend API. Bypasses RLS to perform atomic multi-table operations, but authorization checks are rigorously enforced in TypeScript middleware prior to database queries.
+
+
+---
+
+## 8. Platform Expansion, Marketplace & Location Dispatch (Scope Addendum — 2026-10-14)
+
+**Architecture constraint:** El Bagour is the initial enabled service area, not a hard-coded product boundary. Region/city/coverage are configuration and relational data. Do not add city-specific conditionals to core pricing, orders, merchant discovery, or dispatch.
+
+### Required bounded contexts
+- **Geography & coverage:** country → governorate → city/locality → service area; active coverage boundaries and per-area service/operating configuration.
+- **Merchant marketplace:** merchant owner/memberships, branches, catalog, availability, merchant subscription and entitlements.
+- **Captain trust & fleet:** public captain profile separated from private identity documents/review records; service-area membership, availability and location freshness.
+- **Orders & dispatch:** distinct direct-courier and merchant-order workflows sharing authoritative quotes, order snapshots, status history and durable assignment.
+- **Operations:** separate owner/admin web surface backed by authorized APIs for area activation, merchant review, captain verification, order monitoring, subscription policy and audit.
+- **Routing adapter:** `RoutingProvider` abstraction so a routing provider can be replaced without changing domain logic.
+
+### Trust boundaries
+The Flutter app and the `src/App.tsx` developer preview are untrusted clients. The preview is not the production owner dashboard. Only the authenticated trusted API can approve merchants/captains, issue authoritative quotes, change order state, assign a captain, grant subscription entitlements, or confirm electronic payment. Database RLS and constraints remain defense-in-depth.
+
+### Expansion acceptance
+Use a second synthetic city in tests to expose El Bagour assumptions. A service area is not enabled until operations has verified captain coverage, merchant supply, routing, pricing, support, cash reconciliation and local legal readiness. Passenger transport remains disabled pending separate legal and safety authorization.
