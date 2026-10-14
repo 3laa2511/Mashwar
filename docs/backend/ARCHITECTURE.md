@@ -120,3 +120,22 @@ The Flutter app and the `src/App.tsx` developer preview are untrusted clients. T
 
 ### Expansion acceptance
 Use a second synthetic city in tests to expose El Bagour assumptions. A service area is not enabled until operations has verified captain coverage, merchant supply, routing, pricing, support, cash reconciliation and local legal readiness. Passenger transport remains disabled pending separate legal and safety authorization.
+
+
+---
+
+## 9. Shared Web/Mobile Clients & Order Conversations (2026-10-14)
+
+Mashwar must be built as one platform with multiple clients, not as separate mobile/web products with divergent business rules. Flutter mobile and a responsive customer web/PWA use the same authenticated versioned API, persisted accounts/orders, quote service, order FSM, merchant/captain eligibility, and chat authorization. A customer should be able to place and follow an order in a browser without installing an app.
+
+Keep the existing root Vite/React `src/App.tsx` developer preview/workbench separate from a production customer web application and the protected owner/operations surface. Reconcile the current repository layout before moving files; do not silently turn the test workbench into the customer product.
+
+### Order communication bounded context
+- One order conversation, persisted messages, authorized participants, cursor pagination, idempotent sends, and durable delivery state.
+- Text and recorded voice-note messages are first-class message types. Mobile and web share the same API/data contract but use platform-appropriate recording controls.
+- Voice objects are stored privately. The server authorizes upload/download and issues short-lived access only after verifying current conversation membership.
+- Realtime is an adapter (e.g. Supabase Realtime or authenticated WebSocket); durable DB storage remains authoritative. Polling can be an early fallback with bounded rate limits.
+- Push notifications never contain sensitive message content or precise addresses.
+- Speech transcription, text-to-speech, and live calling are separate opt-in decisions, not part of the base voice-note commitment.
+
+Do not claim cross-client synchronization, realtime messaging, microphone recording, PWA installability, or background location until each path is implemented and tested against the real API.
