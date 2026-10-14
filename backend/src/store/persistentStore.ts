@@ -378,10 +378,9 @@ export class PersistentStore {
       actionType: 'CAPTAIN_CASH_SETTLED',
       targetEntity: 'captain',
       targetId: captain.id,
-      descriptionAr: `توريد وتسوية نقدية بمبلغ ${(amountPiasters / 100).toFixed(2)} ج.م للكابتن ${captain.fullName}. المتبقي في العهدة: ${(newHolding / 100).toFixed(2)} ج.م.`,
+      descriptionAr: `توريد وتسوية نقدية بمبلغ ${(amountPiasters / 100).toFixed(2)} ج.م للكابتن ${captain.fullName}. المتبقي في العهدة: ${(newHolding / 100).toFixed(2)} ج.م.${notes ? ` ملاحظات: ${notes}` : ''}`,
       previousState: { cashHoldingPiasters: previousHolding },
       newState: { cashHoldingPiasters: newHolding, subscriptionStatus: captain.subscriptionStatus },
-      notes,
     });
 
     return captain;
