@@ -219,7 +219,6 @@ class HttpOrderRepository implements IOrderRepository {
       case 'passenger':
         return OrderServiceType.passengerRestricted;
       case 'package':
-      default:
         return OrderServiceType.package;
     }
   }
@@ -239,7 +238,6 @@ class HttpOrderRepository implements IOrderRepository {
       case OrderStatus.cancelled:
         return 'cancelled';
       case OrderStatus.created:
-      default:
         return 'created';
     }
   }
