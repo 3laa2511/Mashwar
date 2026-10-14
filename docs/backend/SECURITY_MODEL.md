@@ -115,3 +115,32 @@ CREATE POLICY prevent_direct_client_updates ON orders
 
 ### Region boundaries
 Service-area activation is an operations privilege. Orders, merchants and captains must be checked against the authoritative active area. Never allow a request body to override the region selected from trusted order/branch configuration. Add cross-area isolation tests and preserve passenger transport lock.
+
+
+---
+
+## 6. Web/Mobile Parity, Chat & Audio Security (2026-10-14)
+
+### Shared clients
+- Flutter and browser clients are untrusted. All authoritative operations go through the same trusted API and verified JWT model.
+- Web-specific CORS, CSRF protections where cookie sessions are used, secure session cookie settings, CSP, and dependency/build controls must be reviewed before deployment.
+- Do not place service-role secrets, signing secrets, private storage keys, or provider credentials in either client bundle.
+- Cross-client synchronization is through persisted server data, not browser local storage or device-only order lists.
+
+### Conversation authorization
+- Verify order participation and current assignment at message read, send, attachment upload, and audio download time.
+- Ignore client-supplied sender ID/role as identity proof. Prevent cross-order and cross-customer access.
+- Operations/support access is permission-scoped and audited; it is not blanket access for every staff account.
+- Reassignment/cancellation lifecycle must define when the former captain loses access.
+
+### Voice-note handling
+- Request microphone permission only after explicit user action. Do not record automatically.
+- Validate actual file bytes, MIME/codec, duration and size server-side; never trust browser-provided metadata alone.
+- Use private object storage and short-lived authorized URLs. No public audio bucket or permanent public link.
+- Apply upload quotas, rate limits, retention/deletion policy and safe logging. Avoid recording or transcribing without transparent consent.
+- Push notifications do not include message bodies, voice URLs, exact locations, or private customer details.
+
+### Browser and accessibility controls
+- Provide keyboard-accessible controls, visible recording state, cancel/preview/send actions, large touch targets, and Arabic RTL labels.
+- When microphone or geolocation is denied/unavailable, provide an honest text/manual-address fallback.
+- Do not promise speech-to-text, live calls, or background GPS until separately designed, consented, and tested.
