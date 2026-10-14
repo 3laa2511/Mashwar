@@ -85,6 +85,7 @@ class _OrderChatScreenState extends State<OrderChatScreen> {
     setState(() { _sending = true; _error = null; });
     try {
       await _repository.uploadVoiceNote(widget.orderId, path);
+      if (!mounted) return;
       setState(() => _recordingPath = null);
       await _loadMessages();
     } catch (error) {
