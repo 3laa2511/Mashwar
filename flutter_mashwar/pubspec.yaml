@@ -1,0 +1,54 @@
+name: mashwar
+description: "Mashwar — مشوار: Arabic-first local delivery and mobility platform for El Bagour, Menoufia, Egypt."
+publish_to: "none"
+version: 1.0.0+1
+
+environment:
+  sdk: ">=3.3.0 <4.0.0"
+  flutter: ">=3.19.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+  flutter_localizations:
+    sdk: flutter
+
+  # State Management
+  flutter_riverpod: ^2.5.1
+  riverpod_annotation: ^2.3.5
+
+  # Navigation & Deep Linking
+  go_router: ^14.0.0
+
+  # Networking & Serialization
+  dio: ^5.4.1
+  json_annotation: ^4.8.1
+
+  # Secure Storage & Persistence
+  flutter_secure_storage: ^9.0.0
+  shared_preferences: ^2.2.2
+
+  # UI, Icons, Typography & Localization
+  google_fonts: ^6.1.0
+  intl: ^0.19.0
+  lucide_icons: ^0.252.0
+  cached_network_image: ^3.3.1
+  flutter_svg: ^2.0.10+1
+
+  # Location abstraction (permissions & coordinates)
+  geolocator: ^11.0.0
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^3.0.1
+  build_runner: ^2.4.8
+  json_serializable: ^6.7.1
+  riverpod_generator: ^2.4.0
+  mockito: ^5.4.4
+
+flutter:
+  uses-material-design: true
+  assets:
+    - assets/images/
+    - assets/icons/

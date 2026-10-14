@@ -1,0 +1,6 @@
+{
+  "name": "Mashwar — مشوار Delivery Platform",
+  "description": "Arabic-first local delivery and mobility platform for El Bagour, Menoufia. Native Flutter/Dart codebase with Riverpod, Material 3, and multi-role architecture.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

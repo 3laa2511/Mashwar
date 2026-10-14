@@ -1,0 +1,137 @@
+/// Localization strings for Mashwar with Arabic-first (RTL) priority and English fallback.
+class AppStrings {
+  static const Map<String, Map<String, String>> _localizedValues = {
+    'ar': {
+      'appName': 'مشوار',
+      'appTagline': 'خدمات التوصيل والنقل الذكي في الباجور والمنوفية',
+      'welcome': 'أهلاً بك في مشوار',
+      'loginDemoNotice': 'نسخة استعراضية تجريبية - تسجيل الدخول السريع',
+      'phoneNumber': 'رقم الموبايل (مثال: 010xxxxxxxx)',
+      'sendOtp': 'إرسال رمز التحقق',
+      'verifyOtp': 'تأكيد الرمز',
+      'enterCode': 'أدخل رمز التحقق المكون من 4 أرقام',
+      
+      // Services
+      'packageDelivery': 'توصيل طرد أو أمانة',
+      'packageDeliveryDesc': 'توصيل سريع داخل الباجور والقرى المجاورة',
+      'restaurantStore': 'طلبات المطاعم والمحلات',
+      'restaurantStoreDesc': 'أي طلب من محلات ومطاعم الباجور لباب بيتك',
+      'errands': 'مشوار خاص / طلبية صيدلية',
+      'errandsDesc': 'خدمات شراء وتخليص مستعجل',
+      'passengerDisabled': 'نقل الركاب معلق مؤقتاً',
+      'passengerDisabledNotice': 'حرصاً على سلامتك، تم تعطيل نقل الركاب لحين استيفاء التراخيص الرسمية واشتراطات السلامة والتأمين.',
+
+      // Booking
+      'pickupLocation': 'مكان الاستلام',
+      'dropoffLocation': 'مكان التسليم',
+      'selectOnMap': 'تحديد من معالم الباجور',
+      'packageDetails': 'تفاصيل الطرد أو الشحنة',
+      'itemDescription': 'محتويات الطلب / ملاحظات للكابتن',
+      'estimatedFare': 'تكلفة التوصيل التقديرية',
+      'baseFare': 'الأجرة الأساسية',
+      'distanceFare': 'تكلفة المسافة',
+      'ruralSurcharge': 'بدل طرق غير معبدة / قرى',
+      'confirmBooking': 'تأكيد طلب المشوار',
+      'searchingCaptain': 'جاري البحث عن أقرب كابتن في الباجور...',
+
+      // Order Status
+      'statusPending': 'قيد المعالجة',
+      'statusAssigned': 'تم إسناد الكابتن',
+      'statusAtPickup': 'الكابتن وصل للاستلام',
+      'statusInTransit': 'في الطريق إليك',
+      'statusDelivered': 'تم التوصيل بنجاح',
+      'statusCancelled': 'تم الإلغاء',
+
+      // Roles
+      'roleCustomer': 'العميل',
+      'roleCaptain': 'الكابتن',
+      'roleMerchant': 'التاجر / المتجر',
+      'roleOps': 'العمليات والإشراف',
+
+      // Captain UI
+      'captainStatusOnline': 'جاهز لاستقبال الطلبات',
+      'captainStatusOffline': 'غير متصل (استراحة)',
+      'incomingOrder': 'طلب توصيل جديد في محيطك!',
+      'acceptOrder': 'قبول الطلب',
+      'rejectOrder': 'رفض',
+      'callCustomer': 'اتصال بالعميل',
+      'navigation': 'فتح الخريطة / المعالم',
+      'confirmPickup': 'تم استلام الشحنة',
+      'confirmDelivery': 'تم التسليم وتحصيل المبلغ',
+      'todayEarnings': 'أرباح اليوم',
+      'tripsCount': 'عدد المشاوير',
+
+      // Merchant UI
+      'storeStatusOpen': 'المتجر يستقبل الطلبات',
+      'storeStatusClosed': 'المتجر مغلق حالياً',
+      'prepOrder': 'بدء تجهيز الطلب',
+      'orderReadyForPickup': 'الطلب جاهز لاستلام الكابتن',
+
+      // Operations
+      'liveOrders': 'الطلبات الميدانية الجارية',
+      'activeCaptains': 'الكباتن المتاحين',
+      'safetyAudit': 'سجل السلامة والامتثال',
+    },
+    'en': {
+      'appName': 'Mashwar',
+      'appTagline': 'Local Delivery & Mobility Platform in El Bagour',
+      'welcome': 'Welcome to Mashwar',
+      'loginDemoNotice': 'Demo preview build — Instant access enabled',
+      'phoneNumber': 'Phone Number (e.g. 010xxxxxxxx)',
+      'sendOtp': 'Send Verification Code',
+      'verifyOtp': 'Verify Code',
+      'enterCode': 'Enter 4-digit verification code',
+      'packageDelivery': 'Package Delivery',
+      'packageDeliveryDesc': 'Fast courier within El Bagour & nearby villages',
+      'restaurantStore': 'Stores & Restaurants',
+      'restaurantStoreDesc': 'Direct orders from El Bagour merchants',
+      'errands': 'Errands & Pharmacy',
+      'errandsDesc': 'Custom errands & urgent medicine pickup',
+      'passengerDisabled': 'Passenger Rides Suspended',
+      'passengerDisabledNotice': 'For safety and compliance, passenger transport is paused pending regulatory review & commercial insurance.',
+      'pickupLocation': 'Pickup Point',
+      'dropoffLocation': 'Drop-off Destination',
+      'selectOnMap': 'Select landmark in El Bagour',
+      'packageDetails': 'Package Description',
+      'itemDescription': 'Item details or instructions for captain',
+      'estimatedFare': 'Estimated Delivery Fare',
+      'baseFare': 'Base Fare',
+      'distanceFare': 'Distance Rate',
+      'ruralSurcharge': 'Rural / Unpaved Road Allowance',
+      'confirmBooking': 'Confirm Delivery Order',
+      'searchingCaptain': 'Locating nearest captain in El Bagour...',
+      'statusPending': 'Pending',
+      'statusAssigned': 'Captain Assigned',
+      'statusAtPickup': 'At Pickup Point',
+      'statusInTransit': 'In Transit',
+      'statusDelivered': 'Delivered',
+      'statusCancelled': 'Cancelled',
+      'roleCustomer': 'Customer',
+      'roleCaptain': 'Captain',
+      'roleMerchant': 'Merchant',
+      'roleOps': 'Operations',
+      'captainStatusOnline': 'Online & Receiving Requests',
+      'captainStatusOffline': 'Offline (On Break)',
+      'incomingOrder': 'New Delivery Request Nearby!',
+      'acceptOrder': 'Accept Request',
+      'rejectOrder': 'Decline',
+      'callCustomer': 'Call Customer',
+      'navigation': 'Navigation / Directions',
+      'confirmPickup': 'Confirm Pickup',
+      'confirmDelivery': 'Confirm Delivery & Cash Collected',
+      'todayEarnings': 'Today Earnings',
+      'tripsCount': 'Completed Trips',
+      'storeStatusOpen': 'Store Accepting Orders',
+      'storeStatusClosed': 'Store Currently Closed',
+      'prepOrder': 'Start Preparation',
+      'orderReadyForPickup': 'Ready for Captain Pickup',
+      'liveOrders': 'Active Field Orders',
+      'activeCaptains': 'Active Captains',
+      'safetyAudit': 'Safety & Compliance Audit',
+    }
+  };
+
+  static String get(String key, {String lang = 'ar'}) {
+    return _localizedValues[lang]?[key] ?? _localizedValues['ar']?[key] ?? key;
+  }
+}
