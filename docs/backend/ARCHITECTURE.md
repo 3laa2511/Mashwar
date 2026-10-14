@@ -1,109 +1,101 @@
 # Mashwar — Backend Architecture & Technology Specification
 **Platform:** Mashwar (مشوار) — Local Delivery & Mobility Platform  
-**Target Market:** El Bagour (الباجور), Menoufia Governorate, Egypt  
-**Phase:** Phase 2 — Database Design & Backend Architecture Specification  
-**Status:** Reviewable Specification (No Production Credentials or Destructive Actions)  
+**Target Hub:** El Bagour (الباجور), Menoufia Governorate, Egypt  
+**Phase:** Phase 2 — Architecture Review & Database Planning  
+**Status:** Reviewable Specification Only (No Production Databases Accessed or Modified)  
 
 ---
 
-## 1. Executive Summary & Context
+## 1. Verified Repository Facts vs. Proposed Design
 
-Mashwar is an Egyptian local mobility and delivery logistics platform designed specifically for secondary and rural Egyptian hubs, launching initially in **El Bagour, Menoufia**.
+To maintain strict architectural transparency, the table below separates verified repository code from proposed designs and unresolved decisions:
 
-### Initial Launch Scope
-1. **Package and Document Courier:** Point-to-point delivery for individuals and offices within town limits and surrounding villages.
-2. **Merchant & Restaurant Fulfillment:** Orders from local food and retail merchants (e.g., bakeries, shawarma, grills, groceries, hardware).
-3. **Local Errands & Pharmacy:** Specialized item procurement, pharmacy orders, and government/utility errand facilitation.
-4. **Passenger Mobility (Strictly Suspended):** Passenger transport remains **hard-disabled by platform policy** until regulatory licensing, commercial insurance, and traffic authority approvals in Menoufia are formally concluded.
-
-### Core Architecture Philosophy
-- **Server-Authoritative Business Logic:** The mobile client (Flutter) is an untrusted presentation layer. Fares, captain dispatch, order state changes, merchant settlements, and payment verifications must be executed exclusively by a hardened, authoritative backend.
-- **Data Integrity & Auditability:** Every financial calculation, address snapshot, state transition, and role escalation must be recorded immutably.
-- **Separation of Concerns:** Clean boundary between the client application, the API gateway, the transactional relational database, and future asynchronous workers.
+| Dimension | Verified Repository Code (`flutter_mashwar/`) | Proposed Production Design | Unresolved Decisions | Implementation Status |
+| :--- | :--- | :--- | :--- | :--- |
+| **Data Platform** | Static in-memory mock repository (`MockDataRepository`) with 12 hardcoded El Bagour landmarks. | Supabase (Managed PostgreSQL 15+, Supabase Auth, Storage) + Dedicated Trusted Server-Side API. | Selection of managed Supabase tier vs self-hosted Supabase for data residency in Egypt. | **Not Implemented** (Design Phase Only) |
+| **API & Business Rules** | Client-side calculations in `PriceCalculator` (`double` arithmetic) and local `OrdersNotifier`. | Trusted Node.js/TypeScript REST API enforcing all authoritative business logic, pricing, dispatch, and state machines. | Hosting environment for trusted API (Cloud Run vs dedicated VPS). | **Not Implemented** (Design Phase Only) |
+| **Captain Monetization** | Hardcoded daily earnings screen displaying static 240.00 EGP / 9 trips. | **Monthly Subscription Model** (default model: fixed monthly fee, zero commission on standard deliveries). | Exact subscription price tiers (e.g. 200 EGP vs 300 EGP/mo) and multi-day grace period duration. | **Not Implemented** (Design Phase Only) |
+| **Payments** | Simulated cash total label on UI (`22.00 ج.م كاش`). | Multi-modal ledger: Cash-on-Delivery (COD) with captain cash holding limits + Electronic Payments via Egyptian aggregators. | Selection of primary Egyptian payment gateway (Paymob vs Fawry vs Accept). | **Not Implemented** (Design Phase Only) |
+| **Order State Machine** | Local Dart `advanceOrderStatus()` allows client to unilaterally advance states. | Server-enforced Finite State Machine (FSM) with atomic row locking (`SELECT FOR UPDATE`) and audit trail. | Exact timeout duration for captain radar offer acceptance (e.g. 30s vs 45s). | **Not Implemented** (Design Phase Only) |
+| **Passenger Transport** | Disabled in UI with warning dialog in `CustomerHomeScreen` & read-only lock in `OperationsDashboardScreen`. | Permanently locked at API and database schema levels (`service_types.is_enabled = FALSE`). | Regulatory compliance roadmap under Law No. 73 of 2018 with Menoufia Traffic Directorate. | **Verified Disabled in Client / Enforced in Schema** |
 
 ---
 
-## 2. Technology Evaluation & Selection
-
-### 2.1 Evaluated Architecture Options
-
-| Dimension | Option A: Pure Supabase Direct-to-Client | Option B: Custom Standalone Backend (Node.js/TS + Raw PostgreSQL) | Option C: Recommended Hybrid Tier (Authoritative Node/TS API + Managed PostgreSQL/Supabase DB & Auth) |
-| :--- | :--- | :--- | :--- |
-| **Architecture** | Flutter talks directly to Supabase PostgREST / Realtime via anon keys with RLS. | Custom Node.js/TypeScript REST API with connection pool (Drizzle/Prisma) to self-hosted PostgreSQL. | Dedicated Node.js/TypeScript API Service handling all business logic; PostgreSQL used as normalized store; Supabase optional for Auth/Managed DB only. |
-| **Business Rule Enforcement** | Encapsulated in Postgres Functions / Triggers (`PL/pgSQL`). Difficult to test, maintain, version, and debug. | High testability, full TypeScript type sharing, expressive unit tests for pricing, dispatch, and state machines. | Full server-side TypeScript control. Clear separation between storage and domain logic. Standard CI/CD. |
-| **Security & Authorization** | High vulnerability risk if RLS has edge-case leaks; client could attempt to manipulate custom claims or RPC parameters. | Explicit API middleware (RBAC, input validation with Zod, rate limiting, audit logging). Zero client database access. | Maximum security. Mobile client never communicates with database ports or holds service keys. Strict API boundary. |
-| **Captain Dispatch & Concurrency** | Complex concurrency locks across PostgREST endpoints. Race condition vulnerability during batch dispatch. | Database transactions (`SELECT FOR UPDATE`, advisory locks) orchestrated cleanly inside application service layer. | Database transactions with ACID isolation, atomic assignment, and idempotency key enforcement. |
-| **Egyptian Market Integrations** | Difficult to integrate Fawry, Paymob, Vodafone Cash callbacks and local SMS gateways directly via webhooks. | Seamless native integration of Egyptian payment webhooks, HMAC signature verification, and SMS retry workers. | Easy integration with Egyptian payment gateways (Paymob/Fawry), telecom SMS aggregators, and background jobs. |
-
-### 2.2 Recommended Architecture: Option C (Authoritative API Gateway + PostgreSQL)
+## 2. Technology Stack & Architectural Topology
 
 ```text
  ┌─────────────────────────────────────────────────────────────┐
- │                 Mobile Clients (Android / iOS)             │
- │                 Flutter / Dart with Sound Null Safety       │
- └──────────────┬───────────────────────────────▲──────────────┘
-                │ HTTPS / REST (JWT Bearer)     │ Push (FCM)
-                ▼                               │
+ │                Mobile Applications (Android / iOS)          │
+ │                Flutter / Dart (Sound Null Safety)           │
+ └──────────────┬──────────────────────────────▲───────────────┘
+                │ HTTPS (JWT Bearer Token)     │ Push (FCM)
+                ▼                              │
  ┌─────────────────────────────────────────────────────────────┐
- │          Authoritative Backend API Service (Node.js/TS)     │
- │  ┌────────────────────────────────────────────────────────┐ │
- │  │ API Gateway & Security: Rate Limiter, Helmet, CORS     │ │
- │  ├────────────────────────────────────────────────────────┤ │
- │  │ Auth & Identity: JWT Verification, RBAC Middleware     │ │
- │  ├────────────────────────────────────────────────────────┤ │
- │  │ Domain Engines:                                        │ │
- │  │   - Pricing Engine (Configurable, Versioned)           │ │
- │  │   - Order State Machine (Strict Transitions)           │ │
- │  │   - Dispatch & Assignment Engine (Atomic Locks)        │ │
- │  │   - Audit & Compliance Logger (Immutable Log)          │ │
- │  └────────────────────────────────────────────────────────┘ │
- └──────────────┬───────────────────────────────▲──────────────┘
-                │ Connection Pool (pg / Drizzle)│ Async Notifications
-                ▼                               │
+ │            Trusted Server-Side API (Node.js / TypeScript)   │
+ │ ─────────────────────────────────────────────────────────── │
+ │  - Authorization & Least-Privilege Verification (RBAC)      │
+ │  - Authoritative Pricing Engine (Minor Units: Piasters)     │
+ │  - Captain Subscription Eligibility Evaluator               │
+ │  - Atomic Dispatch & Concurrency Engine                     │
+ │  - Payment Webhook Receiver (HMAC Verification)             │
+ │  - Audit Event Dispatcher                                   │
+ └──────────────┬──────────────────────────────▲───────────────┘
+                │ Connection Pool (Service Key)│ Webhook Callbacks
+                ▼                              │
  ┌─────────────────────────────────────────────────────────────┐
- │            PostgreSQL Relational Database Engine            │
- │             (Managed Supabase or Cloud SQL)                │
- │  - Normalized Tables (3NF)                                  │
- │  - Check Constraints & Enums                                │
- │  - Row-Level Locks & Atomic Transactions                    │
- │  - Spatial Indexes (PostGIS coordinates)                    │
- │  - Immutable Audit Logs & Snapshots                         │
+ │            Supabase Platform / PostgreSQL Engine            │
+ │ ─────────────────────────────────────────────────────────── │
+ │  - Supabase Auth: Phone/SMS OTP Identity Provider           │
+ │  - PostgreSQL 15+ Relational Database (3NF)                 │
+ │  - Row-Level Security (RLS) as Defense-in-Depth             │
+ │  - Database Constraints (Foreign Keys, CHECKs, Unique)      │
+ │  - Private Storage Buckets (Encrypted Captain Documents)    │
  └─────────────────────────────────────────────────────────────┘
 ```
 
-#### Why Direct Client-to-Database Access is Rejected:
-1. **Financial Security:** Fares must be calculated server-side based on distance, time of day, weather, unpaved road conditions, and merchant commission agreements. In a client-to-database model, malicious users could craft PostgREST RPC requests with spoofed fares or bypass verification.
-2. **Race Conditions in Dispatch:** When a delivery offer is broadcast to nearby captains in El Bagour, multiple captains may accept concurrently. Preventing double-assignment requires explicit database transactions with row-level locks (`SELECT ... FOR UPDATE`), which are best orchestrated within an authoritative application service.
-3. **Third-Party Egyptian Integrations:** Egyptian payment aggregators (Paymob, Fawry, Vodafone Cash) and telecom SMS gateways require webhook receivers that verify HMAC signatures, validate order amounts against ledger entries, and issue asynchronous callbacks. These cannot run securely inside client code.
+### 2.1 The Role of Supabase vs. Trusted Server API
+To ensure high security without compromising development speed:
+1. **Supabase Auth:** Used for user authentication, issuance of signed JWT tokens, and phone-based OTP verification.
+2. **Supabase Storage:** Used for private, encrypted storage of captain verification documents (scanned national IDs, criminal record certificates / فيش وتشبيه, and vehicle licenses) with short-lived presigned URLs.
+3. **Supabase PostgreSQL:** Serves as the normalized, relational system of record with database constraints and RLS policies.
+4. **Trusted Server-Side API:** A dedicated backend service written in TypeScript that sits between the mobile clients and the database for all sensitive mutations. 
+
+### 2.2 Client Invariants (Zero-Trust Principle)
+The mobile client must **never** be authoritative for:
+- Calculating final delivery fares or applying discounts.
+- Assigning a captain or selecting which captain receives an offer.
+- Transitioning order statuses (e.g. marking an order `delivered`).
+- Confirming payments or issuing refunds.
+- Activating, renewing, or modifying captain subscriptions.
+- Granting roles or modifying administrative privileges.
 
 ---
 
-## 3. High-Level System Components
+## 3. Operation Placement Matrix
 
-### 3.1 Mobile Client Layer (`flutter_mashwar/`)
-- Pure presentation layer using **Flutter (Dart)**.
-- Communicates exclusively over HTTPS with the Mashwar API using `Bearer <JWT>`.
-- Employs a typed API Client (`Dio`) with interceptors for token refresh, request signing, and client-side error localization.
-- Swappable repository pattern allows clean transition from `MockDataRepository` to `HttpDataRepository`.
+Every operation in Mashwar is explicitly mapped to its authoritative execution tier:
 
-### 3.2 API Gateway & Application Server
-- **Runtime:** Node.js 20+ LTS with TypeScript in strict mode.
-- **Framework:** Express / Fastify with modular layered architecture (Controller → Service → Repository).
-- **Validation:** `Zod` schemas for 100% of request bodies, query params, and headers.
-- **Authentication:** Standard OIDC / JWT with access tokens (15-minute expiry) and cryptographically signed refresh tokens stored securely on the mobile device (`FlutterSecureStorage`).
-- **Idempotency Engine:** `Idempotency-Key` header verified against a dedicated cache/table to prevent duplicate charges or duplicate order submissions during network dropouts in Menoufia's rural corridors.
-
-### 3.3 Relational Storage (PostgreSQL)
-- **Engine:** PostgreSQL 15+ with standard extensions (`uuid-ossp`, `pgcrypto`, optional `postgis`).
-- **Constraints & Enums:** Enforced at the engine level (Foreign keys with explicit cascade rules, CHECK constraints on monetary and status fields).
-- **Transactions:** High isolation (`READ COMMITTED` default, `SERIALIZABLE` or explicit row-level locking for captain assignment and financial ledgers).
+| Operation | Execution Tier | Mechanism & Rationale |
+| :--- | :--- | :--- |
+| **Identity Verification & OTP** | Supabase Auth | Managed phone OTP identity provider with Egyptian carrier support. |
+| **Authoritative Fare Calculation** | Trusted API | Server pricing engine computes itemized quote in piasters using versioned rules. Client only provides pickup/drop-off. |
+| **Order Creation** | Trusted API | Validates quote expiration, service eligibility, and idempotency key before inserting into PostgreSQL. |
+| **Captain Offer Dispatch** | Trusted API + DB Lock | Evaluates captain subscription eligibility, selects online captains within El Bagour radius, broadcasts offer. |
+| **Captain Offer Acceptance** | Trusted API (`SELECT FOR UPDATE`) | Atomic database transaction acquires exclusive row lock to prevent double-assignment conflicts (`409 Conflict`). |
+| **Delivery Status Transitions** | Trusted API | FSM validates allowed transitions, actor identity, and mandatory cash/confirmation payloads. |
+| **Cash Collection Recording** | Trusted API + DB Trigger | Captain records collected cash amount; server validates against quoted fare and updates captain cash ledger. |
+| **Electronic Payment Intent** | Trusted API | Communicates with payment provider via server-side credentials; generates client payment token. |
+| **Payment Confirmation** | Payment Webhook | Webhook receiver validates provider HMAC signature and updates `payments` table idempotently. |
+| **Captain Subscription Renewal** | Trusted API + Webhook | Recurring billing job or webhook confirms payment and extends subscription validity. |
+| **Captain Assignment Eligibility** | Trusted API + DB View | Evaluates verification status, active subscription (or grace period), and cash holding limits before dispatch. |
+| **Passenger Ride Requests** | Database Constraint + API | Hard-blocked by `service_types.is_enabled = FALSE` and API rejection (`403 Forbidden`). |
+| **Tenant Data Isolation** | PostgreSQL RLS | Defense-in-depth policy guarantees users cannot read other tenants' data even in raw SQL queries. |
+| **Audit Logging** | PostgreSQL Trigger + API | Immutable audit log records every state change, actor ID, and IP address. |
 
 ---
 
-## 4. Key Architectural Decisions & Non-Negotiables
+## 4. Least-Privilege Database Access
 
-1. **Monetary Precision:** All currency amounts are stored in **Egyptian Piasters (قروش)** as `BIGINT` or as `NUMERIC(10, 2)` in EGP. Floating-point values (`FLOAT`, `DOUBLE`) are strictly forbidden to eliminate rounding drift.
-2. **Time Handling:** Every event timestamp is persisted in **UTC (`TIMESTAMPTZ`)**. The Flutter client is responsible for formatting timestamps into Cairo Local Time (`Africa/Cairo`, UTC+2 / UTC+3 DST).
-3. **Immutable Snapshots:** Changing a customer's saved address in their profile **never** alters the pickup or drop-off address of historic or active orders. Orders record immutable address and fare snapshots at the moment of creation.
-4. **Zero-Trust Client Identity:** The server never uses `customer_id` or `user_id` from the request payload. The authenticated identity is extracted exclusively from the cryptographically verified JWT payload.
-5. **Passenger Mobility Lock:** Passenger ride-hailing is disabled at the database level (`service_types.is_enabled = FALSE`) and API level. Any attempt to request an order with `service_type = 'passenger'` returns `403 Forbidden` with a regulatory compliance code.
+1. **Anonymous / Client Role (`anon`):** Has zero table permissions. Direct PostgREST access from the Flutter mobile app is disabled or restricted strictly to public read-only lookup of active service types.
+2. **Authenticated Role (`authenticated`):** Bound by Row-Level Security (RLS) policies. Even if a compromised client attempts to issue direct SQL/PostgREST queries, RLS enforces that customers only see their own orders, and captains only see orders currently assigned to them.
+3. **Trusted API Service Role (`service_role`):** Used exclusively by the trusted backend API. Bypasses RLS to perform atomic multi-table operations, but authorization checks are rigorously enforced in TypeScript middleware prior to database queries.

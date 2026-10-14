@@ -2,148 +2,49 @@
 **Protocol:** HTTPS REST / JSON  
 **Base URL:** `/api/v1`  
 **Authentication:** HTTP Authorization Header: `Bearer <JWT_ACCESS_TOKEN>`  
-**Phase:** Phase 2 Backend Specification  
+**Monetary Format:** Integer Minor Units (Egyptian Piasters - قروش)  
+**Status:** Reviewable Specification  
 
 ---
 
-## 1. Global API Conventions
+## 1. Verified Code vs. Proposed API Contracts
 
-### 1.1 Standard Response Envelope
-All API responses follow a consistent envelope structure:
+| Area | Verified Repository Code (`flutter_mashwar/`) | Proposed REST Contract | Implementation Status |
+| :--- | :--- | :--- | :--- |
+| **Quoting** | Synchronous client calculation in `PriceCalculator.calculateQuote()` | `POST /api/v1/quotes` returning signed, server-authoritative quote. | **Proposed** |
+| **Order Creation** | Local `OrdersNotifier.addOrder()` adding to in-memory list. | `POST /api/v1/orders` with mandatory `Idempotency-Key` and `quoteId`. | **Proposed** |
+| **Cash Collection** | Simulated button directly updating client state to delivered. | `POST /api/v1/captain/orders/:id/cash-collection` with piasters verification. | **Proposed** |
+| **Electronic Payments** | Not implemented. | `POST /api/v1/payments/intents` and `POST /api/v1/webhooks/payments/:provider`. | **Proposed** |
+| **Captain Subscriptions** | Not implemented. | `GET /api/v1/captain/subscription` and `POST /api/v1/captain/subscription/purchase`. | **Proposed** |
+| **Order Status Transitions** | Unconditional client method `advanceOrderStatus(orderId)`. | `POST /api/v1/orders/:id/transitions` validating actor authorization & preconditions. | **Proposed** |
 
+---
+
+## 2. Global Standards & Error Conventions
+
+### 2.1 Standard Error Envelope
 ```json
-// Success Response
-{
-  "success": true,
-  "data": { ... },
-  "meta": {
-    "timestamp": "2026-10-13T19:42:00.000Z",
-    "requestId": "req_01j9a8bc45"
-  }
-}
-
-// Error Response
 {
   "success": false,
   "error": {
-    "code": "ORDER_ALREADY_ASSIGNED",
-    "message": "عذراً، تم إسناد هذا المشوار لكابتن آخر بالفعل.",
-    "details": null
+    "code": "CAPTAIN_INELIGIBLE_EXPIRED_SUBSCRIPTION",
+    "message": "عذراً، انتهت صلاحية اشتراك الكابتن وفترة السماح. يرجى التجديد لتلقي الطلبات.",
+    "details": {
+      "gracePeriodExpiredAt": "2026-10-12T18:00:00.000Z"
+    }
   },
   "meta": {
-    "timestamp": "2026-10-13T19:42:00.000Z",
+    "timestamp": "2026-10-13T20:00:00.000Z",
     "requestId": "req_01j9a8bc45"
   }
 }
 ```
 
-### 1.2 HTTP Status Codes
-- `200 OK`: Request succeeded.
-- `201 Created`: Resource successfully created.
-- `400 Bad Request`: Malformed payload or failed Zod validation.
-- `401 Unauthorized`: Missing, invalid, or expired JWT.
-- `403 Forbidden`: Authenticated user lacks required role/permission.
-- `404 Not Found`: Resource does not exist or does not belong to the user.
-- `409 Conflict`: Concurrency conflict or race condition (e.g. another captain accepted the order first).
-- `422 Unprocessable Entity`: Business invariant violated (e.g. attempting to order passenger transport).
-- `429 Too Many Requests`: Rate limit exceeded.
-
-### 1.3 Headers
-- `Authorization: Bearer <token>`: Required for all authenticated routes.
-- `Idempotency-Key: <UUID>`: Recommended for mutating requests (`POST /orders`, `POST /orders/:id/transitions`) to prevent duplicate execution during network retries.
-- `Accept-Language: ar | en`: Controls localized error and status messages (defaults to `ar`).
-
 ---
 
-## 2. Authentication & Identity Contracts
+## 3. Quoting & Pricing Endpoints
 
-### 2.1 Request SMS OTP
-`POST /api/v1/auth/request-otp`
-- **Auth:** Public
-- **Rate Limit:** 3 requests per 10 minutes per IP / phone.
-
-**Request Body:**
-```json
-{
-  "phoneNumber": "+201012345678"
-}
-```
-
-**Response (200 OK):**
-```json
-{
-  "success": true,
-  "data": {
-    "phoneNumber": "+201012345678",
-    "retryAfterSeconds": 60,
-    "isDemoMode": true,
-    "demoCodeNotice": "In demo mode, use 1234 as the verification code."
-  }
-}
-```
-
-### 2.2 Verify SMS OTP
-`POST /api/v1/auth/verify-otp`
-- **Auth:** Public
-
-**Request Body:**
-```json
-{
-  "phoneNumber": "+201012345678",
-  "otpCode": "1234"
-}
-```
-
-**Response (200 OK):**
-```json
-{
-  "success": true,
-  "data": {
-    "user": {
-      "id": "7b053d56-7594-4aa2-9bd4-ba97a6a82f92",
-      "phoneNumber": "+201012345678",
-      "roles": ["customer"]
-    },
-    "tokens": {
-      "accessToken": "eyJhbGciOiJIUzI1NiIsIn...",
-      "expiresInSeconds": 900,
-      "refreshToken": "d8f498c1-..."
-    }
-  }
-}
-```
-
----
-
-## 3. Customer Profile & Addresses
-
-### 3.1 Get Customer Saved Addresses
-`GET /api/v1/customer/addresses`
-- **Auth:** `Bearer <JWT>` (Role: `customer`)
-
-**Response (200 OK):**
-```json
-{
-  "success": true,
-  "data": [
-    {
-      "id": "9a12c412-...",
-      "label": "المنزل",
-      "landmarkName": "ميدان المحطة - وسط الباجور",
-      "detailedAddress": "شارع الجيش، عمارة الأمل، الدور الثالث",
-      "isRuralOrVillage": false,
-      "villageName": null,
-      "isDefault": true
-    }
-  ]
-}
-```
-
----
-
-## 4. Quoting & Pricing Contracts
-
-### 4.1 Request Authoritative Fare Quote
+### 3.1 Create Authoritative Fare Quote
 `POST /api/v1/quotes`
 - **Auth:** `Bearer <JWT>` (Role: `customer`)
 
@@ -166,19 +67,20 @@ All API responses follow a consistent envelope structure:
     "quoteId": "quote_8923a1",
     "serviceTypeId": "package",
     "distanceKm": 3.8,
-    "baseFare": 15.00,
-    "distanceFare": 9.20,
-    "ruralSurcharge": 5.00,
-    "platformFee": 2.00,
-    "totalFare": 31.20,
+    "baseFarePiasters": 1500,
+    "distanceFarePiasters": 920,
+    "ruralSurchargePiasters": 500,
+    "platformFeePiasters": 200,
+    "totalFarePiasters": 3120,
+    "formattedTotalEgp": "31.20 ج.م",
     "currency": "EGP",
     "estimatedDurationMinutes": "15-20",
     "expiresAt": "2026-10-13T20:15:00.000Z",
     "lineItems": [
-      { "title": "الأجرة الأساسية (تغطي أول 1.5 كم)", "amount": 15.00 },
-      { "title": "تكلفة المسافة (2.3 كم إضافي)", "amount": 9.20 },
-      { "title": "بدل طرق غير ممهدة / قرى", "amount": 5.00 },
-      { "title": "رسوم الخدمة وتطوير المنصة", "amount": 2.00 }
+      { "title": "الأجرة الأساسية (أول 1.5 كم)", "amountPiasters": 1500 },
+      { "title": "تكلفة المسافة (2.3 كم إضافي)", "amountPiasters": 920 },
+      { "title": "بدل طرق غير ممهدة / قرى", "amountPiasters": 500 },
+      { "title": "رسوم الخدمة وتطوير المنصة", "amountPiasters": 200 }
     ]
   }
 }
@@ -186,9 +88,9 @@ All API responses follow a consistent envelope structure:
 
 ---
 
-## 5. Order Management Contracts
+## 4. Order Management Endpoints
 
-### 5.1 Create Order
+### 4.1 Create Order Using Valid Quote
 `POST /api/v1/orders`
 - **Auth:** `Bearer <JWT>` (Role: `customer`)
 - **Header:** `Idempotency-Key: <UUID>`
@@ -214,160 +116,169 @@ All API responses follow a consistent envelope structure:
 }
 ```
 
-**Response (201 Created):**
+### 4.2 Cancel Order
+`POST /api/v1/orders/:id/cancel`
+- **Auth:** `Bearer <JWT>` (Customer owner, or Operations)
+
+**Request Body:**
 ```json
 {
-  "success": true,
-  "data": {
-    "orderId": "91a82f12-...",
-    "orderCode": "MSH-8105",
-    "status": "searching_captain",
-    "serviceType": "package",
-    "quotedFare": 31.20,
-    "createdAt": "2026-10-13T20:05:00.000Z"
-  }
+  "cancellationReason": "تأخر الاستلام من المتجر"
 }
 ```
 
-### 5.2 Get Order Details & Tracking
-`GET /api/v1/orders/:id`
-- **Auth:** `Bearer <JWT>` (Customer owner, assigned Captain, or Operations)
+### 4.3 Update Order Status (Authoritative FSM Transition)
+`POST /api/v1/orders/:id/transitions`
+- **Auth:** `Bearer <JWT>` (Assigned Captain, Merchant, or Operations)
+
+**Request Body:**
+```json
+{
+  "targetStatus": "at_pickup", // 'at_pickup' | 'in_transit' | 'delivered'
+  "actorRole": "captain",
+  "notes": "الكابتن وصل أمام برج الشروق"
+}
+```
+
+---
+
+## 5. Captain Fleet & Subscription Endpoints
+
+### 5.1 Check Captain Assignment Eligibility
+`GET /api/v1/captain/eligibility`
+- **Auth:** `Bearer <JWT>` (Role: `captain`)
 
 **Response (200 OK):**
 ```json
 {
   "success": true,
   "data": {
-    "orderId": "91a82f12-...",
-    "orderCode": "MSH-8105",
-    "status": "in_transit",
-    "statusLabelAr": "في الطريق للتسليم",
-    "serviceType": "package",
-    "quotedFare": 31.20,
-    "pickup": {
-      "landmarkName": "ميدان المحطة - وسط الباجور",
-      "detailedAddress": "برج الشروق، الدور الأرضي"
-    },
-    "dropoff": {
-      "landmarkName": "مستشفى الباجور العام",
-      "detailedAddress": "قسم العيادات الخارجية"
-    },
-    "assignedCaptain": {
-      "name": "كابتن طارق الغريب",
-      "vehicleDescription": "دراجة نارية هوجان سوداء (٤٣٢١ م ن)",
-      "phone": "+201198765432"
-    },
-    "timeline": [
-      { "status": "created", "timestamp": "2026-10-13T20:05:00.000Z" },
-      { "status": "captain_assigned", "timestamp": "2026-10-13T20:07:30.000Z" },
-      { "status": "at_pickup", "timestamp": "2026-10-13T20:12:00.000Z" },
-      { "status": "in_transit", "timestamp": "2026-10-13T20:16:00.000Z" }
-    ]
+    "isEligibleForNewOffers": true,
+    "subscriptionStatus": "grace_period",
+    "gracePeriodEndsAt": "2026-10-15T18:00:00.000Z",
+    "warningMessageAr": "تنبيه: أنت الآن في فترة السماح (متبقي 48 ساعة). يرجى تجديد الاشتراك الشهري لتجنب إيقاف الرادار.",
+    "cashHoldingPiasters": 45000,
+    "maxCashHoldingPiasters": 100000,
+    "cashLimitReached": false
   }
 }
 ```
 
-### 5.3 Cancel Order
-`POST /api/v1/orders/:id/cancel`
-- **Auth:** `Bearer <JWT>` (Customer owner or Operations)
+### 5.2 View Captain Subscription Status
+`GET /api/v1/captain/subscription`
+- **Auth:** `Bearer <JWT>` (Role: `captain`)
 
-**Request Body:**
+**Response (200 OK):**
 ```json
 {
-  "reason": "تأخر الاستلام من المتجر"
+  "success": true,
+  "data": {
+    "subscriptionId": "sub_01a98e",
+    "planCode": "EL_BAGOUR_MONTHLY_STANDARD",
+    "planNameAr": "اشتراك الباجور الشهري الموحد",
+    "status": "active",
+    "pricePiasters": 25000,
+    "formattedPrice": "250.00 ج.م",
+    "currentPeriodEndsAt": "2026-11-13T20:00:00.000Z",
+    "daysRemaining": 30,
+    "autoRenew": false
+  }
 }
 ```
 
----
-
-## 6. Captain Fleet Contracts
-
-### 6.1 Toggle Availability
-`POST /api/v1/captain/availability`
+### 5.3 Purchase or Renew Subscription
+`POST /api/v1/captain/subscription/renew`
 - **Auth:** `Bearer <JWT>` (Role: `captain`)
 
 **Request Body:**
 ```json
 {
-  "isOnline": true,
-  "currentLandmark": "مجلس مدينة الباجور"
+  "planCode": "EL_BAGOUR_MONTHLY_STANDARD",
+  "paymentMethod": "cash_at_hub", // 'cash_at_hub' | 'vodafone_cash' | 'fawry' | 'electronic_card'
+  "transactionReference": "TX-VODA-98214"
 }
 ```
 
-### 6.2 Accept Delivery Offer (Atomic Race Protection)
-`POST /api/v1/captain/offers/:assignmentId/accept`
-- **Auth:** `Bearer <JWT>` (Role: `captain`)
-
-**Possible Responses:**
-- `200 OK`:
-  ```json
-  {
-    "success": true,
-    "data": {
-      "orderId": "91a82f12-...",
-      "orderCode": "MSH-8105",
-      "status": "captain_assigned"
-    }
-  }
-  ```
-- `409 Conflict`:
-  ```json
-  {
-    "success": false,
-    "error": {
-      "code": "OFFER_ALREADY_CLAIMED",
-      "message": "عذراً، قام كابتن آخر بقبول هذا المشوار قبلك."
-    }
-  }
-  ```
-
-### 6.3 Advance Order Delivery Status
-`POST /api/v1/captain/orders/:id/transition`
+### 5.4 Record Cash Collection (Doorstep COD)
+`POST /api/v1/captain/orders/:id/cash-collection`
 - **Auth:** `Bearer <JWT>` (Assigned Captain)
 
 **Request Body:**
 ```json
 {
-  "targetStatus": "at_pickup", // 'at_pickup' -> 'in_transit' -> 'delivered'
-  "cashCollectedAmount": 31.20 // Mandatory when targetStatus = 'delivered'
+  "amountCollectedPiasters": 3120, // Must match or explain discrepancy
+  "customerConfirmed": true,
+  "notes": "تم تحصيل المبلغ نقداً بالكامل"
 }
 ```
 
 ---
 
-## 7. Merchant Contracts
+## 6. Electronic Payments & Webhook Endpoints
 
-### 7.1 Update Order Preparation Status
-`POST /api/v1/merchant/orders/:id/preparation`
-- **Auth:** `Bearer <JWT>` (Role: `merchant_staff` or `merchant_admin`)
+### 6.1 Create Electronic Payment Intent
+`POST /api/v1/payments/intents`
+- **Auth:** `Bearer <JWT>` (Customer owner)
 
 **Request Body:**
 ```json
 {
-  "preparationStatus": "ready_for_pickup", // 'preparing' | 'ready_for_pickup'
-  "estimatedReadyMinutes": 0
+  "orderId": "91a82f12-...",
+  "provider": "paymob"
+}
+```
+
+**Response (200 OK):**
+```json
+{
+  "success": true,
+  "data": {
+    "paymentIntentId": "pi_98231a",
+    "amountPiasters": 3120,
+    "currency": "EGP",
+    "clientSecret": "tok_ephem_98210381023",
+    "providerReference": "PAYMOB-1092830"
+  }
+}
+```
+
+### 6.2 Process Verified Payment Webhook (Idempotent)
+`POST /api/v1/webhooks/payments/:provider`
+- **Auth:** HMAC Signature Header (`x-provider-signature`)
+- **Public URL called by Gateway Servers**
+
+**Response (200 OK):**
+```json
+{
+  "received": true,
+  "status": "PROCESSED"
+}
+```
+
+### 6.3 Initiate and Record Refund
+`POST /api/v1/operations/payments/:paymentId/refund`
+- **Auth:** `Bearer <JWT>` (Role: `operations_agent` or `super_admin`)
+
+**Request Body:**
+```json
+{
+  "amountPiasters": 3120,
+  "reason": "إلغاء الطلب قبل إسناد الكابتن"
 }
 ```
 
 ---
 
-## 8. Operations & Administrative Contracts
+## 7. Operations Order Assignment & Override Endpoints
 
-### 8.1 Search & Monitor Field Orders
-`GET /api/v1/operations/orders?status=active&hub=el_bagour`
+### 7.1 Manual Captain Assignment / Reassignment
+`POST /api/v1/operations/orders/:id/assign`
 - **Auth:** `Bearer <JWT>` (Role: `operations_agent` or `super_admin`)
 
-### 8.2 System Health & Readiness Check
-`GET /api/health`
-- **Auth:** Public
-
-**Response (200 OK):**
+**Request Body:**
 ```json
 {
-  "status": "healthy",
-  "timestamp": "2026-10-13T20:05:00.000Z",
-  "database": "connected",
-  "environment": "staging",
-  "version": "1.0.0"
+  "captainId": "cap_891230",
+  "overrideReason": "إعادة توجيه يدوية بسبب تعطل دراجة الكابتن السابق"
 }
 ```

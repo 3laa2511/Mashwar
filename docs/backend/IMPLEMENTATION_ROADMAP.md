@@ -1,98 +1,116 @@
-# Mashwar — Backend Implementation, Migration & Flutter Integration Roadmap
-**Phase:** Phase 2 Architecture & Specification  
-**Status:** Approved Specification  
+# Mashwar — Backend Implementation, Migration & Quality Gates Roadmap
+**Phase:** Phase 2 Architecture Review & Planning  
+**Target Hub:** El Bagour, Menoufia Governorate, Egypt  
+**Status:** Reviewable Specification (Zero Production Databases Accessed)  
 
 ---
 
-## 1. Migration & Environment Strategy
+## 1. Verified Code vs. Proposed Implementation Phases
 
-### 1.1 Environment Separation
-1. **Local Development (`dev`):**
-   - Docker Compose running PostgreSQL 15 + Redis (for ephemeral locks).
-   - Mock SMS Provider (returns fixed code `1234` for any Egyptian phone).
-   - Local synthetic seed data.
-2. **Automated Testing (`test`):**
-   - Ephemeral PostgreSQL test containers spawned during CI runs.
-   - 100% isolated database schema per test worker.
-3. **Staging (`staging`):**
-   - Dedicated managed PostgreSQL instance matching production configuration.
-   - Connected to payment gateway test sandboxes (Paymob / Fawry test cards) and real Egyptian SMS staging gateway.
-4. **Production (`prod`):**
-   - Multi-AZ managed PostgreSQL with automated daily snapshots, Point-In-Time Recovery (PITR), and encrypted backups.
-   - Strict secrets management (never committed to git or exposed to client builds).
-
-### 1.2 Versioned Database Migrations
-- Tooling: Drizzle Kit or Flyway with forward (`.sql`) and rollback scripts in `db/migrations/`:
-  - `0001_initial_schema.sql` (Users, roles, permissions)
-  - `0002_captains_and_merchants.sql`
-  - `0003_orders_and_fare_quotes.sql`
-  - `0004_captain_assignments_and_concurrency.sql`
-  - `0005_payments_and_audit_logs.sql`
-- Zero-Downtime Rule: Schema alterations follow expand-and-contract patterns (e.g. adding columns as nullable, migrating data asynchronously, then adding constraints).
-
-### 1.3 Synthetic Seed Strategy
-- Real customer or captain PII is **strictly prohibited** in seed scripts.
-- Seed data generates representative El Bagour landmarks (ميدان المحطة، مجلس المدينة، مستشفى الباجور العام، قرى شنتنا وجروان وميت عفيف)، mock merchant menus (فطاير ومشاوي الباجور)، and test captains with virtual motorcycle license plates.
+| Area | Verified Repository Code (`flutter_mashwar/`) | Proposed Roadmap Phase | Implementation Status |
+| :--- | :--- | :--- | :--- |
+| **Backend API** | No backend codebase (pure Flutter mock repository). | Phase 3: Dedicated Node.js / TypeScript API service with Drizzle ORM. | **Not Implemented** |
+| **Database Migrations** | No SQL migration scripts. | Phase 3: Versioned DDL migrations in `db/migrations/` (design drafts in `docs/backend/drafts/`). | **Design Draft Ready** |
+| **Quality Gates & Tests** | 4 Dart test files in `flutter_mashwar/test/` (NOT RUN in AI Studio container). | Automated Jest/Vitest integration test suite for RLS, concurrency, and idempotency. | **Not Implemented** |
+| **Payment Integration** | Not implemented. | Phase 4: Paymob / Fawry sandbox integration for electronic payments & captain subscriptions. | **Not Implemented** |
 
 ---
 
-## 2. Automated Quality Gates & Test Matrix
-
-The backend implementation must implement automated test suites verifying:
-1. **Tenant Role Isolation Tests:** Verify a customer cannot read or cancel another customer's order.
-2. **Order Lifecycle FSM Tests:** Verify illegal status jumps (e.g. `created` → `delivered`) throw `422 Unprocessable Entity`.
-3. **Pricing Versioning Tests:** Verify historical orders retain their quoted fare even if the active pricing rule version changes.
-4. **Captain Assignment Race Condition Tests:** Spawn 10 concurrent requests from 10 different captains attempting to accept the exact same order offer. Assert that exactly 1 request returns `200 OK` and 9 return `409 Conflict`.
-5. **Idempotency Key Tests:** Re-send the exact same order creation request with the same `Idempotency-Key` and assert that no duplicate database record is created.
-
----
-
-## 3. Flutter Client Integration Plan
-
-### 3.1 Mapping Existing Mock Data to API Contracts
-
-| Existing Mock Component in `flutter_mashwar/` | Target Production Implementation | Required Changes & Migration Action |
-| :--- | :--- | :--- |
-| `MockDataRepository.getInitialMockOrders()` | `HttpOrderRepository.fetchOrders()` | Replace static list with `GET /api/v1/orders` returning paginated results. |
-| `PriceCalculator.calculateQuote()` | `HttpPricingRepository.getQuote()` | Keep client calculator for instant offline UI feedback, but submit to `POST /api/v1/quotes` to acquire an authoritative `quoteId` before order creation. |
-| Client-generated order IDs (`MSH-8105`) | Server-assigned order IDs (`UUID` + `order_code`) | Client sends payload with `idempotency_key`; server responds with immutable `orderCode`. |
-| Local `OrdersNotifier.advanceOrderStatus()` | `HttpOrderRepository.transitionStatus()` | Replace direct state modification with `POST /api/v1/captain/orders/:id/transition`. |
-| In-memory `roleProvider` | Server-validated JWT Role Claims | Extract active role from decoded JWT; verify role against server session. |
-| Predefined landmark strings | `Landmark` models with Lat/Lng | Replace hardcoded dropdown strings with typed address models supporting PostGIS coordinates. |
-
-### 3.2 Phased Migration Phases
+## 2. Environment Separation Strategy
 
 ```text
  ┌─────────────────────────────────────────────────────────────┐
- │ Phase 2 (Completed): Architecture & Database Specification  │
- │ - PostgreSQL 3NF Schema & Constraints                       │
- │ - REST API Contracts & Security Model                       │
- │ - State Machine & Concurrency Specifications                │
+ │ 1. Local Development (`dev`)                                │
+ │    - Docker Compose running PostgreSQL 15 + Redis           │
+ │    - Mock SMS Provider (returns fixed code '1234')          │
+ │    - Synthetic seed data (no real customer/captain PII)     │
+ └──────────────────────────────┬──────────────────────────────┘
+                                │ Pull Request & CI Gates
+                                ▼
+ ┌─────────────────────────────────────────────────────────────┐
+ │ 2. Staging Environment (`staging`)                          │
+ │    - Managed Supabase / PostgreSQL instance matching prod   │
+ │    - Paymob & Fawry Sandbox accounts (test cards / wallets) │
+ │    - Staging SMS gateway with test recipient whitelist      │
+ │    - Automated migration test runner with rollback verify   │
+ └──────────────────────────────┬──────────────────────────────┘
+                                │ Approval & Production Deploy
+                                ▼
+ ┌─────────────────────────────────────────────────────────────┐
+ │ 3. Production Environment (`prod`)                          │
+ │    - Multi-AZ High Availability PostgreSQL with WAL PITR    │
+ │    - Automated daily encrypted snapshots                    │
+ │    - Strict secret management (never in client or git)      │
+ │    - Initial restricted beta launch in El Bagour center     │
+ └─────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## 3. Automated Quality Gates & Integration Test Matrix
+
+The backend test suite must implement automated integration tests covering the following critical invariants:
+
+| Test Suite | Scenario Tested | Expected Verification |
+| :--- | :--- | :--- |
+| **RLS Isolation** | Customer A queries Order ID belonging to Customer B. | Returns `404 Not Found` / 0 rows; zero cross-tenant leakage. |
+| **Price Tampering** | Client submits `quoted_fare = 500 piasters` for a 10 km rural trip. | Server rejects request with `400 Bad Request`; only signed `quoteId` accepted. |
+| **Invalid State Jump** | Client attempts to transition order from `created` directly to `delivered`. | State machine throws `422 Unprocessable Entity`; state remains `created`. |
+| **Concurrent Captain Race** | 10 simulated captains concurrently tap "Accept" on the exact same order. | Exactly 1 captain succeeds (`200 OK`); remaining 9 receive `409 Conflict`. |
+| **Webhook Idempotency** | Payment gateway delivers identical `TRANSACTION_SUCCESS` webhook 3 times. | First event processes order; subsequent 2 return `200 OK (ALREADY_PROCESSED)`. |
+| **Subscription Renewal Race**| Automated cron renewal and manual payment trigger simultaneously. | Distributed lock or unique index prevents double charging the captain. |
+| **Cash Collection Integrity**| Captain attempts to complete delivery without recording cash collected. | Server blocks transition to `delivered` with `422 Missing Cash Collection`. |
+| **Passenger Mobility Lock** | Client submits `serviceTypeId = 'passenger'`. | Request blocked with `403 Forbidden (REGULATORY_COMPLIANCE_LOCK)`. |
+
+---
+
+## 4. Database Migration & Rollback Protocol
+
+1. **Pre-Migration Safety Checklist:**
+   - Schema alterations must be strictly backwards-compatible (expand-and-contract pattern).
+   - Columns are added as nullable or with defaults first.
+   - Destructive commands (`DROP TABLE`, `DROP COLUMN`) are forbidden in standard migrations.
+2. **Rollback Verification:**
+   - Every migration script `000X_name.sql` must have a corresponding, tested `000X_name.down.sql`.
+   - In the staging environment, the CI pipeline automatically runs `migrate up` followed by `migrate down` to guarantee clean rollback capabilities before promoting code.
+3. **Synthetic Seed Policy:**
+   - Real Egyptian National IDs, real names, or real customer phone numbers must **never** be committed to seed scripts.
+   - All seed records use synthetic numbers (`+201000000001`, `+201000000002`) and simulated landmarks.
+
+---
+
+## 5. Phased Implementation Roadmap
+
+```text
+ ┌─────────────────────────────────────────────────────────────┐
+ │ Phase 2 (Completed): Architecture Review & Database Planning│
+ │ - Supabase + Trusted API topology specification             │
+ │ - Relational Data Model (Integer minor units: Piasters)     │
+ │ - Captain Subscription Lifecycle & Eligibility Policies     │
+ │ - REST API Service Contracts & Draft DDL                    │
  └──────────────────────────────┬──────────────────────────────┘
                                 │
                                 ▼
  ┌─────────────────────────────────────────────────────────────┐
- │ Phase 3 (Next Phase): Backend Service Implementation        │
- │ - Scaffold Node.js / TypeScript API Server                  │
- │ - Drizzle / Postgres Connection & Migrations                │
- │ - Pricing Engine & Order State Machine implementation       │
- │ - Concurrency & Idempotency automated test suites           │
+ │ Phase 3 (Next Phase): Backend Scaffolding & Core Engines    │
+ │ - Scaffold Node.js / TypeScript API Gateway                 │
+ │ - Implement Authoritative Pricing Engine & Order FSM        │
+ │ - Run Local Docker test containers with automated test suite│
  └──────────────────────────────┬──────────────────────────────┘
                                 │
                                 ▼
  ┌─────────────────────────────────────────────────────────────┐
- │ Phase 4: Flutter Repository Migration                       │
- │ - Create `HttpApiClient` with Dio in `flutter_mashwar/`     │
- │ - Implement `HttpOrderRepository` implementing existing     │
- │   abstract `OrderRepository` interface                      │
+ │ Phase 4: Flutter API Client Integration                     │
+ │ - Build `HttpOrderRepository` in `flutter_mashwar/`         │
  │ - Connect Riverpod `ordersProvider` to live API endpoints   │
+ │ - Implement token refresh and offline retry interceptors    │
  └──────────────────────────────┬──────────────────────────────┘
                                 │
                                 ▼
  ┌─────────────────────────────────────────────────────────────┐
- │ Phase 5: Egyptian Production Gateway Integrations           │
- │ - Telecom SMS Gateway integration (Vodafone/Orange/e&)      │
- │ - Egyptian Payment Gateway (Paymob / Fawry / Vodafone Cash) │
- │ - Staging Pilot Trial in El Bagour                          │
+ │ Phase 5: Egyptian Gateway Integration & Staging Pilot       │
+ │ - Integrate Paymob / Fawry sandbox for card & wallet payments│
+ │ - Onboard initial pilot fleet of 15 verified El Bagour      │
+ │   captains on the 14-day subscription trial                 │
  └─────────────────────────────────────────────────────────────┘
 ```

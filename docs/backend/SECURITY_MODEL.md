@@ -1,10 +1,24 @@
 # Mashwar — Security, Authorization & Privacy Model
-**Classification:** Confidential Architecture Document  
+**Data Platform:** Supabase (Auth, Storage, RLS) + Trusted Server API (TypeScript)  
 **Phase:** Phase 2 Security Architecture Specification  
+**Status:** Reviewable Specification (Zero Production Credentials Stored)  
 
 ---
 
-## 1. Zero-Trust Security Tenet
+## 1. Verified Code vs. Proposed Security Model
+
+| Security Domain | Verified Repository Code (`flutter_mashwar/`) | Proposed Security Architecture | Implementation Status |
+| :--- | :--- | :--- | :--- |
+| **Authentication** | Demo role switch menu in UI (`PopupMenuButton`). | Supabase Auth (Egyptian mobile phone SMS OTP) issuing cryptographically signed JWTs. | **Proposed** |
+| **Authorization** | Purely visual conditional rendering in client. | Route-level RBAC middleware in trusted API + Row-Level Security (RLS) in PostgreSQL. | **Proposed** |
+| **Captain Monetization Gate** | Unconditional access to active order. | Server checks active subscription or grace period before dispatching delivery offers. | **Proposed** |
+| **Fare Tampering** | Client calculates and sends `estimatedFareEGP`. | Server pricing engine calculates and issues signed `quoteId`. Client amounts ignored. | **Proposed** |
+| **Payment Webhooks** | Not implemented. | HMAC-SHA256 signature verification with raw body inspection & replay attack protection. | **Proposed** |
+| **PII & Documents** | Hardcoded sample captain name/vehicle. | AES-256 encryption for National IDs; private Supabase storage with 15-minute presigned URLs. | **Proposed** |
+
+---
+
+## 2. Zero-Trust Security Tenet
 
 Mashwar's backend enforces a strict **Zero-Trust Client Policy**:
 1. **No Client Authorization Authority:** The mobile application cannot authorize a transaction, set its own user ID, select a role, calculate an authoritative price, or assign a captain.
@@ -15,106 +29,15 @@ Mashwar's backend enforces a strict **Zero-Trust Client Policy**:
 
 ---
 
-## 2. Authentication Identity Mapping to Roles
+## 3. Row-Level Security (RLS) Policies (PostgreSQL / Supabase Tier)
 
-```text
- ┌───────────────────────┐
- │   Phone / SMS Auth    │  (Egyptian carrier verification)
- └──────────┬────────────┘
-            │ Verified Phone Number
-            ▼
- ┌───────────────────────┐
- │       users           │  (Unique UUID primary key)
- └──────────┬────────────┘
-            │
-            ├───────────────────────┬───────────────────────┐
-            ▼                       ▼                       ▼
- ┌─────────────────────┐ ┌─────────────────────┐ ┌─────────────────────┐
- │  Customer Role      │ │  Captain Role       │ │  Merchant Role      │
- │  (Default upon sign)│ │  (Requires approved │ │  (Linked to specific│
- │                     │ │   verification)     │ │   branch ID)        │
- └─────────────────────┘ └─────────────────────┘ └─────────────────────┘
-```
-
-1. **Token Claims:** When a user logs in, the backend issues an access token with claims:
-   ```json
-   {
-     "sub": "7b053d56-7594-4aa2-9bd4-ba97a6a82f92",
-     "phone": "+201012345678",
-     "roles": ["customer", "captain"],
-     "active_role": "customer",
-     "merchant_branch_ids": [],
-     "iss": "https://api.mashwar.app",
-     "exp": 1791984000
-   }
-   ```
-2. **Context Injection:** In every request, the `AuthMiddleware` verifies the JWT signature, queries the active session status, and attaches a strongly typed `RequestContext` to the request pipeline:
-   ```typescript
-   export interface RequestContext {
-     userId: string;
-     roles: AppRole[];
-     permissions: Set<string>;
-     activeRole: AppRole;
-     merchantBranchIds?: string[];
-   }
-   ```
-
----
-
-## 3. Role-Based Access Control (RBAC) Matrix
-
-| Resource / Action | Customer | Captain | Merchant Staff | Operations Agent | Super Admin |
-| :--- | :---: | :---: | :---: | :---: | :---: |
-| **Request Fare Quote** | ✅ Yes | ❌ No | ✅ Yes | ✅ Yes | ✅ Yes |
-| **Create Delivery Order** | ✅ Yes | ❌ No | ✅ Yes | ✅ Yes (Assisted) | ✅ Yes |
-| **View Order Details** | ✅ Own Orders | ✅ Assigned Orders | ✅ Own Branch Orders | ✅ All Orders | ✅ All Orders |
-| **Cancel Order** | ✅ Before Pickup | ❌ No | ✅ Before Pickup | ✅ Override | ✅ Override |
-| **Accept Dispatch Offer** | ❌ No | ✅ If Offered | ❌ No | ❌ No | ❌ No |
-| **Advance Order (Pickup/Delivered)**| ❌ No | ✅ Assigned Order | ❌ No | ✅ Override | ✅ Override |
-| **Mark Order Ready in Kitchen** | ❌ No | ❌ No | ✅ Own Branch | ✅ Override | ✅ Override |
-| **Verify Captain Documents** | ❌ No | ❌ No | ❌ No | ✅ Yes | ✅ Yes |
-| **Modify Pricing Rules** | ❌ No | ❌ No | ❌ No | ❌ No | ✅ Yes |
-| **Access Regulatory Compliance Lock**| ❌ Read-Only | ❌ Read-Only | ❌ Read-Only | ❌ Read-Only | ⚠️ Legal Approval |
-
----
-
-## 4. Tenant & Record Ownership Enforcement
-
-### 4.1 Customer Ownership Rule
-A customer can only query or mutate an order where:
-```sql
-orders.customer_id = current_user_id()
-```
-Attempting to fetch another customer's order ID returns `404 Not Found` (to avoid resource enumeration) rather than `403 Forbidden`.
-
-### 4.2 Captain Assigned-Only Access Rule
-A captain can view the full pickup/drop-off phone numbers and detailed address **only** if they are actively assigned:
-```sql
-orders.id IN (
-    SELECT order_id FROM captain_assignments 
-    WHERE captain_id = current_captain_id() AND status = 'accepted'
-)
-```
-Before an offer is accepted (during the radar broadcast phase), the captain only sees the landmark neighborhood, distance, and payout. Customer phone numbers and exact building/apartment numbers are redacted.
-
-### 4.3 Merchant Branch Isolation
-Merchant personnel can access orders only if:
-```sql
-orders.merchant_branch_id IN (
-    SELECT branch_id FROM merchant_user_assignments 
-    WHERE user_id = current_user_id()
-)
-```
-
----
-
-## 5. Row-Level Security (RLS) Policies (PostgreSQL / Supabase Tier)
-
-Even though mobile clients connect via the authoritative API layer, database RLS is enabled as a defense-in-depth measure.
+Even though mobile clients connect primarily via the authoritative API layer, database RLS is enabled as a defense-in-depth measure.
 
 ```sql
--- Enable RLS on Orders
+-- Enable RLS on Orders and Captain Subscriptions
 ALTER TABLE orders ENABLE ROW LEVEL SECURITY;
+ALTER TABLE captain_subscriptions ENABLE ROW LEVEL SECURITY;
+ALTER TABLE cash_collections ENABLE ROW LEVEL SECURITY;
 
 -- 1. Customers can select their own orders
 CREATE POLICY customer_select_own_orders ON orders
@@ -132,7 +55,12 @@ CREATE POLICY captain_select_assigned_orders ON orders
         )
     );
 
--- 3. Operations staff with permission can select all orders
+-- 3. Captains can view their own subscription status
+CREATE POLICY captain_select_own_subscription ON captain_subscriptions
+    FOR SELECT
+    USING (captain_id IN (SELECT id FROM captains WHERE user_id = auth.uid()));
+
+-- 4. Operations staff with permission can select all records
 CREATE POLICY operations_select_all_orders ON orders
     FOR SELECT
     USING (
@@ -143,19 +71,19 @@ CREATE POLICY operations_select_all_orders ON orders
         )
     );
 
--- 4. Mutating orders directly from client is FORBIDDEN
+-- 5. Mutating orders directly from client is FORBIDDEN
 CREATE POLICY prevent_direct_client_updates ON orders
-    FOR UPDATE
+    FOR ALL
     USING (FALSE); -- Only the trusted backend service-role bypasses RLS
 ```
 
 ---
 
-## 6. Personal Identifiable Information (PII) Protection
+## 4. Personal Identifiable Information (PII) Protection
 
 1. **National ID & Drivers Licenses:**
-   - National ID numbers (`national_id_number`) are encrypted using `pgcrypto` (`pgp_sym_encrypt`) or stored with application-level AES-256-GCM.
-   - Document image files (scanned licenses, criminal records) are stored in a private object bucket with short-lived presigned URLs (15 minutes). Public read access is strictly disabled.
+   - National ID numbers (`national_id_number`) are stored using `pgcrypto` (`pgp_sym_encrypt`) or application-level AES-256-GCM.
+   - Document image files (scanned licenses, criminal records) are stored in private Supabase Storage buckets with short-lived presigned URLs (15 minutes). Public read access is strictly disabled.
 2. **Phone Number Redaction in Audit Logs:**
    - Structured logging filters strip Egyptian mobile numbers (`+2010...`) and authorization tokens before emitting logs to disk or monitoring tools.
 3. **Session Revocation:**
