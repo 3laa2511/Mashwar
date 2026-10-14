@@ -133,3 +133,20 @@ This section supersedes any implication that El Bagour is the only supported fut
 
 ### Gate to move from specification to implementation
 Each phase must identify changed files, commands actually executed, test outputs, known gaps and whether it used mocks or real infrastructure. A passing unit suite alone does not prove database persistence, RLS, provider integration, GPS, or production readiness.
+
+
+---
+
+## 7. Cross-Platform Web & Order Communication Roadmap (2026-10-14)
+
+This scope is additive; it does not mean any item is already implemented.
+
+1. **Shared foundation first:** verified authentication/authorization, durable orders/messages, database constraints/RLS, API contracts and test fixtures.
+2. **Order chat backend:** conversation membership, persisted text messages, idempotency, cursor pagination, abuse controls and cross-order authorization tests.
+3. **Private voice notes:** upload intent, private storage, server-side validation, authorized playback, quotas and retention decisions.
+4. **Responsive customer web/PWA:** separate from the root developer preview; browser account, merchant discovery, quote/order, status/history and chat, all via the same API as Flutter.
+5. **Flutter integration:** use the same conversation/message DTOs and endpoint semantics; add record/preview/upload/retry controls using platform-supported recording.
+6. **Realtime and notifications:** choose provider based on cost and operational constraints; retain durable storage as source of truth and a bounded polling fallback.
+7. **Parity and release:** end-to-end tests verify same account/orders across clients, web-to-mobile message continuity, access controls, browser permission denial, responsive accessibility and network failure handling.
+
+Do not release claims of a working web ordering flow or voice chat until an end-to-end test exercises the real authenticated API and private storage. Keep live voice calls, speech transcription and text-to-speech as separate cost/privacy decisions.
