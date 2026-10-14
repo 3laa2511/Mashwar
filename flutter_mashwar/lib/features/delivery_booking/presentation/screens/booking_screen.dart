@@ -118,7 +118,7 @@ class _BookingScreenState extends ConsumerState<BookingScreen> {
             children: [
               // Landmark selection
               DropdownButtonFormField<String>(
-                value: _pickup,
+                initialValue: _pickup,
                 decoration: const InputDecoration(
                   labelText: 'نقطة الاستلام في الباجور',
                   prefixIcon: Icon(Icons.trip_origin_rounded, color: AppColors.secondary),
@@ -136,7 +136,7 @@ class _BookingScreenState extends ConsumerState<BookingScreen> {
               const SizedBox(height: 14),
 
               DropdownButtonFormField<String>(
-                value: _dropoff,
+                initialValue: _dropoff,
                 decoration: const InputDecoration(
                   labelText: 'نقطة التسليم في الباجور',
                   prefixIcon: Icon(Icons.location_on_rounded, color: AppColors.error),
@@ -167,7 +167,7 @@ class _BookingScreenState extends ConsumerState<BookingScreen> {
                     const Text('وجهة قروية / خارج المدينة (+5 ج.م)', style: TextStyle(fontSize: 13)),
                     Switch(
                       value: _isRuralDestination,
-                      activeColor: AppColors.secondary,
+                      activeThumbColor: AppColors.secondary,
                       onChanged: (val) {
                         setState(() => _isRuralDestination = val);
                         _recalculateFare();
@@ -221,7 +221,7 @@ class _BookingScreenState extends ConsumerState<BookingScreen> {
                           Container(
                             padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
                             decoration: BoxDecoration(
-                              color: AppColors.primary.withOpacity(0.15),
+                              color: AppColors.primary.withValues(alpha: 0.15),
                               borderRadius: BorderRadius.circular(6),
                             ),
                             child: const Text('تقدير تجريبي', style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: AppColors.primaryDark)),
