@@ -58,6 +58,7 @@ jobs:
           bun-version: latest
 
       - name: Install repository dependencies from lockfile
+        working-directory: .
         run: bun install --frozen-lockfile
 
       - name: Typecheck customer web
