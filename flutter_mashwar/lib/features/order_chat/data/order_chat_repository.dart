@@ -48,7 +48,7 @@ class OrderChatRepository {
     dynamic parsed;
     try { parsed = jsonDecode(response.body); } catch (_) { throw const OrderChatException('استجابة الخادم غير مفهومة.'); }
     if (response.statusCode < 200 || response.statusCode >= 300) {
-      final message = parsed is Map ? parsed['error']?['message'] : null;
+      final message = parsed is Map && parsed['error'] is Map ? (parsed['error'] as Map)['message'] : null;
       throw OrderChatException(message?.toString() ?? 'تعذر تنفيذ الطلب (${response.statusCode}).');
     }
     if (parsed is Map<String, dynamic> && parsed['data'] is Map<String, dynamic>) return parsed['data'] as Map<String, dynamic>;
