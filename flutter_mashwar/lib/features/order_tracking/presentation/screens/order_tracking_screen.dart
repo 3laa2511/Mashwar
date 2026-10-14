@@ -42,6 +42,13 @@ class OrderTrackingScreen extends ConsumerWidget {
           icon: const Icon(Icons.arrow_back),
           onPressed: () => context.go('/customer'),
         ),
+        actions: [
+          IconButton(
+            tooltip: 'محادثة الطلب',
+            icon: const Icon(Icons.forum_outlined),
+            onPressed: () => context.go('/customer/order/${Uri.encodeComponent(orderId)}/chat'),
+          ),
+        ],
       ),
       body: SingleChildScrollView(
         padding: const EdgeInsets.all(16),
