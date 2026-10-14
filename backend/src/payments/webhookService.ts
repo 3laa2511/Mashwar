@@ -17,11 +17,19 @@ export interface ProcessWebhookResult {
 export class WebhookService {
   private static processedEvents = new Map<string, { processedAt: string; provider: string }>();
 
-  public static readonly DEFAULT_WEBHOOK_SECRETS: Record<string, string> = {
-    paymob: process.env.PAYMOB_HMAC_SECRET || 'paymob_staging_hmac_secret_el_bagour',
-    fawry: process.env.FAWRY_SECURITY_SECRET || 'fawry_staging_secret_key_menoufia',
-    vodafone_cash: process.env.VODAFONE_CASH_SECRET || 'vodafone_cash_api_key_delta',
-  };
+  /**
+   * Secrets are resolved at call time so runtime environment configuration is honored.
+   * There are deliberately no built-in production or staging fallback secrets.
+   */
+  private static getSecret(provider: 'paymob' | 'fawry' | 'vodafone_cash'): string | undefined {
+    const envName: Record<typeof provider, string> = {
+      paymob: 'PAYMOB_HMAC_SECRET',
+      fawry: 'FAWRY_SECURITY_SECRET',
+      vodafone_cash: 'VODAFONE_CASH_SECRET',
+    };
+    const secret = process.env[envName[provider]];
+    return secret && secret.length >= 32 ? secret : undefined;
+  }
 
   /**
    * Generates a valid HMAC signature for testing or gateway simulation.
@@ -30,7 +38,10 @@ export class WebhookService {
     payload: string,
     provider: 'paymob' | 'fawry' | 'vodafone_cash'
   ): string {
-    const secret = this.DEFAULT_WEBHOOK_SECRETS[provider];
+    const secret = this.getSecret(provider);
+    if (!secret) {
+      throw new Error(`Webhook signing secret is not configured for provider: ${provider}`);
+    }
     return crypto.createHmac('sha256', secret).update(payload).digest('hex');
   }
 
@@ -42,8 +53,8 @@ export class WebhookService {
     signatureHeader: string,
     provider: 'paymob' | 'fawry' | 'vodafone_cash'
   ): boolean {
-    const secret = this.DEFAULT_WEBHOOK_SECRETS[provider];
-    if (!secret || !signatureHeader) return false;
+    const secret = this.getSecret(provider);
+    if (!secret || !signatureHeader || !/^[a-f0-9]{64}$/i.test(signatureHeader)) return false;
 
     const expectedSignature = crypto
       .createHmac('sha256', secret)
