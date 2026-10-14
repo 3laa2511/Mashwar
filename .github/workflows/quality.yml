@@ -20,6 +20,12 @@ jobs:
     name: Typecheck, backend tests, and web preview build
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    # Non-production fixture values for deterministic automated tests only.
+    env:
+      PRICING_HMAC_SECRET: test-only-pricing-secret-not-for-production
+      PAYMOB_HMAC_SECRET: test-only-paymob-secret-not-for-production
+      FAWRY_SECURITY_SECRET: test-only-fawry-secret-not-for-production
+      VODAFONE_CASH_SECRET: test-only-vodafone-secret-not-for-production
     steps:
       - name: Checkout
         uses: actions/checkout@v4
