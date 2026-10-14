@@ -130,7 +130,7 @@ class _OrderChatScreenState extends State<OrderChatScreen> {
             width: double.infinity,
             padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
             color: Theme.of(context).colorScheme.surfaceContainerHighest,
-            child: Text('طلب رقم \${widget.orderId} · الرسائل متاحة لأطراف الطلب المصرح لهم فقط', style: Theme.of(context).textTheme.bodySmall),
+            child: Text('طلب رقم ${widget.orderId} · الرسائل متاحة لأطراف الطلب المصرح لهم فقط', style: Theme.of(context).textTheme.bodySmall),
           ),
           if (_error != null)
             Container(
