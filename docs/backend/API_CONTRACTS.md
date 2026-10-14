@@ -340,3 +340,28 @@ Use an authenticated provider adapter for new-message/order-state notifications.
 - The server is authoritative; offline drafts are not shown as sent until confirmed.
 - Microphone denial/browser incompatibility falls back to text and order status.
 - All endpoints use rate limits, request validation, audit-safe logging and participant checks.
+
+
+---
+
+## 10. Customer Web, Service-Area Discovery & Order Chat Contracts (2026-10-14)
+
+This addendum is the contract target for the new `web/customer` client and clarifies that old example request fields such as client-supplied estimated distance are not authoritative.
+
+### Service areas
+`GET /api/v1/service-areas` returns only enabled service areas, for example `{ id, displayName, status }`. The customer client must populate its selector from this response; it must not hard-code El Bagour or any future city as the only supported area.
+
+### Quotes and order creation
+`POST /api/v1/quotes` accepts `serviceTypeId`, `serviceAreaId`, pickup/drop-off address or coordinates, and optional service details. The server validates that both endpoints are covered and derives distance/ETA from the trusted routing/geocoding adapter. A client-supplied distance, price, rural surcharge or duration is never trusted.
+
+The response envelope is `{ success: true, data: { quoteId, totalFarePiasters, formattedTotalEgp, currency, expiresAt, lineItems } }`. The client displays the server quote and checks expiry before confirmation.
+
+`POST /api/v1/orders` requires `Idempotency-Key`, a valid unexpired `quoteId`, service type, item description, pickup/drop-off contact details, and payment method. The server binds the quote to its authenticated customer, service area and route details; it rejects a quote belonging to another user or changed route. The client must not send a trusted total.
+
+### Web session
+For web, use a server-managed secure HttpOnly SameSite session cookie if chosen by the implementation; protect state-changing cookie-authenticated requests against CSRF. Flutter may use the same identity provider with bearer tokens. Both authenticate to the same users/orders and authorization model. `POST /api/v1/auth/otp/request` and verification endpoints must enforce phone normalization, rate limits, abuse controls, and never reveal whether an arbitrary phone belongs to an account.
+
+### Conversation responses
+`GET /api/v1/orders/:orderId/messages` returns `{ messages: [{ id, messageType, textBody?, audioUrl?, senderLabel?, createdAt }] }` only after current participant authorization. `POST` accepts `clientMessageId` and `messageType: text` with `textBody`; sender identity comes from the verified session. Voice upload-intent and completion follow the chat specification. The API must return a short-lived authorized audio URL or a protected playback endpoint; no public bucket.
+
+**Implementation status:** contracts only. The new web client is a scaffold and cannot create real orders or send messages until these API endpoints and authentication are implemented and tested.
