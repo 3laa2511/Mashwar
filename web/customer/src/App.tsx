@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { ArrowLeft, AudioLines, Bike, CheckCircle2, ChevronDown, CircleHelp, Clock3, Headphones, MapPin, Mic, Package, Search, ShieldCheck, ShoppingBag, Smartphone, Store, Upload, X } from 'lucide-react';
+import { ArrowLeft, AudioLines, Bike, CheckCircle2, ChevronDown, CircleHelp, Clock3, Headphones, MapPin, Mic, Package, ShieldCheck, ShoppingBag, Smartphone, Store, Upload, X } from 'lucide-react';
 import { apiBaseUrl, ApiError, apiRequest, getApiHealth, requestVoiceUploadIntent } from './api';
 
 type Service = 'store' | 'parcel' | 'errand';
