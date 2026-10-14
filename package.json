@@ -10,7 +10,9 @@
     "clean": "rm -rf dist server.js",
     "lint": "tsc --noEmit",
     "test:backend": "tsx backend/tests/run_tests.ts",
-    "test": "tsx backend/tests/run_tests.ts"
+    "test": "tsx backend/tests/run_tests.ts",
+    "start": "tsx backend/src/api/start.ts",
+    "dev:backend": "tsx watch backend/src/api/start.ts"
   },
   "dependencies": {
     "@google/genai": "^2.4.0",
