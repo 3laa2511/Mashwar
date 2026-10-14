@@ -49,7 +49,7 @@ class OrderChatRepository {
     try { parsed = jsonDecode(response.body); } catch (_) { throw const OrderChatException('استجابة الخادم غير مفهومة.'); }
     if (response.statusCode < 200 || response.statusCode >= 300) {
       final message = parsed is Map ? parsed['error']?['message'] : null;
-      throw OrderChatException(message?.toString() ?? 'تعذر تنفيذ الطلب (\${response.statusCode}).');
+      throw OrderChatException(message?.toString() ?? 'تعذر تنفيذ الطلب (${response.statusCode}).');
     }
     if (parsed is Map<String, dynamic> && parsed['data'] is Map<String, dynamic>) return parsed['data'] as Map<String, dynamic>;
     if (parsed is Map<String, dynamic>) return parsed;
@@ -59,7 +59,7 @@ class OrderChatRepository {
   Uri _uri(String path) => Uri.parse('$_baseUrl/api/v1$path');
 
   Future<List<OrderChatMessage>> getMessages(String orderId) async {
-    final response = await _client.get(_uri('/orders/\${Uri.encodeComponent(orderId)}/messages'), headers: await _headers());
+    final response = await _client.get(_uri('/orders/${Uri.encodeComponent(orderId)}/messages'), headers: await _headers());
     final messages = _decode(response)['messages'];
     if (messages is! List) return const [];
     return messages.whereType<Map>().map((item) => OrderChatMessage.fromJson(Map<String, dynamic>.from(item))).toList();
@@ -69,7 +69,7 @@ class OrderChatRepository {
     final random = Random.secure();
     final id = List<int>.generate(16, (_) => random.nextInt(256)).map((value) => value.toRadixString(16).padLeft(2, '0')).join();
     final response = await _client.post(
-      _uri('/orders/\${Uri.encodeComponent(orderId)}/messages'),
+      _uri('/orders/${Uri.encodeComponent(orderId)}/messages'),
       headers: await _headers(jsonBody: true),
       body: jsonEncode({'clientMessageId': id, 'messageType': 'text', 'textBody': text.trim()}),
     );
@@ -78,7 +78,7 @@ class OrderChatRepository {
 
   Future<String> recordPath() async {
     final directory = await getTemporaryDirectory();
-    return '\${directory.path}/mashwar_voice_\${DateTime.now().millisecondsSinceEpoch}.m4a';
+    return '${directory.path}/mashwar_voice_${DateTime.now().millisecondsSinceEpoch}.m4a';
   }
 
   Future<void> uploadVoiceNote(String orderId, String filePath) async {
