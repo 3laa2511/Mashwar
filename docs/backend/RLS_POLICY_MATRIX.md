@@ -157,3 +157,28 @@ CREATE POLICY captain_subscriptions_deny_client_mutations ON captain_subscriptio
 2. **PII Masking in Audit Logs:**
    - National ID numbers and phone numbers are stripped or hashed (`SHA-256`) before writing to `audit_logs`.
    - Never log authorization tokens, refresh tokens, SMS OTP codes, or gateway API keys.
+
+
+---
+
+## 7. Marketplace & Multi-Region RLS Addendum (2026-10-14)
+
+The matrix below is required policy intent, not proof that policies are deployed or tested. Reconcile each row against actual tables before migrations.
+
+| Data domain | Anonymous/public | Customer | Captain | Merchant owner/staff | Operations/admin |
+|---|---|---|---|---|---|
+| Active service areas | Read enabled public fields only | Same | Read areas they can opt into | Read areas where assigned branches operate | Manage/activate with permission + audit |
+| Merchant public profile/catalog | Approved + active public fields only | Same | Minimum public merchant/order details when assigned | Own merchant/branches only | Review/manage with permission + audit |
+| Merchant private records/docs | None | None | None | Own permitted records only, never review notes | Verification staff only, audited |
+| Merchant orders | None | Own orders | Only orders offered/assigned as permitted | Own branch orders only | Operations permission, audited |
+| Captain public profile | Minimal public DTO only | Minimal public DTO | Own public/private profile as appropriate | Minimum details needed for an order | Operations permission |
+| Captain ID/license documents | None | None | Own submitted docs only where justified | None | Explicit verification permission, audited |
+| Precise customer/captain location | None | Own saved location; order-related scope | Only assigned/eligible offer scope | Only relevant branch/order scope | Explicit operational permission, audited |
+| Subscription & entitlements | Public plan details only | Own customer subscription if any | Own captain subscription | Own merchant subscription | Manage plan policy with audit |
+
+Implementation requirements:
+- Enable RLS and define explicit policies for every table containing personal, merchant, order, subscription, or location data; default-deny unknown roles.
+- Do not use client-writable role claims or request-body IDs as authorization proof. Validate Supabase JWT and derive actor identity from verified claims.
+- Ensure merchant membership checks include merchant and branch scope. Prevent cross-merchant reads/writes.
+- Keep service-role credentials server-only. Any trusted API bypass of RLS must enforce authorization before querying/mutating.
+- Test both positive and negative cases with real PostgreSQL/Supabase-like roles in an isolated environment; document tests as NOT RUN until executed.
