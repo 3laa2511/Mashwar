@@ -29,6 +29,7 @@ export interface AuditLogEntry {
   previousState?: any;
   newState?: any;
   ipAddress?: string;
+  notes?: string;
 }
 
 export class AuditLogger {
