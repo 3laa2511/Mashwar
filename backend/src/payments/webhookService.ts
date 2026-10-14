@@ -17,11 +17,22 @@ export interface ProcessWebhookResult {
 export class WebhookService {
   private static processedEvents = new Map<string, { processedAt: string; provider: string }>();
 
-  public static readonly DEFAULT_WEBHOOK_SECRETS: Record<string, string> = {
-    paymob: process.env.PAYMOB_HMAC_SECRET || 'paymob_staging_hmac_secret_el_bagour',
-    fawry: process.env.FAWRY_SECURITY_SECRET || 'fawry_staging_secret_key_menoufia',
-    vodafone_cash: process.env.VODAFONE_CASH_SECRET || 'vodafone_cash_api_key_delta',
+  private static readonly SECRET_ENV_NAMES: Record<'paymob' | 'fawry' | 'vodafone_cash', string> = {
+    paymob: 'PAYMOB_HMAC_SECRET',
+    fawry: 'FAWRY_SECURITY_SECRET',
+    vodafone_cash: 'VODAFONE_CASH_SECRET',
   };
+
+  public static getRequiredSecret(provider: 'paymob' | 'fawry' | 'vodafone_cash'): string {
+    const envName = this.SECRET_ENV_NAMES[provider];
+    const secret = process.env[envName];
+    if (typeof secret !== 'string' || secret.trim().length === 0) {
+      const error = new Error(`Missing required environment variable: ${envName}`);
+      (error as any).code = 'MISSING_REQUIRED_SECRET';
+      throw error;
+    }
+    return secret;
+  }
 
   /**
    * Generates a valid HMAC signature for testing or gateway simulation.
@@ -30,7 +41,7 @@ export class WebhookService {
     payload: string,
     provider: 'paymob' | 'fawry' | 'vodafone_cash'
   ): string {
-    const secret = this.DEFAULT_WEBHOOK_SECRETS[provider];
+    const secret = this.getRequiredSecret(provider);
     return crypto.createHmac('sha256', secret).update(payload).digest('hex');
   }
 
@@ -42,7 +53,7 @@ export class WebhookService {
     signatureHeader: string,
     provider: 'paymob' | 'fawry' | 'vodafone_cash'
   ): boolean {
-    const secret = this.DEFAULT_WEBHOOK_SECRETS[provider];
+    const secret = this.getRequiredSecret(provider);
     if (!secret || !signatureHeader) return false;
 
     const expectedSignature = crypto
