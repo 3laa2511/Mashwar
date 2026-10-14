@@ -1,9 +1,18 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../models/order_model.dart';
 import '../services/mock_data_repository.dart';
+import '../services/order_repository_interface.dart';
+import '../services/http_order_repository.dart';
+
+/// Provider for the Order Repository instance (defaults to HTTP repository with mock fallback)
+final orderRepositoryProvider = Provider<IOrderRepository>((ref) {
+  return HttpOrderRepository();
+});
 
 class OrdersNotifier extends StateNotifier<List<OrderModel>> {
-  OrdersNotifier() : super(MockDataRepository.getInitialMockOrders());
+  final IOrderRepository? _repository;
+
+  OrdersNotifier([this._repository]) : super(MockDataRepository.getInitialMockOrders());
 
   /// Adds a newly created order from the booking flow
   void addOrder(OrderModel newOrder) {

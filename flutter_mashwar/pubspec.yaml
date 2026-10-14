@@ -22,6 +22,7 @@ dependencies:
 
   # Networking & Serialization
   dio: ^5.4.1
+  http: ^1.2.0
   json_annotation: ^4.8.1
 
   # Secure Storage & Persistence

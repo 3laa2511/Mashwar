@@ -33,7 +33,29 @@ class PriceCalculator {
       ruralOrUnpavedSurcharge: ruralSurcharge,
       platformFee: platformFeeAmount,
       totalFare: totalFare,
-      estimatedDurationMinutes: '$minutes-$minutes+5',
+      estimatedDurationMinutes: '$minutes-${minutes + 5}',
     );
+  }
+
+  /// Calculates authoritative fare in Egyptian Piasters (1 EGP = 100 Piasters)
+  /// Used for strict parity with the production backend pricing engine.
+  static int calculateFarePiasters({
+    required double distanceKm,
+    bool isRuralOrVillage = false,
+  }) {
+    if (distanceKm < 0) {
+      throw ArgumentError('Distance cannot be negative');
+    }
+
+    const int baseFarePiasters = 1500; // 15.00 EGP
+    const int ratePerKmPiasters = 400; // 4.00 EGP
+    const int ruralSurchargePiasters = 500; // 5.00 EGP
+    const int platformFeePiasters = 200; // 2.00 EGP
+
+    final double chargeableKm = distanceKm > 1.5 ? (distanceKm - 1.5) : 0.0;
+    final int distanceFarePiasters = (chargeableKm * ratePerKmPiasters).round();
+    final int ruralSurcharge = isRuralOrVillage ? ruralSurchargePiasters : 0;
+
+    return baseFarePiasters + distanceFarePiasters + ruralSurcharge + platformFeePiasters;
   }
 }

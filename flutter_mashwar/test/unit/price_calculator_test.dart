@@ -31,6 +31,24 @@ void main() {
       expect(quote.totalFare, 30.0);
     });
 
+    test('Correctly formats estimated duration without string interpolation bug', () {
+      final quote = PriceCalculator.calculateQuote(distanceKm: 1.2);
+      // minutes = (1.2 * 2.4 + 5).ceil() = 8
+      // Expected duration format: '8-13' (NOT '8-8+5')
+      expect(quote.estimatedDurationMinutes, '8-13');
+    });
+
+    test('Calculates authoritative integer piasters matching backend pricing engine', () {
+      final piastersUrban = PriceCalculator.calculateFarePiasters(distanceKm: 1.2, isRuralOrVillage: false);
+      expect(piastersUrban, 1700); // 17.00 EGP
+
+      final piastersDistance = PriceCalculator.calculateFarePiasters(distanceKm: 3.5, isRuralOrVillage: false);
+      expect(piastersDistance, 2500); // 25.00 EGP
+
+      final piastersRural = PriceCalculator.calculateFarePiasters(distanceKm: 3.5, isRuralOrVillage: true);
+      expect(piastersRural, 3000); // 30.00 EGP
+    });
+
     test('Throws ArgumentError on negative distance', () {
       expect(
         () => PriceCalculator.calculateQuote(distanceKm: -1.0),
