@@ -36,10 +36,12 @@
 	<true/>
 	<key>UIApplicationSupportsIndirectInputEvents</key>
 	<true/>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>يحتاج مشوار إلى الميكروفون فقط عندما تختار تسجيل رسالة صوتية داخل محادثة الطلب.</string>
 	<!-- Location usage descriptions -->
 	<key>NSLocationWhenInUseUsageDescription</key>
-	<string>يحتاج تطبيق مشوار للوصول إلى موقعك لتحديد نقطة استلام وتسليم الطرود بدقة في مدينة الباجور والقرى المجاورة.</string>
+	<string>يحتاج مشوار إلى موقعك، بموافقتك، للمساعدة في تحديد نقاط الاستلام والتسليم داخل مناطق الخدمة المتاحة.</string>
 	<key>NSLocationAlwaysUsageDescription</key>
-	<string>تتبع مسار الكابتن أثناء الرحلة لضمان وصول الشحنة.</string>
+	<string>قد يحتاج تطبيق الكابتن إلى تحديث الموقع أثناء تنفيذ طلب نشط، وفق الأذونات والإعدادات التي توافق عليها.</string>
 </dict>
 </plist>

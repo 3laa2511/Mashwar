@@ -7,6 +7,9 @@ class FareQuoteModel {
   final double totalFare;
   final String currency;
   final String estimatedDurationMinutes;
+  final String? quoteId;
+  final String? signature;
+  final String? expiresAt;
 
   const FareQuoteModel({
     required this.baseFare,
@@ -17,6 +20,9 @@ class FareQuoteModel {
     required this.totalFare,
     this.currency = 'ج.م',
     required this.estimatedDurationMinutes,
+    this.quoteId,
+    this.signature,
+    this.expiresAt,
   });
 
   Map<String, dynamic> toJson() => {
@@ -28,5 +34,8 @@ class FareQuoteModel {
         'totalFare': totalFare,
         'currency': currency,
         'estimatedDurationMinutes': estimatedDurationMinutes,
+        'quoteId': quoteId,
+        'signature': signature,
+        'expiresAt': expiresAt,
       };
 }

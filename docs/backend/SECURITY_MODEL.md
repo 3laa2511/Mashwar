@@ -88,3 +88,59 @@ CREATE POLICY prevent_direct_client_updates ON orders
    - Structured logging filters strip Egyptian mobile numbers (`+2010...`) and authorization tokens before emitting logs to disk or monitoring tools.
 3. **Session Revocation:**
    - Suspended captains or deactivated users have their refresh tokens immediately revoked in the database (`users.is_active = FALSE`).
+
+
+---
+
+## 5. Marketplace, Captain Identity & Location Privacy (Scope Addendum — 2026-10-14)
+
+### Merchant boundaries
+- Public reads are restricted to approved, active merchants/branches and public catalog fields.
+- Merchant owner/staff permissions are scoped through persisted memberships and branch access; never trust a client-supplied merchant ID alone.
+- Merchant subscription is not a verification bypass. Suspended/unapproved merchants cannot publish or accept orders.
+- Price, stock, approval state, entitlement, and audit fields are server-owned. Validate catalog uploads and use least-privilege storage policies.
+
+### Captain identity data
+- Public profile DTOs contain only necessary display name/photo, verification badge, vehicle category, and persisted rating/completion aggregates.
+- National ID numbers, ID/license images, private phone, home address, date of birth, internal review notes and risk flags are private and never included in customer/merchant API responses.
+- Identity files live in private storage with short-lived signed URLs created only after authorization. Audit access and review decisions; redact signed URL tokens and PII from logs.
+- Define legal basis, retention/deletion, staff access and incident response before collecting real documents. Use synthetic fixtures only.
+
+### Location and dispatch
+- Exact customer addresses and captain coordinates are access-controlled by order relationship and operational need.
+- Validate coordinates and timestamps, rate-limit updates, reject stale/impossible jumps for dispatch eligibility, and record minimal data.
+- A routing provider or GPS stream must not be represented as live/accurate unless actually integrated. Keep routing credentials server-side.
+- Assignment uses durable database transactions and constraints; process-local locks are not a security or consistency boundary.
+- Include authorization tests for cross-merchant reads, unassigned address access, captain spoofing, and concurrent acceptance.
+
+### Region boundaries
+Service-area activation is an operations privilege. Orders, merchants and captains must be checked against the authoritative active area. Never allow a request body to override the region selected from trusted order/branch configuration. Add cross-area isolation tests and preserve passenger transport lock.
+
+
+---
+
+## 6. Web/Mobile Parity, Chat & Audio Security (2026-10-14)
+
+### Shared clients
+- Flutter and browser clients are untrusted. All authoritative operations go through the same trusted API and verified JWT model.
+- Web-specific CORS, CSRF protections where cookie sessions are used, secure session cookie settings, CSP, and dependency/build controls must be reviewed before deployment.
+- Do not place service-role secrets, signing secrets, private storage keys, or provider credentials in either client bundle.
+- Cross-client synchronization is through persisted server data, not browser local storage or device-only order lists.
+
+### Conversation authorization
+- Verify order participation and current assignment at message read, send, attachment upload, and audio download time.
+- Ignore client-supplied sender ID/role as identity proof. Prevent cross-order and cross-customer access.
+- Operations/support access is permission-scoped and audited; it is not blanket access for every staff account.
+- Reassignment/cancellation lifecycle must define when the former captain loses access.
+
+### Voice-note handling
+- Request microphone permission only after explicit user action. Do not record automatically.
+- Validate actual file bytes, MIME/codec, duration and size server-side; never trust browser-provided metadata alone.
+- Use private object storage and short-lived authorized URLs. No public audio bucket or permanent public link.
+- Apply upload quotas, rate limits, retention/deletion policy and safe logging. Avoid recording or transcribing without transparent consent.
+- Push notifications do not include message bodies, voice URLs, exact locations, or private customer details.
+
+### Browser and accessibility controls
+- Provide keyboard-accessible controls, visible recording state, cancel/preview/send actions, large touch targets, and Arabic RTL labels.
+- When microphone or geolocation is denied/unavailable, provide an honest text/manual-address fallback.
+- Do not promise speech-to-text, live calls, or background GPS until separately designed, consented, and tested.

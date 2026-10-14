@@ -157,3 +157,49 @@ CREATE POLICY captain_subscriptions_deny_client_mutations ON captain_subscriptio
 2. **PII Masking in Audit Logs:**
    - National ID numbers and phone numbers are stripped or hashed (`SHA-256`) before writing to `audit_logs`.
    - Never log authorization tokens, refresh tokens, SMS OTP codes, or gateway API keys.
+
+
+---
+
+## 7. Marketplace & Multi-Region RLS Addendum (2026-10-14)
+
+The matrix below is required policy intent, not proof that policies are deployed or tested. Reconcile each row against actual tables before migrations.
+
+| Data domain | Anonymous/public | Customer | Captain | Merchant owner/staff | Operations/admin |
+|---|---|---|---|---|---|
+| Active service areas | Read enabled public fields only | Same | Read areas they can opt into | Read areas where assigned branches operate | Manage/activate with permission + audit |
+| Merchant public profile/catalog | Approved + active public fields only | Same | Minimum public merchant/order details when assigned | Own merchant/branches only | Review/manage with permission + audit |
+| Merchant private records/docs | None | None | None | Own permitted records only, never review notes | Verification staff only, audited |
+| Merchant orders | None | Own orders | Only orders offered/assigned as permitted | Own branch orders only | Operations permission, audited |
+| Captain public profile | Minimal public DTO only | Minimal public DTO | Own public/private profile as appropriate | Minimum details needed for an order | Operations permission |
+| Captain ID/license documents | None | None | Own submitted docs only where justified | None | Explicit verification permission, audited |
+| Precise customer/captain location | None | Own saved location; order-related scope | Only assigned/eligible offer scope | Only relevant branch/order scope | Explicit operational permission, audited |
+| Subscription & entitlements | Public plan details only | Own customer subscription if any | Own captain subscription | Own merchant subscription | Manage plan policy with audit |
+
+Implementation requirements:
+- Enable RLS and define explicit policies for every table containing personal, merchant, order, subscription, or location data; default-deny unknown roles.
+- Do not use client-writable role claims or request-body IDs as authorization proof. Validate Supabase JWT and derive actor identity from verified claims.
+- Ensure merchant membership checks include merchant and branch scope. Prevent cross-merchant reads/writes.
+- Keep service-role credentials server-only. Any trusted API bypass of RLS must enforce authorization before querying/mutating.
+- Test both positive and negative cases with real PostgreSQL/Supabase-like roles in an isolated environment; document tests as NOT RUN until executed.
+
+
+---
+
+## 8. Conversation & Audio RLS Addendum (2026-10-14)
+
+Policy intent only; reconcile names and implement against actual tables before deployment.
+
+| Data domain | Customer | Assigned captain | Merchant | Operations/support |
+|---|---|---|---|---|
+| Conversation metadata | Own order only | Currently authorized order only | Relevant own branch/order scope only when product rules permit | Explicit support permission, audited |
+| Messages | Read/send within own order conversation | Read/send within current allowed assignment lifecycle | Only if merchant participation is explicitly part of the order workflow | Permission-scoped, audited |
+| Voice attachments | Upload/read only for authorized conversation | Upload/read only for authorized conversation | No access unless an explicit authorized participant | Explicit permission, audited |
+| Delivery/read receipts | Own conversation scope | Own conversation scope | Own conversation scope if included | Operational access only if needed |
+
+Requirements:
+- Verify participant membership in both the API and database policy where possible.
+- RLS must prevent cross-order message reads/inserts and attachment metadata access.
+- Private object-storage policies must verify the associated conversation/order membership; public bucket access is prohibited.
+- Support staff access is not implied by a generic staff role.
+- Keep message bodies, audio bytes, signed URLs and PII out of routine audit/log payloads.

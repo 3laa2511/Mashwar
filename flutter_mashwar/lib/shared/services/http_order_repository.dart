@@ -170,7 +170,7 @@ class HttpOrderRepository implements IOrderRepository {
       }),
     );
 
-    if (response.statusCode == 200) {
+    if (response.statusCode == 200 || response.statusCode == 201) {
       final decoded = jsonDecode(response.body);
       final data = decoded['data'];
       return FareQuoteModel(
@@ -181,6 +181,9 @@ class HttpOrderRepository implements IOrderRepository {
         platformFee: (data['platformFeePiasters'] as num) / 100.0,
         totalFare: (data['totalFarePiasters'] as num) / 100.0,
         estimatedDurationMinutes: data['estimatedDurationMinutes'] ?? '15-20',
+        quoteId: data['quoteId'] as String?,
+        signature: data['signature'] as String?,
+        expiresAt: data['expiresAt'] as String?,
         currency: 'ج.م',
       );
     } else {
@@ -219,8 +222,9 @@ class HttpOrderRepository implements IOrderRepository {
       case 'passenger':
         return OrderServiceType.passengerRestricted;
       case 'package':
-      default:
         return OrderServiceType.package;
+      default:
+        throw FormatException('نوع خدمة غير معروف من الخادم: ${type ?? 'null'}');
     }
   }
 
@@ -239,7 +243,6 @@ class HttpOrderRepository implements IOrderRepository {
       case OrderStatus.cancelled:
         return 'cancelled';
       case OrderStatus.created:
-      default:
         return 'created';
     }
   }

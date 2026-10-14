@@ -15,7 +15,7 @@
  * 10. Webhook Replay Deduplication & Idempotency Store
  */
 
-import { PricingEngine } from '../src/pricing/pricingEngine.js';
+import { PricingEngine, DEFAULT_PRICING_CONFIG } from '../src/pricing/pricingEngine.js';
 import { OrderFsm } from '../src/orders/orderFsm.js';
 import { CaptainEligibilityEngine } from '../src/captain/captainEligibility.js';
 import { AssignmentService } from '../src/dispatch/assignmentService.js';
@@ -105,7 +105,18 @@ export async function runAllTests(): Promise<{
   // SUITE 1: Authoritative Pricing & Piasters Precision
   // --------------------------------------------------------------------------
   console.log('▶ SUITE 1: Authoritative Pricing Engine & Currency Invariants');
-  const pricing = new PricingEngine();
+  const pricing = new PricingEngine({ ...DEFAULT_PRICING_CONFIG, hmacSecret: 'unit-test-only-pricing-signing-secret-2026' });
+
+  await runTest('Pricing', 'Fails closed when quote signing secret is not configured', () => {
+    const unconfigured = new PricingEngine({ ...DEFAULT_PRICING_CONFIG, hmacSecret: '' });
+    let rejected = false;
+    try {
+      unconfigured.generateQuote({ serviceTypeId: 'package', distanceKm: 2 });
+    } catch (error: any) {
+      rejected = error.code === 'PRICING_SIGNING_NOT_CONFIGURED' && error.statusCode === 503;
+    }
+    assert(rejected, 'Missing quote signing secret must disable quote generation');
+  });
 
   await runTest('Pricing', 'Calculates exact urban fare within 1.5km baseline (1,700 piasters)', () => {
     const quote = pricing.generateQuote({
@@ -472,6 +483,15 @@ export async function runAllTests(): Promise<{
   console.log('\n▶ SUITE 7: Webhook Cryptographic Security & Idempotent Deduplication');
 
   WebhookService.clearCache();
+  // Verify fail-closed behavior before injecting the synthetic unit-test secret.
+  const originalPaymobSecret = process.env.PAYMOB_HMAC_SECRET;
+  delete process.env.PAYMOB_HMAC_SECRET;
+  await runTest('Webhooks', 'Rejects webhook when provider secret is not configured', () => {
+    const accepted = WebhookService.verifySignature('{}', 'a'.repeat(64), 'paymob');
+    assert(accepted === false, 'Missing provider secret must never validate a signature');
+  });
+  // Explicit synthetic secret for isolated unit tests only; production has no fallback secret.
+  process.env.PAYMOB_HMAC_SECRET = 'unit-test-only-paymob-webhook-secret-2026';
   const webhookPayload: WebhookEventPayload = {
     eventId: 'evt_paymob_test_8812',
     provider: 'paymob',
@@ -643,6 +663,9 @@ export async function runAllTests(): Promise<{
     assert(threw, 'Must reject unlocking passenger transport');
     assert(PersistentStore.getSettings().passengerMobilityLocked === true, 'Lock must remain enforced');
   });
+
+  if (originalPaymobSecret === undefined) delete process.env.PAYMOB_HMAC_SECRET;
+  else process.env.PAYMOB_HMAC_SECRET = originalPaymobSecret;
 
   // --------------------------------------------------------------------------
   // SUMMARY

@@ -1,9 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
-import '../../../app/theme/app_colors.dart';
-import '../../../shared/models/order_model.dart';
-import '../../../shared/providers/orders_provider.dart';
+import '../../../../app/theme/app_colors.dart';
+import '../../../../shared/models/order_model.dart';
+import '../../../../shared/providers/orders_provider.dart';
 
 class OrderTrackingScreen extends ConsumerWidget {
   final String orderId;
@@ -42,6 +42,13 @@ class OrderTrackingScreen extends ConsumerWidget {
           icon: const Icon(Icons.arrow_back),
           onPressed: () => context.go('/customer'),
         ),
+        actions: [
+          IconButton(
+            tooltip: 'محادثة الطلب',
+            icon: const Icon(Icons.forum_outlined),
+            onPressed: () => context.go('/customer/order/${Uri.encodeComponent(orderId)}/chat'),
+          ),
+        ],
       ),
       body: SingleChildScrollView(
         padding: const EdgeInsets.all(16),
@@ -79,7 +86,7 @@ class OrderTrackingScreen extends ConsumerWidget {
                 borderRadius: BorderRadius.circular(20),
                 boxShadow: [
                   BoxShadow(
-                    color: Colors.black.withOpacity(0.1),
+                    color: Colors.black.withValues(alpha: 0.1),
                     blurRadius: 8,
                     offset: const Offset(0, 4),
                   ),

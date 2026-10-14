@@ -10,9 +10,7 @@ final orderRepositoryProvider = Provider<IOrderRepository>((ref) {
 });
 
 class OrdersNotifier extends StateNotifier<List<OrderModel>> {
-  final IOrderRepository? _repository;
-
-  OrdersNotifier([this._repository]) : super(MockDataRepository.getInitialMockOrders());
+  OrdersNotifier() : super(MockDataRepository.getInitialMockOrders());
 
   /// Adds a newly created order from the booking flow
   void addOrder(OrderModel newOrder) {

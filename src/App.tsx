@@ -2128,7 +2128,9 @@ export default function App() {
                   <strong>• Testing:</strong> اختبارات وحدات شاملة لحساب التسعيرات وخطوات حالات الطلبات داخل مجلد <code className="bg-slate-950 px-1 py-0.5 rounded text-amber-300 font-mono">test/</code>.
                 </p>
               </div>
-            )}
+            </div>
+          </div>
+          )}
           </>
         )}
       </main>

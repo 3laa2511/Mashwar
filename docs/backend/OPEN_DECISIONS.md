@@ -81,3 +81,25 @@
   2. Obtaining commercial ride-hailing operating licenses from the Land Transport Regulatory Authority (جهاز تنظيم النقل البري).
   3. Commercial passenger bodily injury liability insurance with an Egyptian insurer.
 - **Status:** **PERMANENTLY LOCKED PENDING Q3 2027 REGULATORY REVIEW**.
+
+
+---
+
+## 4. New Decisions for Marketplace & Multi-Region Expansion (2026-10-14)
+
+These items remain open unless explicitly approved. The initial enabled area is El Bagour, Menoufia; the product must support adding more areas through data/configuration.
+
+| Decision | Safe default for design | Must be approved before production |
+|---|---|---|
+| Merchant subscription price/trial/renewal/grace | Separate plans and entitlements from captain subscription; no hard-coded commercial terms | Yes |
+| Merchant fees/commission | Do not silently introduce commission; display and charge only approved terms | Yes |
+| Merchant onboarding documents | Collect minimum legally necessary data; private storage and limited reviewer access | Legal basis, required documents, retention |
+| Captain identity provider/review SLA | Manual authorized review until a provider is chosen | Yes |
+| Service-area boundaries | Operations-managed active coverage; El Bagour initially enabled | Boundary, delivery hours, capacity |
+| Routing provider | `RoutingProvider` abstraction; no fake road distance/ETA | Cost, accuracy, privacy and service terms |
+| Captain offer timeout/radius/waves | Configurable values with auditability | Operational tuning |
+| Location retention/background tracking | Minimum necessary collection, transparent permission, short retention | Legal and product approval |
+| Ratings/moderation | One eligible rating per completed order, abuse reporting | Final moderation policy |
+| Passenger transportation | Disabled | Separate legal, licensing, insurance and safety approval |
+
+No real customer/captain PII, production secrets, production database changes, or live payment integrations are authorized by this documentation change.

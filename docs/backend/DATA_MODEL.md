@@ -505,3 +505,22 @@ WHERE status = 'accepted';
 
 CREATE INDEX idx_captain_assignments_captain ON captain_assignments(captain_id, status);
 ```
+
+
+---
+
+## 10. Marketplace, Geographic Expansion & Verification Addendum (2026-10-14)
+
+This is a reconciliation checklist for the schema draft, not an applied migration. Reuse existing entities where present; do not create duplicate tables simply because a concept appears below.
+
+### Geography and coverage
+Add or reconcile `countries`, `governorates`, `cities`, `localities`, `service_areas`, `service_area_boundaries`, `service_area_service_types`, and `service_area_operating_hours`. Use stable UUIDs and foreign keys. Keep El Bagour as seed/configuration data. Consider PostGIS only after verifying extension availability and provider support; until then define a safe indexed coordinate strategy and avoid promising precise route calculations.
+
+### Merchant marketplace
+Reconcile `merchants`, `merchant_memberships`, `merchant_branches`, `catalog_categories`, `catalog_items`, `catalog_item_images`, optional modifiers/stock, and merchant subscription plan/subscription/event tables. Each branch references an active service area. Store catalog price as integer piasters and copy item name/price/quantity into immutable order-item snapshots at confirmation. Merchant approval and subscription entitlement are separate states.
+
+### Captain trust
+Separate public `captains` profile fields from private `captain_verification_documents` and `captain_verification_reviews`. Add/reconcile `captain_service_areas`, location update timestamps/accuracy, and `captain_ratings`. Full national ID/document bytes must not be in public profile tables or public storage. Avoid storing full ID numbers unless legally necessary.
+
+### Orders and durable dispatch
+Orders reference the authoritative service area and preserve pickup/drop-off coordinate and address snapshots. Durable dispatch needs offer records, expiration, assignment history and a database-enforced invariant allowing at most one active assignment per order. An in-process mutex is not a persistence or cross-instance concurrency control. All schema work remains draft until reviewed; no production/staging migration is authorized by this addendum.

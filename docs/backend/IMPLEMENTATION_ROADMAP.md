@@ -114,3 +114,39 @@ The backend test suite must implement automated integration tests covering the f
  │   captains on the 14-day subscription trial                 │
  └─────────────────────────────────────────────────────────────┘
 ```
+
+
+---
+
+## 6. Roadmap Addendum — Multi-Region Marketplace (2026-10-14)
+
+This section supersedes any implication that El Bagour is the only supported future geography. It does not mark any phase complete.
+
+1. **P0 — Reconcile foundation and security:** inspect actual source; remove fallback signing secrets; require verified auth/JWT and real authorization; close quote-verification bypass; replace in-memory order/idempotency/dispatch state with durable database transactions; clearly distinguish unit tests from DB integration tests.
+2. **P1 — Multi-region data foundation:** model service areas, coverage, per-area service configuration and routing adapter; test with El Bagour plus a second synthetic city. Do not apply migrations to production/staging without explicit approval.
+3. **P2 — Owner/admin web dashboard:** separate production admin surface from `src/App.tsx` developer preview; real authenticated APIs, least-privilege permissions, audit trail and honest system health.
+4. **P3 — Merchant marketplace:** applications, branch review, catalog, stock where enabled, merchant orders and independent merchant subscription/entitlements.
+5. **P4 — Captain onboarding & trust:** document submission/review, private storage, public profile DTO, service-area eligibility and subscription eligibility.
+6. **P5 — Location dispatch:** real location permission flow, routing provider, eligible-candidate ranking, durable offers, atomic assignment, no-captain queue and privacy controls.
+7. **P6 — Customer journey:** merchant discovery, search, cart, direct courier/errand flows, quote confirmation, order status, support and eligible ratings.
+8. **P7 — Release readiness:** RLS and API authorization integration tests, concurrency tests against PostgreSQL, secrets audit, backup/restore drill, monitoring/cost controls, operational/legal readiness and staged rollout.
+
+### Gate to move from specification to implementation
+Each phase must identify changed files, commands actually executed, test outputs, known gaps and whether it used mocks or real infrastructure. A passing unit suite alone does not prove database persistence, RLS, provider integration, GPS, or production readiness.
+
+
+---
+
+## 7. Cross-Platform Web & Order Communication Roadmap (2026-10-14)
+
+This scope is additive; it does not mean any item is already implemented.
+
+1. **Shared foundation first:** verified authentication/authorization, durable orders/messages, database constraints/RLS, API contracts and test fixtures.
+2. **Order chat backend:** conversation membership, persisted text messages, idempotency, cursor pagination, abuse controls and cross-order authorization tests.
+3. **Private voice notes:** upload intent, private storage, server-side validation, authorized playback, quotas and retention decisions.
+4. **Responsive customer web/PWA:** separate from the root developer preview; browser account, merchant discovery, quote/order, status/history and chat, all via the same API as Flutter.
+5. **Flutter integration:** use the same conversation/message DTOs and endpoint semantics; add record/preview/upload/retry controls using platform-supported recording.
+6. **Realtime and notifications:** choose provider based on cost and operational constraints; retain durable storage as source of truth and a bounded polling fallback.
+7. **Parity and release:** end-to-end tests verify same account/orders across clients, web-to-mobile message continuity, access controls, browser permission denial, responsive accessibility and network failure handling.
+
+Do not release claims of a working web ordering flow or voice chat until an end-to-end test exercises the real authenticated API and private storage. Keep live voice calls, speech transcription and text-to-speech as separate cost/privacy decisions.

@@ -24,7 +24,7 @@ export const DEFAULT_PRICING_CONFIG: PricingConfig = {
   ruralSurchargePiasters: 500,
   platformFeePiasters: 200,
   quoteValidityMinutes: 15,
-  hmacSecret: process.env.PRICING_HMAC_SECRET || 'mashwar_el_bagour_authoritative_quote_secret_2026',
+  hmacSecret: process.env.PRICING_HMAC_SECRET || '',
 };
 
 export class PricingEngine {
@@ -40,6 +40,7 @@ export class PricingEngine {
     pickupLandmark?: string;
     dropoffLandmark?: string;
   }): FareQuote {
+    this.assertSigningSecretConfigured();
     const { serviceTypeId, distanceKm, isRuralOrVillage = false } = params;
 
     // Invariant 1: Regulatory lock on passenger mobility
@@ -145,6 +146,15 @@ export class PricingEngine {
    * Verifies the authenticity and validity of a fare quote.
    * Throws if expired, tampered, or invalid.
    */
+  private assertSigningSecretConfigured(): void {
+    if (typeof this.config.hmacSecret !== 'string' || this.config.hmacSecret.length < 32) {
+      const err = new Error('خدمة التسعير غير مهيأة بأمان؛ يرجى ضبط PRICING_HMAC_SECRET.');
+      (err as any).code = 'PRICING_SIGNING_NOT_CONFIGURED';
+      (err as any).statusCode = 503;
+      throw err;
+    }
+  }
+
   public verifyQuote(quote: {
     quoteId: string;
     serviceTypeId: ServiceTypeId;
@@ -152,7 +162,15 @@ export class PricingEngine {
     expiresAt: string;
     signature: string;
   }): boolean {
+    this.assertSigningSecretConfigured();
     const { quoteId, serviceTypeId, totalFarePiasters, expiresAt, signature } = quote;
+
+    if (!quoteId || !serviceTypeId || !Number.isSafeInteger(totalFarePiasters) || totalFarePiasters < 0 || !expiresAt || !signature) {
+      const err = new Error('بيانات التسعيرة غير مكتملة أو غير صالحة.');
+      (err as any).code = 'INVALID_QUOTE';
+      (err as any).statusCode = 400;
+      throw err;
+    }
 
     // Check expiration
     const expiresTime = new Date(expiresAt).getTime();
@@ -170,7 +188,9 @@ export class PricingEngine {
       .update(signaturePayload)
       .digest('hex');
 
-    if (!crypto.timingSafeEqual(Buffer.from(signature), Buffer.from(expectedSignature))) {
+    const supplied = Buffer.from(signature, 'hex');
+    const expected = Buffer.from(expectedSignature, 'hex');
+    if (supplied.length !== expected.length || !crypto.timingSafeEqual(supplied, expected)) {
       const err = new Error('عذراً، التسعيرة غير مطابقة أو تم التلاعب بها.');
       (err as any).code = 'QUOTE_SIGNATURE_TAMPERED';
       (err as any).statusCode = 400;

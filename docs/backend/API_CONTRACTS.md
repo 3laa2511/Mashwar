@@ -282,3 +282,86 @@
   "overrideReason": "إعادة توجيه يدوية بسبب تعطل دراجة الكابتن السابق"
 }
 ```
+
+
+---
+
+## 8. Marketplace, Service Areas & Dispatch API Addendum (2026-10-14)
+
+These are proposed contracts; implement only after checking current route conventions and authentication middleware. All endpoints require authenticated identity and server-side authorization unless explicitly marked public.
+
+### Service area and merchant discovery
+- `GET /v1/service-areas?lat=&lng=` — return only enabled areas and coverage result; manual area selection must also be supported.
+- `GET /v1/merchants?serviceAreaId=&category=&query=` — public, approved, active branches only.
+- `GET /v1/merchants/:merchantId/branches` and `GET /v1/branches/:branchId/catalog` — expose public fields only.
+- `POST /v1/merchant/applications`, `PATCH /v1/merchant/profile`, `POST /v1/merchant/branches`, `POST /v1/merchant/catalog-items` — scoped to the authenticated merchant membership; approval/status/entitlement fields are server-owned.
+- `POST /v1/operations/merchants/:id/review` — privileged review action with required reason and audit event.
+
+### Captain onboarding
+- `POST /v1/captain/applications`, `POST /v1/captain/documents`, `GET /v1/captain/profile`.
+- `POST /v1/operations/captains/:id/review` — privileged verification decision with reviewer, reason and audit event.
+- Customer-facing profile response must use a dedicated public DTO and exclude private phone, national ID, document URLs, reviewer notes, and risk flags.
+
+### Quotes and orders
+- `POST /v1/quotes` accepts service type, pickup/drop-off, area and catalog references; server returns quote ID, expiry, itemized amounts in piasters and currency.
+- `POST /v1/orders` accepts quote ID, order details and idempotency key, never a client-authoritative total.
+- `POST /v1/orders/:id/cancel`, merchant accept/reject/readiness, and captain accept/decline routes must use the shared order FSM and actor authorization.
+- `POST /v1/dispatch/offers/:id/accept` must be backed by durable transactional assignment and a unique active-assignment constraint.
+- Route contracts must specify error envelopes for unsupported area, no available captain, stale quote, out-of-stock item, expired offer, duplicate request, and forbidden state transition.
+
+### API invariants
+Rate-limit OTP, application, document upload, quote, order, and location update endpoints. Validate coordinate bounds, active service area, ownership, catalog availability, quote expiry, idempotency, and allowed state transitions server-side. Do not return private verification documents or precise locations to unauthorized actors. Electronic payment confirmation remains webhook/provider-authoritative.
+
+
+---
+
+## 9. Cross-Client Sessions, Order Chat & Voice Notes (2026-10-14)
+
+All contracts below are proposed until implemented. Flutter and web use the same `/api/v1` contracts; do not create separate mobile and web order APIs.
+
+### Conversation and text messages
+- `GET /api/v1/orders/:orderId/conversation` — return conversation metadata only to authorized participants.
+- `GET /api/v1/orders/:orderId/messages?cursor=` — authenticated cursor pagination; authorize order access on every request.
+- `POST /api/v1/orders/:orderId/messages` — request includes `clientMessageId` and either text content or a validated attachment reference. Server derives sender from the verified JWT.
+- `POST /api/v1/orders/:orderId/messages/:messageId/read` — optional read receipt, pending product/privacy approval.
+
+### Voice-note upload
+- `POST /api/v1/orders/:orderId/voice-notes/upload-intent` — authorize participant and return a narrowly scoped, short-lived private upload target.
+- `POST /api/v1/orders/:orderId/voice-notes/complete` — server validates object ownership, actual size, MIME/codec, duration, and metadata before publishing the message.
+- `GET /api/v1/messages/:messageId/audio` — authorized stream/redirect or short-lived URL after membership checks.
+- Object keys are server-generated; the client cannot choose arbitrary storage paths or make a bucket public.
+
+### Realtime events
+Use an authenticated provider adapter for new-message/order-state notifications. Subscription authorization is derived from verified identity and persisted membership. Events contain message IDs and minimal metadata; clients fetch authorized message content over the API. If realtime is unavailable, use bounded polling and explicit connection state.
+
+### Cross-client invariants
+- Mobile and web share account identity, quote/order state, persisted message history and server rules.
+- Idempotency prevents duplicate messages/orders on retries.
+- The server is authoritative; offline drafts are not shown as sent until confirmed.
+- Microphone denial/browser incompatibility falls back to text and order status.
+- All endpoints use rate limits, request validation, audit-safe logging and participant checks.
+
+
+---
+
+## 10. Customer Web, Service-Area Discovery & Order Chat Contracts (2026-10-14)
+
+This addendum is the contract target for the new `web/customer` client and clarifies that old example request fields such as client-supplied estimated distance are not authoritative.
+
+### Service areas
+`GET /api/v1/service-areas` returns only enabled service areas, for example `{ id, displayName, status }`. The customer client must populate its selector from this response; it must not hard-code El Bagour or any future city as the only supported area.
+
+### Quotes and order creation
+`POST /api/v1/quotes` accepts `serviceTypeId`, `serviceAreaId`, pickup/drop-off address or coordinates, and optional service details. The server validates that both endpoints are covered and derives distance/ETA from the trusted routing/geocoding adapter. A client-supplied distance, price, rural surcharge or duration is never trusted.
+
+The response envelope is `{ success: true, data: { quoteId, totalFarePiasters, formattedTotalEgp, currency, expiresAt, lineItems } }`. The client displays the server quote and checks expiry before confirmation.
+
+`POST /api/v1/orders` requires `Idempotency-Key`, a valid unexpired `quoteId`, service type, item description, pickup/drop-off contact details, and payment method. The server binds the quote to its authenticated customer, service area and route details; it rejects a quote belonging to another user or changed route. The client must not send a trusted total.
+
+### Web session
+For web, use a server-managed secure HttpOnly SameSite session cookie if chosen by the implementation; protect state-changing cookie-authenticated requests against CSRF. Flutter may use the same identity provider with bearer tokens. Both authenticate to the same users/orders and authorization model. `POST /api/v1/auth/otp/request` and verification endpoints must enforce phone normalization, rate limits, abuse controls, and never reveal whether an arbitrary phone belongs to an account.
+
+### Conversation responses
+`GET /api/v1/orders/:orderId/messages` returns `{ messages: [{ id, messageType, textBody?, audioUrl?, senderLabel?, createdAt }] }` only after current participant authorization. `POST` accepts `clientMessageId` and `messageType: text` with `textBody`; sender identity comes from the verified session. Voice upload-intent and completion follow the chat specification. The API must return a short-lived authorized audio URL or a protected playback endpoint; no public bucket.
+
+**Implementation status:** contracts only. The new web client is a scaffold and cannot create real orders or send messages until these API endpoints and authentication are implemented and tested.

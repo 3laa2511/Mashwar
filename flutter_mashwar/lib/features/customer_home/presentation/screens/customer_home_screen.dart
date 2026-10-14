@@ -1,11 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
-import '../../../app/localization/app_strings.dart';
-import '../../../app/theme/app_colors.dart';
-import '../../../shared/models/order_model.dart';
-import '../../../shared/providers/orders_provider.dart';
-import '../../../shared/providers/role_provider.dart';
+import '../../../../app/localization/app_strings.dart';
+import '../../../../app/theme/app_colors.dart';
+import '../../../../shared/models/order_model.dart';
+import '../../../../shared/providers/orders_provider.dart';
+import '../../../../shared/providers/role_provider.dart';
 
 class CustomerHomeScreen extends ConsumerStatefulWidget {
   const CustomerHomeScreen({super.key});
@@ -32,7 +32,7 @@ class _CustomerHomeScreenState extends ConsumerState<CustomerHomeScreen> {
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
               decoration: BoxDecoration(
-                color: AppColors.primary.withOpacity(0.15),
+                color: AppColors.primary.withValues(alpha: 0.15),
                 borderRadius: BorderRadius.circular(20),
               ),
               child: Row(
@@ -143,7 +143,7 @@ class _CustomerHomeScreenState extends ConsumerState<CustomerHomeScreen> {
                 borderRadius: BorderRadius.circular(20),
                 boxShadow: [
                   BoxShadow(
-                    color: Colors.black.withOpacity(0.15),
+                    color: Colors.black.withValues(alpha: 0.15),
                     blurRadius: 10,
                     offset: const Offset(0, 4),
                   )
@@ -305,7 +305,7 @@ class _CustomerHomeScreenState extends ConsumerState<CustomerHomeScreen> {
                                   Container(
                                     padding: const EdgeInsets.all(8),
                                     decoration: BoxDecoration(
-                                      color: AppColors.secondary.withOpacity(0.12),
+                                      color: AppColors.secondary.withValues(alpha: 0.12),
                                       shape: BoxShape.circle,
                                     ),
                                     child: const Icon(Icons.two_wheeler_rounded, color: AppColors.secondary, size: 20),
@@ -328,7 +328,7 @@ class _CustomerHomeScreenState extends ConsumerState<CustomerHomeScreen> {
                               Container(
                                 padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
                                 decoration: BoxDecoration(
-                                  color: AppColors.secondary.withOpacity(0.15),
+                                  color: AppColors.secondary.withValues(alpha: 0.15),
                                   borderRadius: BorderRadius.circular(12),
                                 ),
                                 child: Text('${order.estimatedFareEGP} ج.م', style: const TextStyle(fontWeight: FontWeight.bold, color: AppColors.secondaryDark)),
@@ -337,12 +337,16 @@ class _CustomerHomeScreenState extends ConsumerState<CustomerHomeScreen> {
                           ),
                           const Divider(height: 20),
                           Row(
-                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
                             children: [
-                              Text(
-                                'من: ${order.pickupAddress} ➔ ${order.dropoffAddress}',
-                                style: const TextStyle(fontSize: 11, color: AppColors.slate600),
+                              Expanded(
+                                child: Text(
+                                  'من: ${order.pickupAddress} ➔ ${order.dropoffAddress}',
+                                  style: const TextStyle(fontSize: 11, color: AppColors.slate600),
+                                  maxLines: 2,
+                                  overflow: TextOverflow.ellipsis,
+                                ),
                               ),
+                              const SizedBox(width: 8),
                               const Icon(Icons.arrow_forward_ios, size: 12, color: AppColors.slate400),
                             ],
                           ),
@@ -404,7 +408,7 @@ class _CustomerHomeScreenState extends ConsumerState<CustomerHomeScreen> {
               width: 52,
               height: 52,
               decoration: BoxDecoration(
-                color: isEnabled ? AppColors.primary.withOpacity(0.15) : Colors.grey.shade200,
+                color: isEnabled ? AppColors.primary.withValues(alpha: 0.15) : Colors.grey.shade200,
                 borderRadius: BorderRadius.circular(14),
               ),
               child: Icon(
@@ -432,7 +436,7 @@ class _CustomerHomeScreenState extends ConsumerState<CustomerHomeScreen> {
                       Container(
                         padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
                         decoration: BoxDecoration(
-                          color: badgeColor.withOpacity(0.12),
+                          color: badgeColor.withValues(alpha: 0.12),
                           borderRadius: BorderRadius.circular(6),
                         ),
                         child: Text(
