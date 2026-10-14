@@ -111,7 +111,7 @@ export async function runAllTests(): Promise<{
     const unconfigured = new PricingEngine({ ...DEFAULT_PRICING_CONFIG, hmacSecret: '' });
     let rejected = false;
     try {
-      unconfigured.generateQuote({ serviceTypeId: 'parcel', distanceKm: 2 });
+      unconfigured.generateQuote({ serviceTypeId: 'package', distanceKm: 2 });
     } catch (error: any) {
       rejected = error.code === 'PRICING_SIGNING_NOT_CONFIGURED' && error.statusCode === 503;
     }
