@@ -20,6 +20,9 @@ import { OrderFsm } from '../src/orders/orderFsm.js';
 import { CaptainEligibilityEngine } from '../src/captain/captainEligibility.js';
 import { AssignmentService } from '../src/dispatch/assignmentService.js';
 import { WebhookService } from '../src/payments/webhookService.js';
+import { AccessControlGuard } from '../src/security/rbac.js';
+import { AuditLogger } from '../src/security/auditLogger.js';
+import { PersistentStore } from '../src/store/persistentStore.js';
 import { Order, CaptainProfile, WebhookEventPayload } from '../src/types/index.js';
 
 interface TestResult {
@@ -516,6 +519,129 @@ export async function runAllTests(): Promise<{
     });
     assert(result3.status === 'ALREADY_PROCESSED', 'Third replay must also be idempotent');
     assert(callbackExecutedCount === 0, 'Callback must NOT be re-executed on third replay');
+  });
+
+  // --------------------------------------------------------------------------
+  // SUITE 8: Role-Based Access Control (RBAC) & Authorization Invariants
+  // --------------------------------------------------------------------------
+  console.log('\n▶ SUITE 8: Role-Based Access Control (RBAC) & Authorization Invariants');
+
+  await runTest('RBAC', 'Allows owner full permission to update pricing and system settings', () => {
+    assert(AccessControlGuard.hasPermission('owner', 'manage_pricing') === true, 'Owner must manage pricing');
+    assert(AccessControlGuard.hasPermission('owner', 'manage_system_settings') === true, 'Owner must manage settings');
+    // Calling checkPermission must not throw
+    AccessControlGuard.checkPermission('owner', 'manage_pricing');
+  });
+
+  await runTest('RBAC', 'Denies operations dispatcher from modifying pricing parameters', () => {
+    assert(AccessControlGuard.hasPermission('operations_dispatcher', 'manage_pricing') === false, 'Dispatcher cannot manage pricing');
+    let threw = false;
+    try {
+      AccessControlGuard.checkPermission('operations_dispatcher', 'manage_pricing');
+    } catch (err: any) {
+      threw = true;
+      assert(err.code === 'INSUFFICIENT_PERMISSIONS', 'Must throw INSUFFICIENT_PERMISSIONS');
+      assert(err.statusCode === 403, 'Must return HTTP 403');
+    }
+    assert(threw, 'Must throw error on unauthorized role');
+  });
+
+  await runTest('RBAC', 'Allows dispatcher manual dispatch override but denies customer', () => {
+    assert(AccessControlGuard.hasPermission('operations_dispatcher', 'manual_dispatch_override') === true, 'Dispatcher must have override');
+    assert(AccessControlGuard.hasPermission('customer', 'manual_dispatch_override') === false, 'Customer must not have override');
+  });
+
+  await runTest('RBAC', 'Customer cancellation allowed pre-pickup but blocked in-transit', () => {
+    assert(AccessControlGuard.canCancelOrder('customer', 'created') === true, 'Customer can cancel in created');
+    assert(AccessControlGuard.canCancelOrder('customer', 'searching_captain') === true, 'Customer can cancel while searching');
+    assert(AccessControlGuard.canCancelOrder('customer', 'in_transit') === false, 'Customer cannot cancel once in transit');
+  });
+
+  // --------------------------------------------------------------------------
+  // SUITE 9: Immutable Operations Audit Ledger
+  // --------------------------------------------------------------------------
+  console.log('\n▶ SUITE 9: Immutable Operations Audit Ledger');
+
+  await runTest('Audit', 'Records immutable audit entry with actor details and state diff', () => {
+    const entry = AuditLogger.record({
+      actorId: 'usr_dispatcher_01',
+      actorRole: 'operations_dispatcher',
+      actorName: 'أحمد المنوفي (مسؤول الترحيل)',
+      actionType: 'MANUAL_DISPATCH_ASSIGNMENT',
+      targetEntity: 'order',
+      targetId: 'ord_test_901',
+      descriptionAr: 'تعيين كابتن يدوي للطلب العاجل',
+      previousState: { status: 'searching_captain' },
+      newState: { status: 'captain_assigned', captainId: 'cpt_test_01' },
+      ipAddress: '197.38.12.99',
+    });
+
+    assert(entry.id.startsWith('audit_'), 'Audit log must generate an audit_ prefix id');
+    assert(entry.timestamp !== undefined, 'Audit log must contain ISO timestamp');
+
+    const queried = AuditLogger.query({ actionType: 'MANUAL_DISPATCH_ASSIGNMENT' });
+    assert(queried.length > 0, 'Queried logs must contain recorded entry');
+    assert(queried[0].actorRole === 'operations_dispatcher', 'Actor role must match');
+  });
+
+  // --------------------------------------------------------------------------
+  // SUITE 10: Cash Remittance Settlement & Suspension Recovery
+  // --------------------------------------------------------------------------
+  console.log('\n▶ SUITE 10: Cash Remittance Settlement & Suspension Recovery');
+
+  await runTest('Remittance', 'Restores suspended captain when cash is remitted below ceiling', () => {
+    PersistentStore.initialize();
+    // cpt_moustafa_kamal was seeded as suspended with 102,000 piasters (1,020 EGP > 1,000 EGP ceiling)
+    const cpt = PersistentStore.getCaptainById('cpt_moustafa_kamal');
+    assert(cpt !== undefined, 'Must find seeded captain');
+    assert(cpt!.subscriptionStatus === 'suspended', 'Must initially be suspended');
+
+    // Remit 50,000 piasters (500 EGP)
+    const remitted = PersistentStore.remitCaptainCash(
+      'cpt_moustafa_kamal',
+      50000,
+      'usr_owner_01',
+      'د. علاء (المالك)',
+      'توريد الخزينة بمقر الباجور'
+    );
+
+    assert(remitted.cashHoldingPiasters === 52000, 'Remaining cash must be 52,000 piasters');
+    assert(remitted.subscriptionStatus === 'active', 'Captain status must recover to active after remittance');
+  });
+
+  // --------------------------------------------------------------------------
+  // SUITE 11: Tariff Parameters & Permanent Regulatory Lock
+  // --------------------------------------------------------------------------
+  console.log('\n▶ SUITE 11: Tariff Parameters & Permanent Regulatory Lock');
+
+  await runTest('Tariff', 'Allows owner to update El Bagour tariff parameters with audit trail', () => {
+    const updated = PersistentStore.updateSettings(
+      { baseFarePiasters: 1600, ratePerKmPiasters: 450 },
+      'usr_owner_01',
+      'د. علاء'
+    );
+    assert(updated.baseFarePiasters === 1600, 'Base fare must update to 1600');
+    assert(updated.ratePerKmPiasters === 450, 'Rate per km must update to 450');
+
+    const logs = AuditLogger.query({ actionType: 'SYSTEM_SETTINGS_UPDATED' });
+    assert(logs.length > 0, 'Audit log must record tariff change');
+  });
+
+  await runTest('Tariff', 'Hard rejects any attempt to unlock passenger mobility', () => {
+    let threw = false;
+    try {
+      PersistentStore.updateSettings(
+        { passengerMobilityLocked: false },
+        'usr_owner_01',
+        'د. علاء'
+      );
+    } catch (err: any) {
+      threw = true;
+      assert(err.code === 'REGULATORY_COMPLIANCE_LOCK', 'Must throw REGULATORY_COMPLIANCE_LOCK');
+      assert(err.statusCode === 403, 'Must return HTTP 403');
+    }
+    assert(threw, 'Must reject unlocking passenger transport');
+    assert(PersistentStore.getSettings().passengerMobilityLocked === true, 'Lock must remain enforced');
   });
 
   // --------------------------------------------------------------------------

@@ -5,6 +5,7 @@
 
 import React, { useState } from 'react';
 import JSZip from 'jszip';
+import { OwnerAdminDashboard } from './components/OwnerAdminDashboard';
 import {
   Smartphone,
   Tablet,
@@ -458,20 +459,23 @@ export class AssignmentService {
   {
     path: 'backend/tests/run_tests.ts',
     language: 'typescript',
-    content: `// 19/19 Automated Quality Gate Tests (Pricing, FSM, Concurrency, Subscription, Webhooks)
-// Run via: npm test`
+    content: `// 27/27 Automated Quality Gate Tests (Pricing, FSM, Concurrency, Subscription, Webhooks, RBAC, Audit, Remittance, Tariff)
+// Run via: npm test (or: npx tsx backend/tests/run_tests.ts)`
   },
   {
-    path: 'docs/backend/PHASE_4_FOUNDATION_REPORT.md',
+    path: 'docs/backend/PHASE_4_1_SECURITY_AND_OWNER_DASHBOARD_REPORT.md',
     language: 'markdown',
-    content: `# Mashwar — Phase 4 Backend Foundation & Automated Quality Gates Report
-Status: Complete & Verified (19/19 Automated Tests Passing)
+    content: `# Mashwar — Phase 4.1 Security Hardening & Owner Dashboard Report
+Status: Complete & Verified (27/27 Automated Tests Passing)
 Target Hub: El Bagour, Menoufia Governorate, Egypt
-All 7 invariant suites verified with zero live DB connection or secret leakage.`
+All 11 invariant suites verified with zero live DB connection or secret leakage.`
   }
 ];
 
 export default function App() {
+  // Top-Level Mode: Owner Admin Dashboard vs Developer Testing Workbench
+  const [workspaceMode, setWorkspaceMode] = useState<'admin' | 'workbench'>('admin');
+
   // Navigation & role state
   const [activeRole, setActiveRole] = useState<'customer' | 'captain' | 'merchant' | 'operations'>('customer');
   const [deviceFrame, setDeviceFrame] = useState<'iphone' | 'pixel' | 'fluid'>('iphone');
@@ -645,48 +649,75 @@ export default function App() {
             </div>
           </div>
 
-          {/* Workbench Switchers */}
+          {/* Primary Mode Switcher: Owner Admin Dashboard vs Developer Testing Workbench */}
           <div className="flex items-center flex-wrap gap-2">
-            {/* View Tab Buttons */}
-            <div className="bg-slate-800 p-1 rounded-xl flex items-center border border-slate-700">
+            <div className="bg-slate-900 p-1 rounded-xl flex items-center border border-amber-500/30 shadow-inner">
               <button
-                onClick={() => setActiveTab('backend_tests')}
-                className={`px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-all ${
-                  activeTab === 'backend_tests' ? 'bg-emerald-500 text-slate-950 shadow font-bold' : 'text-slate-300 hover:text-white'
+                onClick={() => setWorkspaceMode('admin')}
+                className={`px-3 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1.5 transition-all ${
+                  workspaceMode === 'admin'
+                    ? 'bg-amber-500 text-slate-950 shadow-md font-black'
+                    : 'text-slate-300 hover:text-white'
                 }`}
               >
                 <ShieldCheck className="w-3.5 h-3.5" />
-                <span>Backend Tests</span>
-                <span className="px-1.5 py-0.5 rounded-full bg-emerald-950 text-emerald-300 text-[10px] font-bold">19/19</span>
+                <span>غرفة تحكم وعمليات المالك</span>
               </button>
               <button
-                onClick={() => setActiveTab('simulator')}
-                className={`px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-all ${
-                  activeTab === 'simulator' ? 'bg-amber-500 text-slate-950 shadow' : 'text-slate-300 hover:text-white'
-                }`}
-              >
-                <Smartphone className="w-3.5 h-3.5" />
-                <span>Device Simulator</span>
-              </button>
-              <button
-                onClick={() => setActiveTab('code')}
-                className={`px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-all ${
-                  activeTab === 'code' ? 'bg-amber-500 text-slate-950 shadow' : 'text-slate-300 hover:text-white'
+                onClick={() => setWorkspaceMode('workbench')}
+                className={`px-3 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1.5 transition-all ${
+                  workspaceMode === 'workbench'
+                    ? 'bg-amber-500 text-slate-950 shadow-md font-black'
+                    : 'text-slate-300 hover:text-white'
                 }`}
               >
                 <Code2 className="w-3.5 h-3.5" />
-                <span>Codebase</span>
-              </button>
-              <button
-                onClick={() => setActiveTab('architecture')}
-                className={`px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-all ${
-                  activeTab === 'architecture' ? 'bg-amber-500 text-slate-950 shadow' : 'text-slate-300 hover:text-white'
-                }`}
-              >
-                <Layers className="w-3.5 h-3.5" />
-                <span>Architecture</span>
+                <span>منصة المطور والمحاكي</span>
               </button>
             </div>
+
+            {/* Workbench Sub-Tab Switchers (Only in Workbench Mode) */}
+            {workspaceMode === 'workbench' && (
+              <div className="bg-slate-800 p-1 rounded-xl flex items-center border border-slate-700">
+                <button
+                  onClick={() => setActiveTab('backend_tests')}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-all ${
+                    activeTab === 'backend_tests' ? 'bg-emerald-500 text-slate-950 shadow font-bold' : 'text-slate-300 hover:text-white'
+                  }`}
+                >
+                  <ShieldCheck className="w-3.5 h-3.5" />
+                  <span>Backend Tests</span>
+                  <span className="px-1.5 py-0.5 rounded-full bg-emerald-950 text-emerald-300 text-[10px] font-bold">27/27</span>
+                </button>
+                <button
+                  onClick={() => setActiveTab('simulator')}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-all ${
+                    activeTab === 'simulator' ? 'bg-amber-500 text-slate-950 shadow' : 'text-slate-300 hover:text-white'
+                  }`}
+                >
+                  <Smartphone className="w-3.5 h-3.5" />
+                  <span>Device Simulator</span>
+                </button>
+                <button
+                  onClick={() => setActiveTab('code')}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-all ${
+                    activeTab === 'code' ? 'bg-amber-500 text-slate-950 shadow' : 'text-slate-300 hover:text-white'
+                  }`}
+                >
+                  <Code2 className="w-3.5 h-3.5" />
+                  <span>Codebase</span>
+                </button>
+                <button
+                  onClick={() => setActiveTab('architecture')}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-all ${
+                    activeTab === 'architecture' ? 'bg-amber-500 text-slate-950 shadow' : 'text-slate-300 hover:text-white'
+                  }`}
+                >
+                  <Layers className="w-3.5 h-3.5" />
+                  <span>Architecture</span>
+                </button>
+              </div>
+            )}
 
             {/* Language Toggle */}
             <button
@@ -694,7 +725,7 @@ export default function App() {
               className="px-2.5 py-1.5 rounded-lg bg-slate-800 border border-slate-700 text-xs font-bold text-amber-400 hover:bg-slate-700 transition"
               title="Toggle Language"
             >
-              {language === 'ar' ? '🇪🇬 العربية (RTL)' : '🇬🇧 English (LTR)'}
+              {language === 'ar' ? '🇪🇬 العربية' : '🇬🇧 English'}
             </button>
 
             {/* Export Flutter Project ZIP */}
@@ -712,16 +743,22 @@ export default function App() {
 
       {/* Main Content Area */}
       <main className="flex-1 max-w-7xl w-full mx-auto p-4 flex flex-col gap-4">
-        {/* Environment Transparency Notification */}
-        <div className="bg-amber-500/10 border border-amber-500/30 rounded-xl p-3.5 flex items-start gap-3 text-xs leading-relaxed text-amber-200">
-          <Info className="w-5 h-5 text-amber-400 shrink-0 mt-0.5" />
-          <div className="flex-1">
-            <strong className="text-amber-300 font-bold block mb-1">
-              إشعار شفافية بيئة العمل والتقنية (Environment Transparency Notice):
-            </strong>
-            بيئة العمل الحالية تعمل داخل متصفح وسيرفر Node.js/Vite بدون أدوات Flutter SDK وAndroid/iOS Toolchains المثبتة محلياً؛ لذلك تم توليد ملفات مشروع Flutter/Dart كاملة في مستودع <code className="bg-amber-950 px-1.5 py-0.5 rounded text-amber-300 font-mono">flutter_mashwar/</code> وجاهزة للتشغيل والتصدير مباشرة. يُتيح هذا المحاكي التفاعلي اختبار واجهات تطبيق Flutter (Material 3) والأدوار الأربعة (العميل، الكابتن، التاجر، العمليات) بالعربية والإنجليزية بدقة تامة.
-          </div>
-        </div>
+        {/* Render Phase 4.1 Owner & Operations Admin Dashboard */}
+        {workspaceMode === 'admin' && <OwnerAdminDashboard />}
+
+        {/* Render Developer Testing Workbench */}
+        {workspaceMode === 'workbench' && (
+          <>
+            {/* Environment Transparency Notification */}
+            <div className="bg-amber-500/10 border border-amber-500/30 rounded-xl p-3.5 flex items-start gap-3 text-xs leading-relaxed text-amber-200">
+              <Info className="w-5 h-5 text-amber-400 shrink-0 mt-0.5" />
+              <div className="flex-1">
+                <strong className="text-amber-300 font-bold block mb-1">
+                  إشعار شفافية بيئة العمل والتقنية (Environment Transparency Notice):
+                </strong>
+                بيئة العمل الحالية تعمل داخل متصفح وسيرفر Node.js/Vite بدون أدوات Flutter SDK وAndroid/iOS Toolchains المثبتة محلياً؛ لذلك تم توليد ملفات مشروع Flutter/Dart كاملة في مستودع <code className="bg-amber-950 px-1.5 py-0.5 rounded text-amber-300 font-mono">flutter_mashwar/</code> وجاهزة للتشغيل والتصدير مباشرة. يُتيح هذا المحاكي التفاعلي اختبار واجهات تطبيق Flutter (Material 3) والأدوار الأربعة (العميل، الكابتن، التاجر، العمليات) بالعربية والإنجليزية بدقة تامة.
+              </div>
+            </div>
 
         {/* BACKEND TESTS & QUALITY GATES TAB */}
         {activeTab === 'backend_tests' && (
@@ -2091,8 +2128,8 @@ export default function App() {
                   <strong>• Testing:</strong> اختبارات وحدات شاملة لحساب التسعيرات وخطوات حالات الطلبات داخل مجلد <code className="bg-slate-950 px-1 py-0.5 rounded text-amber-300 font-mono">test/</code>.
                 </p>
               </div>
-            </div>
-          </div>
+            )}
+          </>
         )}
       </main>
 
