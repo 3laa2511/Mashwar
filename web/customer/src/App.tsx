@@ -159,6 +159,7 @@ function App() {
       });
       setNoticeKind('success');
       setNotice(result.message ?? (result.orderId ? t('تم تأكيد الطلب رقم ', 'Order confirmed: ') + result.orderId : t('الخادم أكد استلام الطلب.', 'The server confirmed the order.')));
+      if (result.orderId) setChatOrderId(result.orderId);
       setQuote(null); setOrderIdempotencyKey(null);
     } catch (error) {
       setNoticeKind('error'); setNotice(error instanceof ApiError ? error.message : t('الطلب ما اتبعتش. اتأكد من الاتصال وحاول تاني.', 'Request was not sent. Check your connection and try again.'));
