@@ -182,3 +182,24 @@ Implementation requirements:
 - Ensure merchant membership checks include merchant and branch scope. Prevent cross-merchant reads/writes.
 - Keep service-role credentials server-only. Any trusted API bypass of RLS must enforce authorization before querying/mutating.
 - Test both positive and negative cases with real PostgreSQL/Supabase-like roles in an isolated environment; document tests as NOT RUN until executed.
+
+
+---
+
+## 8. Conversation & Audio RLS Addendum (2026-10-14)
+
+Policy intent only; reconcile names and implement against actual tables before deployment.
+
+| Data domain | Customer | Assigned captain | Merchant | Operations/support |
+|---|---|---|---|---|
+| Conversation metadata | Own order only | Currently authorized order only | Relevant own branch/order scope only when product rules permit | Explicit support permission, audited |
+| Messages | Read/send within own order conversation | Read/send within current allowed assignment lifecycle | Only if merchant participation is explicitly part of the order workflow | Permission-scoped, audited |
+| Voice attachments | Upload/read only for authorized conversation | Upload/read only for authorized conversation | No access unless an explicit authorized participant | Explicit permission, audited |
+| Delivery/read receipts | Own conversation scope | Own conversation scope | Own conversation scope if included | Operational access only if needed |
+
+Requirements:
+- Verify participant membership in both the API and database policy where possible.
+- RLS must prevent cross-order message reads/inserts and attachment metadata access.
+- Private object-storage policies must verify the associated conversation/order membership; public bucket access is prohibited.
+- Support staff access is not implied by a generic staff role.
+- Keep message bodies, audio bytes, signed URLs and PII out of routine audit/log payloads.
