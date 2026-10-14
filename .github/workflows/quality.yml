@@ -1,0 +1,42 @@
+name: Mashwar Quality Gates
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+      - "feat/**"
+      - "fix/**"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mashwar-quality-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  quality:
+    name: Typecheck, backend tests, and web preview build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install dependencies from lockfile
+        run: bun install --frozen-lockfile
+
+      - name: TypeScript typecheck
+        run: bun run lint
+
+      - name: Backend unit/logic tests
+        run: bun run test:backend
+
+      - name: Build developer preview
+        run: bun run build
