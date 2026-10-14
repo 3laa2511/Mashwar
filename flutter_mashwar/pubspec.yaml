@@ -39,6 +39,11 @@ dependencies:
   # Location abstraction (permissions & coordinates)
   geolocator: ^11.0.0
 
+  # Order chat and voice notes
+  record: ^5.2.0
+  audioplayers: ^6.1.0
+  path_provider: ^2.1.4
+
 dev_dependencies:
   flutter_test:
     sdk: flutter
