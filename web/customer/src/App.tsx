@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
-import { ArrowLeft, AudioLines, Bike, CheckCircle2, ChevronDown, CircleHelp, Clock3, Headphones, MapPin, Mic, Package, ShieldCheck, ShoppingBag, Smartphone, Store, Upload, X } from 'lucide-react';
-import { apiBaseUrl, ApiError, apiRequest, getApiHealth, requestVoiceUploadIntent } from './api';
+import { ArrowLeft, AudioLines, Bike, CheckCircle2, ChevronDown, CircleHelp, Clock3, Headphones, MapPin, Mic, Package, Search, ShieldCheck, ShoppingBag, Smartphone, Store, Upload, X } from 'lucide-react';
+import { ApiError, apiRequest, getApiHealth, requestVoiceUploadIntent } from './api';
 
 type Service = 'store' | 'parcel' | 'errand';
 type RecordingState = 'idle' | 'recording' | 'ready' | 'unsupported' | 'error';
@@ -14,7 +14,7 @@ const serviceCards: { id: Service; title: string; detail: string; icon: typeof P
 
 function App() {
   const [service, setService] = useState<Service>('parcel');
-  const [area, setArea] = useState('الباجور');
+  const [area] = useState('الباجور');
   const [pickup, setPickup] = useState('');
   const [dropoff, setDropoff] = useState('');
   const [details, setDetails] = useState('');
