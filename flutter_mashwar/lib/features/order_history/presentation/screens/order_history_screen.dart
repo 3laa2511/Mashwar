@@ -1,9 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
-import '../../../app/theme/app_colors.dart';
-import '../../../shared/models/order_model.dart';
-import '../../../shared/providers/orders_provider.dart';
+import '../../../../app/theme/app_colors.dart';
+import '../../../../shared/models/order_model.dart';
+import '../../../../shared/providers/orders_provider.dart';
 
 class OrderHistoryScreen extends ConsumerWidget {
   const OrderHistoryScreen({super.key});
