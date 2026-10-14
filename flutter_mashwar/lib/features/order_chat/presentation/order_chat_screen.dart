@@ -130,7 +130,7 @@ class _OrderChatScreenState extends State<OrderChatScreen> {
           Container(
             width: double.infinity,
             padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-            color: Theme.of(context).colorScheme.surfaceContainerHighest,
+            color: Theme.of(context).colorScheme.surfaceVariant,
             child: Text('طلب رقم ${widget.orderId} · الرسائل متاحة لأطراف الطلب المصرح لهم فقط', style: Theme.of(context).textTheme.bodySmall),
           ),
           if (_error != null)
@@ -167,7 +167,7 @@ class _OrderChatScreenState extends State<OrderChatScreen> {
                               constraints: const BoxConstraints(maxWidth: 320),
                               margin: const EdgeInsets.only(bottom: 10),
                               padding: const EdgeInsets.all(12),
-                              decoration: BoxDecoration(color: Theme.of(context).colorScheme.surfaceContainerHighest, borderRadius: BorderRadius.circular(15)),
+                              decoration: BoxDecoration(color: Theme.of(context).colorScheme.surfaceVariant, borderRadius: BorderRadius.circular(15)),
                               child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                                 Text(message.senderLabel ?? 'مشارك في الطلب', style: Theme.of(context).textTheme.labelSmall),
                                 const SizedBox(height: 5),
