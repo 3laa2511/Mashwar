@@ -114,3 +114,22 @@ The backend test suite must implement automated integration tests covering the f
  │   captains on the 14-day subscription trial                 │
  └─────────────────────────────────────────────────────────────┘
 ```
+
+
+---
+
+## 6. Roadmap Addendum — Multi-Region Marketplace (2026-10-14)
+
+This section supersedes any implication that El Bagour is the only supported future geography. It does not mark any phase complete.
+
+1. **P0 — Reconcile foundation and security:** inspect actual source; remove fallback signing secrets; require verified auth/JWT and real authorization; close quote-verification bypass; replace in-memory order/idempotency/dispatch state with durable database transactions; clearly distinguish unit tests from DB integration tests.
+2. **P1 — Multi-region data foundation:** model service areas, coverage, per-area service configuration and routing adapter; test with El Bagour plus a second synthetic city. Do not apply migrations to production/staging without explicit approval.
+3. **P2 — Owner/admin web dashboard:** separate production admin surface from `src/App.tsx` developer preview; real authenticated APIs, least-privilege permissions, audit trail and honest system health.
+4. **P3 — Merchant marketplace:** applications, branch review, catalog, stock where enabled, merchant orders and independent merchant subscription/entitlements.
+5. **P4 — Captain onboarding & trust:** document submission/review, private storage, public profile DTO, service-area eligibility and subscription eligibility.
+6. **P5 — Location dispatch:** real location permission flow, routing provider, eligible-candidate ranking, durable offers, atomic assignment, no-captain queue and privacy controls.
+7. **P6 — Customer journey:** merchant discovery, search, cart, direct courier/errand flows, quote confirmation, order status, support and eligible ratings.
+8. **P7 — Release readiness:** RLS and API authorization integration tests, concurrency tests against PostgreSQL, secrets audit, backup/restore drill, monitoring/cost controls, operational/legal readiness and staged rollout.
+
+### Gate to move from specification to implementation
+Each phase must identify changed files, commands actually executed, test outputs, known gaps and whether it used mocks or real infrastructure. A passing unit suite alone does not prove database persistence, RLS, provider integration, GPS, or production readiness.
