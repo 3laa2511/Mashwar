@@ -135,3 +135,11 @@ footer p{color:#7b8b97;font-size:11px;margin:0 auto 0 0}footer>small{font:10px I
 .chat-compose textarea{min-height:50px}
 .chat-compose .submit-order{align-self:stretch}
 @media(max-width:700px){.chat-section{padding-bottom:45px}.chat-panel{padding:16px}.chat-order-input{align-items:stretch;flex-direction:column}.chat-order-input>div{width:100%}.chat-order-input>div button{padding-inline:10px}.chat-compose{grid-template-columns:1fr}.chat-compose .submit-order{min-height:46px}.chat-message{max-width:95%}}
+
+.area-chip{position:relative;max-width:100%;font-family:'Cairo',sans-serif}
+.area-chip select{appearance:none;border:0;outline:0;background:transparent;color:#166e68;font:800 12px 'Cairo',sans-serif;max-width:190px;cursor:pointer}
+.area-chip select:focus-visible{outline:2px solid #23a99c;border-radius:6px}
+.phone-grid{margin-top:14px}
+.quote-summary{margin:14px 0;padding:15px 16px;background:#f0faf7;border:1px solid #ccebe2;border-radius:13px;display:flex;align-items:center;justify-content:space-between;gap:12px}
+.quote-summary span,.quote-summary b{display:block}.quote-summary span{font-size:10px;color:#5c817b}.quote-summary b{font-size:20px;color:#087f77;margin-top:4px}.quote-summary>small{font-size:10px;color:#66847e}
+@media(max-width:700px){.area-chip{align-self:flex-start;flex-wrap:wrap}.area-chip select{max-width:145px}.quote-summary{align-items:flex-start;flex-direction:column;gap:7px}}
