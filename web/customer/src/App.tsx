@@ -156,8 +156,8 @@ function App() {
 
   const sendVoiceNote = async () => {
     if (!audioFile) return;
-    setNotice('');
-    setBusy(true);
+    setChatNotice('');
+    setChatBusy(true);
     try {
       // This flow deliberately requires a real authenticated order and upload-intent API.
       const orderId = chatOrderId.trim();
@@ -169,16 +169,14 @@ function App() {
         method: 'POST',
         body: JSON.stringify({ attachmentId: intent.attachmentId, fileName: audioFile.name, contentType: audioFile.type, sizeBytes: audioFile.size }),
       });
-      setNoticeKind('success');
-      setNotice(t('الخادم أكد إرسال التسجيل.', 'Server confirmed the voice note.'));
+      setChatNotice(t('الخادم أكد إرسال التسجيل.', 'Server confirmed the voice note.'));
       setAudioFile(null);
       setRecordingState('idle');
       await loadConversation();
     } catch (error) {
-      setNoticeKind('error');
-      setNotice(error instanceof ApiError ? error.message : error instanceof Error && error.message === 'ORDER_ID_REQUIRED' ? t('اكتب رقم الطلب في قسم المحادثة الأول.', 'Enter the order ID in the conversation section first.') : t('التسجيل لسه ما اتبعتش. الخدمة محتاجة توصيل الـ API والتخزين الآمن.', 'Voice note was not sent. The API and private storage must be connected.'));
+      setChatNotice(error instanceof ApiError ? error.message : error instanceof Error && error.message === 'ORDER_ID_REQUIRED' ? t('اكتب رقم الطلب الأول.', 'Enter an order ID first.') : t('التسجيل لسه ما اتبعتش. الخدمة محتاجة توصيل الـ API والتخزين الآمن.', 'Voice note was not sent. The API and private storage must be connected.'));
     } finally {
-      setBusy(false);
+      setChatBusy(false);
     }
   };
 
@@ -243,8 +241,6 @@ function App() {
               <label>{t('مكان التوصيل', 'Drop-off location')}<span className="input-wrap"><MapPin size={17} /><input value={dropoff} onChange={event => setDropoff(event.target.value)} placeholder={t('رايح فين؟', 'Where should it go?')} /></span></label>
             </div>
             <label className="details-label">{t('تفاصيل إضافية (اختياري)', 'Extra details (optional)')}<textarea value={details} onChange={event => setDetails(event.target.value)} rows={3} placeholder={t('اكتب اللي محتاج تقوله للكابتن...', 'Anything the captain should know...')} /></label>
-            <div className="voice-box"><div className="voice-copy"><span className="voice-icon"><Mic size={20} /></span><div><b>{t('مش حابب تكتب؟', 'Prefer not to type?')}</b><small>{t('سجّل رسالة صوتية بدل الكتابة', 'Record a voice note instead')}</small></div></div><div className="record-actions">{recordingState === 'recording' ? <><span className="recording-live"><span /> {Math.floor(recordSeconds / 60).toString().padStart(2,'0')}:{(recordSeconds % 60).toString().padStart(2,'0')}</span><button className="record-button stop" onClick={stopRecording}>{t('إيقاف', 'Stop')}</button><button className="icon-button" onClick={cancelRecording} aria-label={t('إلغاء التسجيل', 'Cancel recording')}><X size={17} /></button></> : recordingState === 'ready' && audioFile ? <><span className="audio-ready"><AudioLines size={18} /> {t('التسجيل جاهز', 'Recording ready')}</span><audio controls src={URL.createObjectURL(audioFile)} /><button className="icon-button" onClick={cancelRecording} aria-label={t('حذف التسجيل', 'Discard recording')}><X size={17} /></button></> : <button className="record-button" onClick={startRecording}><Mic size={16} /> {t('ابدأ تسجيل', 'Record voice')}</button>}</div>{recordingState === 'ready' && audioFile && <button className="send-voice" disabled={busy} onClick={sendVoiceNote}><Upload size={15} /> {t('إرسال التسجيل للطلب', 'Send voice note to order')}</button>}</div>
-            <p className="form-hint"><ShieldCheck size={15} /> {t('الميكروفون مش هيشتغل غير لما تضغط تسجيل. التسجيل مش بيتبعت تلقائيًا.', 'Your microphone only starts after you press record. Nothing is sent automatically.')}</p>
             <button className="submit-order" onClick={sendRequest} disabled={busy}>{busy ? t('جاري الاتصال...', 'Connecting...') : t('متابعة الطلب', 'Continue order')} <ArrowLeft size={18} /></button>
             {notice && <div className={`notice ${noticeKind}`} role="status">{notice}</div>}
             <p className="api-status"><span className={health === 'online' ? 'status-dot online' : 'status-dot'} />{health === 'not_configured' ? t('ربط الطلبات الفعلي بالـ API لسه مطلوب', 'Live order API connection is still required') : health === 'offline' ? t('الاتصال بالخدمة غير متاح', 'Service is unavailable') : t('عنوان الـ API مضبوط؛ حالة الخدمة تحتاج تحقق', 'API URL configured; service health needs verification')}</p>
@@ -257,6 +253,7 @@ function App() {
           <div className="chat-panel">
             <div className="chat-intro"><span className="chat-head-icon"><Headphones size={22} /></span><div><b>{t('محادثة مرتبطة بالطلب', 'Order-linked conversation')}</b><small>{t('المحادثة هتظهر بعد تسجيل الدخول والتحقق من صلاحيتك على الطلب.', 'Conversation loads only after the API verifies your access to the order.')}</small></div></div>
             <div className="chat-order-input"><label htmlFor="chat-order-id">{t('رقم الطلب', 'Order ID')}</label><div><input id="chat-order-id" value={chatOrderId} onChange={event => setChatOrderId(event.target.value)} placeholder={t('رقم الطلب اللي عايز تتابعه', 'Order ID')} /><button className="record-button" onClick={loadConversation} disabled={chatBusy}>{chatBusy ? t('جاري التحميل...', 'Loading...') : t('فتح المحادثة', 'Open chat')}</button></div></div>
+            <div className="voice-box"><div className="voice-copy"><span className="voice-icon"><Mic size={20} /></span><div><b>{t('مش حابب تكتب؟', 'Prefer not to type?')}</b><small>{t('سجّل رسالة صوتية بدل الكتابة', 'Record a voice note instead')}</small></div></div><div className="record-actions">{recordingState === 'recording' ? <><span className="recording-live"><span /> {Math.floor(recordSeconds / 60).toString().padStart(2,'0')}:{(recordSeconds % 60).toString().padStart(2,'0')}</span><button className="record-button stop" onClick={stopRecording}>{t('إيقاف', 'Stop')}</button><button className="icon-button" onClick={cancelRecording} aria-label={t('إلغاء التسجيل', 'Cancel recording')}><X size={17} /></button></> : recordingState === 'ready' && audioFile ? <><span className="audio-ready"><AudioLines size={18} /> {t('التسجيل جاهز', 'Recording ready')}</span><audio controls src={URL.createObjectURL(audioFile)} /><button className="icon-button" onClick={cancelRecording} aria-label={t('حذف التسجيل', 'Discard recording')}><X size={17} /></button></> : <button className="record-button" onClick={startRecording}><Mic size={16} /> {t('ابدأ تسجيل', 'Record voice')}</button>}</div>{recordingState === 'ready' && audioFile && <button className="send-voice" disabled={busy} onClick={sendVoiceNote}><Upload size={15} /> {t('إرسال التسجيل للطلب', 'Send voice note to order')}</button>}</div>
             <div className="chat-messages" aria-live="polite">{chatMessages.length === 0 ? <div className="chat-empty"><AudioLines size={22} /><span>{t('مفيش رسائل معروضة. افتح محادثة طلب حقيقية علشان نجيب الرسائل من الخادم.', 'No messages shown. Open an authorized order conversation to load messages from the server.')}</span></div> : chatMessages.map(message => <div className="chat-message" key={message.id}><small>{message.senderLabel ?? t('مشارك في الطلب', 'Order participant')} · {new Date(message.createdAt).toLocaleString(isArabic ? 'ar-EG' : 'en-US')}</small>{message.messageType === 'voice_note' && message.audioUrl ? <audio controls src={message.audioUrl} /> : message.messageType === 'voice_note' ? <span className="chat-voice-placeholder"><AudioLines size={17} /> {t('رسالة صوتية (رابط التشغيل يحتاج صلاحية من الخادم)', 'Voice note (playback requires an authorized server URL)')}</span> : <p>{message.textBody}</p>}</div>)}</div>
             <div className="chat-compose"><textarea rows={2} value={chatDraft} onChange={event => setChatDraft(event.target.value)} placeholder={t('اكتب رسالتك للكابتن...', 'Write a message to the captain...')} /><button className="submit-order" disabled={chatBusy || !chatOrderId.trim() || !chatDraft.trim()} onClick={sendChatMessage}>{t('إرسال الرسالة', 'Send message')} <ArrowLeft size={17} /></button></div>
             {chatNotice && <div className="notice info" role="status">{chatNotice}</div>}
