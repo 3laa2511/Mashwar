@@ -45,3 +45,33 @@ Before promoting the database schema from draft to staging:
 2. **Automated Rollback Test:** Verify that every `CREATE` statement has a corresponding, validated `DROP` / `ALTER` rollback script.
 3. **Synthetic Seed Validation:** Load synthetic El Bagour landmarks, test merchants, and dummy captains to verify foreign key integrity.
 4. **Load & Concurrency Profiling:** Execute `SEC-06` (10 concurrent captain claims on a single order) under load to confirm zero deadlocks and 100% mutual exclusion.
+
+
+---
+
+## 6. Marketplace, Location & Multi-Region Test Addendum (2026-10-14)
+
+**Execution status: NOT RUN by this documentation change.** Use synthetic fixtures and isolated local/test database only.
+
+| ID | Scenario | Expected result |
+|---|---|---|
+| MKT-01 | Pending, rejected, or suspended merchant queries public discovery | No public listing; no order acceptance |
+| MKT-02 | Merchant A requests Merchant B's branch/catalog/order/subscription | Denied or indistinguishable not-found response; no data leakage |
+| MKT-03 | Merchant client submits approved=true, arbitrary price, or entitlement fields | Server ignores/rejects protected fields |
+| MKT-04 | Catalog price changes after order creation | Historical order item snapshot remains unchanged |
+| CAP-01 | Customer fetches captain profile | No national ID, ID images, private phone, review notes, or risk flags |
+| CAP-02 | Non-reviewer requests a captain document URL | Denied; no signed URL issued |
+| CAP-03 | Captain with pending/suspended/expired verification accepts offer | Denied |
+| LOC-01 | Customer/captain coordinates are out of range or stale | Rejected or excluded from dispatch |
+| LOC-02 | Order lies outside all enabled service areas | Creation rejected with localized coverage error |
+| GEO-01 | El Bagour and a synthetic second city use different configurations | Correct per-area behavior without code change |
+| DSP-01 | Two independent backend processes accept one order concurrently | Exactly one durable active assignment |
+| DSP-02 | Backend restarts after an offer/idempotency write | State survives; duplicate request is safely handled |
+| DSP-03 | Nearest captain is unverified/offline/out-of-area | Excluded before proximity ranking |
+| PRIV-01 | Unassigned captain fetches customer's precise address | Denied |
+| API-01 | Request omits quote fields, sends expired quote, or tampers with amount | Reject; server does not trust client amount |
+| AUTH-01 | Request supplies actorId/actorRole in body without verified auth | Denied; identity comes from verified session |
+| SEC-01 | Production signing secret is missing | Fail closed; no known fallback secret |
+| PAY-01 | Duplicate or mismatched webhook amount/currency/reference | Durable idempotency; mismatched payment not marked successful |
+
+Each test must record the exact command, environment, fixture type, output, and whether it exercised unit code, real database constraints/RLS, multiple processes, or provider sandbox. Do not count mocked/in-process tests as proof of database concurrency or provider integration.
