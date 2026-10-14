@@ -75,3 +75,25 @@ Before promoting the database schema from draft to staging:
 | PAY-01 | Duplicate or mismatched webhook amount/currency/reference | Durable idempotency; mismatched payment not marked successful |
 
 Each test must record the exact command, environment, fixture type, output, and whether it exercised unit code, real database constraints/RLS, multiple processes, or provider sandbox. Do not count mocked/in-process tests as proof of database concurrency or provider integration.
+
+
+---
+
+## 7. Web/Mobile Chat & Voice-Note Security Tests (2026-10-14)
+
+**Status: NOT RUN.** Use isolated test data only.
+
+| ID | Scenario | Expected result |
+|---|---|---|
+| CHAT-01 | Customer A reads or sends to Customer B's order conversation | Denied |
+| CHAT-02 | Client forges sender ID, role, or conversation participant list | Server derives actor from JWT; forged fields ignored/rejected |
+| CHAT-03 | Former captain attempts to message after reassignment | Denied according to assignment lifecycle |
+| CHAT-04 | Duplicate client message ID is retried | One persisted message, deterministic response |
+| VOICE-01 | Audio object is fetched from public storage without auth | Impossible; object is private |
+| VOICE-02 | Unauthorized actor requests upload intent or playback URL | Denied; no signed URL issued |
+| VOICE-03 | Upload uses spoofed MIME/duration/oversized file | Server rejects based on actual bytes and configured limits |
+| VOICE-04 | Browser microphone permission denied | No recording starts; text/status remain available |
+| WEB-01 | Customer signs in on web and mobile | Same account and persisted order history |
+| WEB-02 | Order created on web appears in mobile after refresh/realtime | Same server-persisted order, no separate database |
+| WEB-03 | Web client tries to bypass price/order transition validation | Same server rules reject tampering as mobile |
+| WEB-04 | Browser network disconnects during send | UI shows pending/failed until server confirmation; retry does not duplicate |
