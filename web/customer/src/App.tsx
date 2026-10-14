@@ -4,6 +4,7 @@ import { apiBaseUrl, ApiError, apiRequest, getApiHealth, requestVoiceUploadInten
 
 type Service = 'store' | 'parcel' | 'errand';
 type RecordingState = 'idle' | 'recording' | 'ready' | 'unsupported' | 'error';
+type ChatMessage = { id: string; messageType: 'text' | 'voice_note'; textBody?: string; audioUrl?: string; senderLabel?: string; createdAt: string };
 
 const serviceCards: { id: Service; title: string; detail: string; icon: typeof Package }[] = [
   { id: 'store', title: 'اطلب من محل', detail: 'محلات وخدمات قريبة منك', icon: ShoppingBag },
@@ -25,7 +26,12 @@ function App() {
   const [isArabic, setIsArabic] = useState(true);
   const [showSignIn, setShowSignIn] = useState(false);
   const [phone, setPhone] = useState('');
-  const [health, setHealth] = useState<'not_configured' | 'online' | 'offline'>(getApiHealth());
+  const health = getApiHealth();
+  const [chatOrderId, setChatOrderId] = useState('');
+  const [chatDraft, setChatDraft] = useState('');
+  const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
+  const [chatBusy, setChatBusy] = useState(false);
+  const [chatNotice, setChatNotice] = useState('');
   const recorder = useRef<MediaRecorder | null>(null);
   const stream = useRef<MediaStream | null>(null);
   const chunks = useRef<BlobPart[]>([]);
@@ -123,14 +129,39 @@ function App() {
     }
   };
 
+  const loadConversation = async () => {
+    if (!chatOrderId.trim()) { setChatNotice(t('اكتب رقم الطلب الأول.', 'Enter an order ID first.')); return; }
+    setChatBusy(true); setChatNotice('');
+    try {
+      const response = await apiRequest<{ messages: ChatMessage[] }>('/api/v1/orders/' + encodeURIComponent(chatOrderId.trim()) + '/messages');
+      setChatMessages(Array.isArray(response.messages) ? response.messages : []);
+    } catch (error) {
+      setChatMessages([]); setChatNotice(error instanceof ApiError ? error.message : t('المحادثة مش متاحة دلوقتي.', 'Conversation is not available right now.'));
+    } finally { setChatBusy(false); }
+  };
+
+  const sendChatMessage = async () => {
+    if (!chatOrderId.trim() || !chatDraft.trim()) return;
+    setChatBusy(true); setChatNotice('');
+    try {
+      const response = await apiRequest<{ message?: ChatMessage }>('/api/v1/orders/' + encodeURIComponent(chatOrderId.trim()) + '/messages', {
+        method: 'POST', body: JSON.stringify({ clientMessageId: crypto.randomUUID(), messageType: 'text', textBody: chatDraft.trim() }),
+      });
+      if (response.message) setChatMessages(current => [...current, response.message!]);
+      setChatDraft(''); setChatNotice(t('الخادم أكد إرسال الرسالة.', 'Server confirmed the message.'));
+    } catch (error) {
+      setChatNotice(error instanceof ApiError ? error.message : t('الرسالة ما اتبعتتش. جرّب تاني.', 'Message was not sent. Try again.'));
+    } finally { setChatBusy(false); }
+  };
+
   const sendVoiceNote = async () => {
     if (!audioFile) return;
     setNotice('');
     setBusy(true);
     try {
       // This flow deliberately requires a real authenticated order and upload-intent API.
-      const orderId = window.prompt(t('اكتب رقم الطلب المرتبط بالتسجيل (بعد ربط الحساب والطلبات).', 'Enter the order ID for this recording.'));
-      if (!orderId) return;
+      const orderId = chatOrderId.trim();
+      if (!orderId) throw new Error('ORDER_ID_REQUIRED');
       const intent = await requestVoiceUploadIntent(orderId, audioFile);
       const upload = await fetch(intent.uploadUrl, { method: 'PUT', headers: { 'Content-Type': audioFile.type }, body: audioFile });
       if (!upload.ok) throw new Error('VOICE_UPLOAD_FAILED');
@@ -139,12 +170,13 @@ function App() {
         body: JSON.stringify({ attachmentId: intent.attachmentId, fileName: audioFile.name, contentType: audioFile.type, sizeBytes: audioFile.size }),
       });
       setNoticeKind('success');
-      setNotice(t('تم إرسال التسجيل.', 'Voice note sent.'));
+      setNotice(t('الخادم أكد إرسال التسجيل.', 'Server confirmed the voice note.'));
       setAudioFile(null);
       setRecordingState('idle');
+      await loadConversation();
     } catch (error) {
       setNoticeKind('error');
-      setNotice(error instanceof ApiError ? error.message : t('التسجيل لسه ما اتبعتش. الخدمة محتاجة توصيل الـ API والتخزين الآمن.', 'Voice note was not sent. The API and private storage must be connected.'));
+      setNotice(error instanceof ApiError ? error.message : error instanceof Error && error.message === 'ORDER_ID_REQUIRED' ? t('اكتب رقم الطلب في قسم المحادثة الأول.', 'Enter the order ID in the conversation section first.') : t('التسجيل لسه ما اتبعتش. الخدمة محتاجة توصيل الـ API والتخزين الآمن.', 'Voice note was not sent. The API and private storage must be connected.'));
     } finally {
       setBusy(false);
     }
@@ -218,6 +250,18 @@ function App() {
             <p className="api-status"><span className={health === 'online' ? 'status-dot online' : 'status-dot'} />{health === 'not_configured' ? t('ربط الطلبات الفعلي بالـ API لسه مطلوب', 'Live order API connection is still required') : health === 'offline' ? t('الاتصال بالخدمة غير متاح', 'Service is unavailable') : t('عنوان الـ API مضبوط؛ حالة الخدمة تحتاج تحقق', 'API URL configured; service health needs verification')}</p>
           </div>
           <aside className="order-aside"><div className="aside-art"><div className="package-box"><Package size={46} /></div><div className="aside-route"><span /><span /><span /></div><div className="aside-pin"><MapPin size={25} /></div></div><h3>{t('خطوات بسيطة، من غير تعقيد', 'Simple steps, no fuss')}</h3><ol><li><span>1</span><div><b>{t('حدد المشوار', 'Tell us what you need')}</b><small>{t('اكتب التفاصيل أو سجّل صوتك', 'Type details or record your voice')}</small></div></li><li><span>2</span><div><b>{t('راجع السعر والتأكيد', 'Review and confirm')}</b><small>{t('السعر النهائي لازم ييجي من الخادم', 'Final pricing must come from the server')}</small></div></li><li><span>3</span><div><b>{t('تابع طلبك', 'Follow your order')}</b><small>{t('حالة الطلب ومحادثة مع الكابتن', 'Order status and captain chat')}</small></div></li></ol><div className="support-note" id="help"><CircleHelp size={19} /><span><b>{t('محتاج مساعدة؟', 'Need help?')}</b><small>{t('الدعم والمحادثة هيتاحوا بعد ربط الحسابات والـ API.', 'Support and chat require the authenticated API connection.')}</small></span></div></aside>
+        </section>
+
+        <section className="chat-section" id="chat">
+          <div className="section-heading"><div><span className="eyebrow">{t('تواصل على طلبك', 'ORDER COMMUNICATION')}</span><h2>{t('رسالة أو تسجيل صوتي', 'Text or voice message')}</h2></div></div>
+          <div className="chat-panel">
+            <div className="chat-intro"><span className="chat-head-icon"><Headphones size={22} /></span><div><b>{t('محادثة مرتبطة بالطلب', 'Order-linked conversation')}</b><small>{t('المحادثة هتظهر بعد تسجيل الدخول والتحقق من صلاحيتك على الطلب.', 'Conversation loads only after the API verifies your access to the order.')}</small></div></div>
+            <div className="chat-order-input"><label htmlFor="chat-order-id">{t('رقم الطلب', 'Order ID')}</label><div><input id="chat-order-id" value={chatOrderId} onChange={event => setChatOrderId(event.target.value)} placeholder={t('رقم الطلب اللي عايز تتابعه', 'Order ID')} /><button className="record-button" onClick={loadConversation} disabled={chatBusy}>{chatBusy ? t('جاري التحميل...', 'Loading...') : t('فتح المحادثة', 'Open chat')}</button></div></div>
+            <div className="chat-messages" aria-live="polite">{chatMessages.length === 0 ? <div className="chat-empty"><AudioLines size={22} /><span>{t('مفيش رسائل معروضة. افتح محادثة طلب حقيقية علشان نجيب الرسائل من الخادم.', 'No messages shown. Open an authorized order conversation to load messages from the server.')}</span></div> : chatMessages.map(message => <div className="chat-message" key={message.id}><small>{message.senderLabel ?? t('مشارك في الطلب', 'Order participant')} · {new Date(message.createdAt).toLocaleString(isArabic ? 'ar-EG' : 'en-US')}</small>{message.messageType === 'voice_note' && message.audioUrl ? <audio controls src={message.audioUrl} /> : message.messageType === 'voice_note' ? <span className="chat-voice-placeholder"><AudioLines size={17} /> {t('رسالة صوتية (رابط التشغيل يحتاج صلاحية من الخادم)', 'Voice note (playback requires an authorized server URL)')}</span> : <p>{message.textBody}</p>}</div>)}</div>
+            <div className="chat-compose"><textarea rows={2} value={chatDraft} onChange={event => setChatDraft(event.target.value)} placeholder={t('اكتب رسالتك للكابتن...', 'Write a message to the captain...')} /><button className="submit-order" disabled={chatBusy || !chatOrderId.trim() || !chatDraft.trim()} onClick={sendChatMessage}>{t('إرسال الرسالة', 'Send message')} <ArrowLeft size={17} /></button></div>
+            {chatNotice && <div className="notice info" role="status">{chatNotice}</div>}
+            <p className="form-hint"><ShieldCheck size={15} /> {t('الرسائل والتسجيلات مش هتظهر إلا بعد تحقق الخادم من صلاحية الوصول للطلب.', 'Messages and recordings remain hidden unless the server authorizes access to the order.')}</p>
+          </div>
         </section>
 
         <section className="how-section" id="how"><div className="section-heading"><div><span className="eyebrow">{t('مصمم للناس', 'MADE FOR EVERYONE')}</span><h2>{t('استخدم الطريقة اللي تريحك', 'Use the way that works for you')}</h2></div></div><div className="how-grid"><div><span><Search size={22} /></span><b>{t('من المتصفح', 'From your browser')}</b><p>{t('مش لازم تنزّل التطبيق علشان تبدأ.', 'No app installation needed to get started.')}</p></div><div><span><Mic size={22} /></span><b>{t('بالصوت أو الكتابة', 'Voice or text')}</b><p>{t('اختار الطريقة الأسهل ليك، حسب دعم جهازك.', 'Choose what works for you and your device.')}</p></div><div><span><Headphones size={22} /></span><b>{t('متابعة ومساعدة', 'Updates and support')}</b><p>{t('هنعرض الحالة الحقيقية للطلب، من غير وعود وهمية.', 'Real order status, without fake progress.')}</p></div></div></section>
