@@ -19,6 +19,7 @@ function App() {
   const [area, setArea] = useState('');
   const [serviceAreas, setServiceAreas] = useState<ServiceArea[]>([]);
   const [quote, setQuote] = useState<FareQuote | null>(null);
+  const [orderIdempotencyKey, setOrderIdempotencyKey] = useState<string | null>(null);
   const [pickupPhone, setPickupPhone] = useState('');
   const [dropoffPhone, setDropoffPhone] = useState('');
   const [pickup, setPickup] = useState('');
@@ -137,14 +138,16 @@ function App() {
           method: 'POST',
           body: JSON.stringify({ serviceTypeId: service === 'parcel' ? 'package' : service === 'store' ? 'restaurant_store' : 'errand', serviceAreaId: area, pickupAddress: pickup.trim(), dropoffAddress: dropoff.trim(), description: details.trim() }),
         });
-        setQuote(result); setNoticeKind('success');
+        setQuote(result); setOrderIdempotencyKey(null); setNoticeKind('success');
         setNotice(t('السعر وصل من الخادم. راجعه واضغط تأكيد الطلب.', 'Quote received from the server. Review it and confirm your order.'));
         return;
       }
-      if (new Date(quote.expiresAt).getTime() <= Date.now()) { setQuote(null); setNoticeKind('error'); setNotice(t('انتهت صلاحية السعر. اطلب تسعيرة جديدة.', 'This quote expired. Request a new quote.')); return; }
+      if (new Date(quote.expiresAt).getTime() <= Date.now()) { setQuote(null); setOrderIdempotencyKey(null); setNoticeKind('error'); setNotice(t('انتهت صلاحية السعر. اطلب تسعيرة جديدة.', 'This quote expired. Request a new quote.')); return; }
+      const idempotencyKey = orderIdempotencyKey ?? crypto.randomUUID();
+      setOrderIdempotencyKey(idempotencyKey);
       const result = await apiRequest<{ orderId?: string; message?: string }>('/api/v1/orders', {
         method: 'POST',
-        headers: { 'Idempotency-Key': crypto.randomUUID() },
+        headers: { 'Idempotency-Key': idempotencyKey },
         body: JSON.stringify({
           serviceTypeId: service === 'parcel' ? 'package' : service === 'store' ? 'restaurant_store' : 'errand',
           quoteId: quote.quoteId,
@@ -156,7 +159,7 @@ function App() {
       });
       setNoticeKind('success');
       setNotice(result.message ?? (result.orderId ? t('تم تأكيد الطلب رقم ', 'Order confirmed: ') + result.orderId : t('الخادم أكد استلام الطلب.', 'The server confirmed the order.')));
-      setQuote(null);
+      setQuote(null); setOrderIdempotencyKey(null);
     } catch (error) {
       setNoticeKind('error'); setNotice(error instanceof ApiError ? error.message : t('الطلب ما اتبعتش. اتأكد من الاتصال وحاول تاني.', 'Request was not sent. Check your connection and try again.'));
     } finally { setBusy(false); }
@@ -263,16 +266,16 @@ function App() {
         </section>
 
         <section className="services-section" id="services">
-          <div className="section-heading"><div><span className="eyebrow">{t('اختار اللي محتاجه', 'WHAT DO YOU NEED?')}</span><h2>{t('مشوار واحد، حلول كتير', 'One service, many ways')}</h2></div><label className="area-chip"><MapPin size={15} /><select aria-label={t('منطقة الخدمة', 'Service area')} value={area} onChange={event => { setArea(event.target.value); setQuote(null); }}><option value="">{t('اختار المنطقة', 'Choose area')}</option>{serviceAreas.map(item => <option key={item.id} value={item.id}>{item.displayName}</option>)}</select><span className="area-note">{serviceAreas.length ? t('مناطق متاحة', 'Available areas') : t('اختيار المناطق بعد ربط الخدمة', 'Areas load from the service')}</span></label></div>
-          <div className="service-grid">{serviceCards.map(card => { const Icon = card.icon; return <button key={card.id} className={service === card.id ? 'service-card selected' : 'service-card'} onClick={() => { setService(card.id); setQuote(null); }}><span className="service-icon"><Icon size={23} /></span><span className="service-title">{t(card.title, card.id === 'store' ? 'Order from a store' : card.id === 'parcel' ? 'Send a parcel' : 'Run an errand')}</span><span className="service-detail">{t(card.detail, card.id === 'store' ? 'Local shops and services' : card.id === 'parcel' ? 'Parcels and documents' : 'Tell us what you need')}</span><span className="service-arrow"><ArrowLeft size={16} /></span></button>; })}</div>
+          <div className="section-heading"><div><span className="eyebrow">{t('اختار اللي محتاجه', 'WHAT DO YOU NEED?')}</span><h2>{t('مشوار واحد، حلول كتير', 'One service, many ways')}</h2></div><label className="area-chip"><MapPin size={15} /><select aria-label={t('منطقة الخدمة', 'Service area')} value={area} onChange={event => { setArea(event.target.value); setQuote(null); setOrderIdempotencyKey(null); }}><option value="">{t('اختار المنطقة', 'Choose area')}</option>{serviceAreas.map(item => <option key={item.id} value={item.id}>{item.displayName}</option>)}</select><span className="area-note">{serviceAreas.length ? t('مناطق متاحة', 'Available areas') : t('اختيار المناطق بعد ربط الخدمة', 'Areas load from the service')}</span></label></div>
+          <div className="service-grid">{serviceCards.map(card => { const Icon = card.icon; return <button key={card.id} className={service === card.id ? 'service-card selected' : 'service-card'} onClick={() => { setService(card.id); setQuote(null); setOrderIdempotencyKey(null); }}><span className="service-icon"><Icon size={23} /></span><span className="service-title">{t(card.title, card.id === 'store' ? 'Order from a store' : card.id === 'parcel' ? 'Send a parcel' : 'Run an errand')}</span><span className="service-detail">{t(card.detail, card.id === 'store' ? 'Local shops and services' : card.id === 'parcel' ? 'Parcels and documents' : 'Tell us what you need')}</span><span className="service-arrow"><ArrowLeft size={16} /></span></button>; })}</div>
         </section>
 
         <section className="order-layout" id="order">
           <div className="order-panel">
             <div className="panel-title"><div><span className="eyebrow">{t('ابدأ من هنا', 'GET STARTED')}</span><h2>{t('تفاصيل المشوار', 'Order details')}</h2></div><span className="step-pill">01 / 02</span></div>
             <div className="field-grid">
-              <label>{t('مكان الاستلام', 'Pickup location')}<span className="input-wrap"><MapPin size={17} /><input value={pickup} onChange={event => { setPickup(event.target.value); setQuote(null); }} placeholder={t('اكتب العنوان أو علامة مميزة', 'Address or landmark')} /></span></label>
-              <label>{t('مكان التوصيل', 'Drop-off location')}<span className="input-wrap"><MapPin size={17} /><input value={dropoff} onChange={event => { setDropoff(event.target.value); setQuote(null); }} placeholder={t('رايح فين؟', 'Where should it go?')} /></span></label>
+              <label>{t('مكان الاستلام', 'Pickup location')}<span className="input-wrap"><MapPin size={17} /><input value={pickup} onChange={event => { setPickup(event.target.value); setQuote(null); setOrderIdempotencyKey(null); }} placeholder={t('اكتب العنوان أو علامة مميزة', 'Address or landmark')} /></span></label>
+              <label>{t('مكان التوصيل', 'Drop-off location')}<span className="input-wrap"><MapPin size={17} /><input value={dropoff} onChange={event => { setDropoff(event.target.value); setQuote(null); setOrderIdempotencyKey(null); }} placeholder={t('رايح فين؟', 'Where should it go?')} /></span></label>
             </div>
             <div className="field-grid phone-grid"><label>{t('رقم تواصل الاستلام', 'Pickup contact phone')}<span className="input-wrap"><Smartphone size={17} /><input value={pickupPhone} onChange={event => setPickupPhone(event.target.value)} inputMode="tel" autoComplete="tel" placeholder="01xxxxxxxxx" /></span></label><label>{t('رقم تواصل التوصيل', 'Drop-off contact phone')}<span className="input-wrap"><Smartphone size={17} /><input value={dropoffPhone} onChange={event => setDropoffPhone(event.target.value)} inputMode="tel" autoComplete="tel" placeholder="01xxxxxxxxx" /></span></label></div>
             <label className="details-label">{t('تفاصيل إضافية (اختياري)', 'Extra details (optional)')}<textarea value={details} onChange={event => setDetails(event.target.value)} rows={3} placeholder={t('اكتب اللي محتاج تقوله للكابتن...', 'Anything the captain should know...')} /></label>
