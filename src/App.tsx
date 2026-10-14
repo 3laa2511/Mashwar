@@ -759,7 +759,6 @@ export default function App() {
                 بيئة العمل الحالية تعمل داخل متصفح وسيرفر Node.js/Vite بدون أدوات Flutter SDK وAndroid/iOS Toolchains المثبتة محلياً؛ لذلك تم توليد ملفات مشروع Flutter/Dart كاملة في مستودع <code className="bg-amber-950 px-1.5 py-0.5 rounded text-amber-300 font-mono">flutter_mashwar/</code> وجاهزة للتشغيل والتصدير مباشرة. يُتيح هذا المحاكي التفاعلي اختبار واجهات تطبيق Flutter (Material 3) والأدوار الأربعة (العميل، الكابتن، التاجر، العمليات) بالعربية والإنجليزية بدقة تامة.
               </div>
             </div>
-          </div>
           </>
         )}
 
