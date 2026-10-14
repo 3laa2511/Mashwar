@@ -24,11 +24,31 @@ export const DEFAULT_PRICING_CONFIG: PricingConfig = {
   ruralSurchargePiasters: 500,
   platformFeePiasters: 200,
   quoteValidityMinutes: 15,
-  hmacSecret: process.env.PRICING_HMAC_SECRET || 'mashwar_el_bagour_authoritative_quote_secret_2026',
+  hmacSecret: '', // Must be supplied by PRICING_HMAC_SECRET or explicit test configuration.
 };
 
+export function requireEnvSecret(name: string): string {
+  const secret = process.env[name];
+  if (typeof secret !== 'string' || secret.trim().length === 0) {
+    const error = new Error(`Missing required environment variable: ${name}`);
+    (error as any).code = 'MISSING_REQUIRED_SECRET';
+    throw error;
+  }
+  return secret;
+}
+
 export class PricingEngine {
-  constructor(private config: PricingConfig = DEFAULT_PRICING_CONFIG) {}
+  private config: PricingConfig;
+
+  constructor(config?: PricingConfig) {
+    this.config = config ?? {
+      ...DEFAULT_PRICING_CONFIG,
+      hmacSecret: requireEnvSecret('PRICING_HMAC_SECRET'),
+    };
+    if (this.config.hmacSecret.trim().length === 0) {
+      throw new Error('Missing required signing secret: provide PRICING_HMAC_SECRET or an explicit non-empty config value.');
+    }
+  }
 
   /**
    * Calculates an authoritative fare quote and returns a tamper-evident signed quote object.
