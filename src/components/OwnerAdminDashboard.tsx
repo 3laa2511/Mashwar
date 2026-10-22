@@ -488,7 +488,7 @@ export function OwnerAdminDashboard() {
   });
 
   return (
-    <div className="flex flex-col gap-6" dir="rtl">
+    <div className="mashwar-dashboard flex flex-col gap-6" dir="rtl">
       {/* Top Operations Header Bar & Persona Switcher */}
       <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 shadow-xl">
         <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 border-b border-slate-800 pb-4">
