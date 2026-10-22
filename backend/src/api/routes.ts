@@ -190,6 +190,17 @@ router.post('/orders', (req: Request, res: Response) => {
       return sendError(res, 'VALIDATION_ERROR', 'بيانات الطلب غير مكتملة أو توقيع التسعيرة مفقود.', 400);
     }
 
+    // Electronic payment is unavailable until a verified provider integration is enabled.
+    // Never accept a client-selected payment method as proof of payment.
+    if (paymentMethod !== 'cash_on_delivery') {
+      return sendError(
+        res,
+        'PAYMENT_METHOD_UNAVAILABLE',
+        'الدفع الإلكتروني غير متاح حاليًا. اختر الدفع النقدي عند الاستلام.',
+        503
+      );
+    }
+
     // Authoritatively verify the cryptographic quote signature before creating order
     pricingEngine.verifyQuote({
       quoteId,
@@ -216,7 +227,8 @@ router.post('/orders', (req: Request, res: Response) => {
       specialInstructions,
       totalFarePiasters: Number(totalFarePiasters),
       paymentMethod,
-      isPaid: paymentMethod !== 'cash_on_delivery',
+      // Order creation never proves that a payment has occurred.
+      isPaid: false,
       createdAt: now,
       updatedAt: now,
     };

@@ -24,6 +24,8 @@ import { AccessControlGuard } from '../src/security/rbac.js';
 import { AuditLogger } from '../src/security/auditLogger.js';
 import { PersistentStore } from '../src/store/persistentStore.js';
 import { Order, CaptainProfile, WebhookEventPayload } from '../src/types/index.js';
+import express from 'express';
+import { router as apiRouter } from '../src/api/routes.js';
 
 interface TestResult {
   suite: string;
@@ -642,6 +644,75 @@ export async function runAllTests(): Promise<{
     }
     assert(threw, 'Must reject unlocking passenger transport');
     assert(PersistentStore.getSettings().passengerMobilityLocked === true, 'Lock must remain enforced');
+  });
+
+  // --------------------------------------------------------------------------
+  // SUITE 12: Order Payment State HTTP Regression Tests
+  // --------------------------------------------------------------------------
+  console.log('\n▶ SUITE 12: Order Payment State HTTP Regression Tests');
+
+  await runTest('OrderPayments', 'Rejects electronic checkout and never marks a new cash order paid', async () => {
+    const app = express();
+    app.use(express.json());
+    app.use('/api/v1', apiRouter);
+    const server = app.listen(0, '127.0.0.1');
+    try {
+      await new Promise<void>((resolve, reject) => {
+        server.once('listening', resolve);
+        server.once('error', reject);
+      });
+      const address = server.address();
+      assert(address !== null && typeof address !== 'string', 'Test HTTP server must bind an ephemeral port');
+      const baseUrl = `http://127.0.0.1:${address.port}/api/v1`;
+
+      const quoteResponse = await fetch(`${baseUrl}/quotes`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ serviceTypeId: 'restaurant_store', distanceKm: 2 }),
+      });
+      assert(quoteResponse.status === 201, 'Quote endpoint must return HTTP 201');
+      const quotePayload = await quoteResponse.json() as { data: {
+        quoteId: string; totalFarePiasters: number; expiresAt: string; signature: string;
+      } };
+      const commonOrder = {
+        customerId: 'cust_payment_regression_test',
+        customerName: 'Integration Test',
+        customerPhone: '+201000000000',
+        serviceTypeId: 'restaurant_store',
+        quoteId: quotePayload.data.quoteId,
+        quoteExpiresAt: quotePayload.data.expiresAt,
+        quoteSignature: quotePayload.data.signature,
+        totalFarePiasters: quotePayload.data.totalFarePiasters,
+        pickup: { landmarkName: 'Pickup', detailedAddress: 'Test pickup', contactPhone: '+201000000000' },
+        dropoff: { landmarkName: 'Dropoff', detailedAddress: 'Test dropoff', contactPhone: '+201000000000' },
+        itemDescription: 'Payment-state regression test',
+      };
+
+      const electronicResponse = await fetch(`${baseUrl}/orders`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', 'idempotency-key': 'payment-regression-electronic' },
+        body: JSON.stringify({ ...commonOrder, paymentMethod: 'electronic_card' }),
+      });
+      const electronicPayload = await electronicResponse.json() as { success: boolean; error?: { code?: string } };
+      assert(electronicResponse.status === 503, 'Electronic payment must be rejected with HTTP 503');
+      assert(electronicPayload.success === false, 'Rejected electronic checkout must not report success');
+      assert(electronicPayload.error?.code === 'PAYMENT_METHOD_UNAVAILABLE', 'Electronic checkout must return PAYMENT_METHOD_UNAVAILABLE');
+
+      const cashResponse = await fetch(`${baseUrl}/orders`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', 'idempotency-key': 'payment-regression-cash' },
+        body: JSON.stringify({ ...commonOrder, paymentMethod: 'cash_on_delivery' }),
+      });
+      const cashPayload = await cashResponse.json() as { success: boolean; data?: { paymentMethod: string; isPaid: boolean } };
+      assert(cashResponse.status === 201, 'Cash-on-delivery order should be created successfully');
+      assert(cashPayload.success === true, 'Cash order response must report success');
+      assert(cashPayload.data?.paymentMethod === 'cash_on_delivery', 'Created order must preserve cash-on-delivery method');
+      assert(cashPayload.data?.isPaid === false, 'New order must remain unpaid until verified collection/payment');
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => error ? reject(error) : resolve());
+      });
+    }
   });
 
   // --------------------------------------------------------------------------
