@@ -756,7 +756,9 @@ export default function App() {
       {/* Main Content Area */}
       <main className="flex-1 max-w-7xl w-full mx-auto p-2 sm:p-4 flex flex-col gap-4">
         {/* Render Mobile App Prototype (Customer & Captain Home Screens First) */}
-        {workspaceMode === 'mobile' && <MobileAppFrame />}
+        {workspaceMode === 'mobile' && (
+          <MobileAppFrame onOpenOperationsDashboard={() => setWorkspaceMode('admin')} />
+        )}
 
         {/* Render Phase 4.1 Owner & Operations Admin Dashboard */}
         {workspaceMode === 'admin' && <OwnerAdminDashboard />}

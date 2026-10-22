@@ -20,59 +20,69 @@ import {
   X,
   CreditCard,
   Banknote,
-  RotateCcw
+  RotateCcw,
+  Store,
+  Info
 } from 'lucide-react';
 import { EgyptianMapCanvas } from './EgyptianMapCanvas';
-import { CaptainScreen } from './types';
+import { useMarketplace, MarketplaceOrder } from '../../store/marketplaceStore';
 
 interface CaptainMobileExperienceProps {
   onSwitchToCustomer?: () => void;
+  onOpenAuthModal?: () => void;
 }
 
 export const CaptainMobileExperience: React.FC<CaptainMobileExperienceProps> = ({
   onSwitchToCustomer,
+  onOpenAuthModal,
 }) => {
-  // Online/Offline status
-  const [isOnline, setIsOnline] = useState<boolean>(true);
+  const {
+    currentUser,
+    isCaptainOnline,
+    setIsCaptainOnline,
+    captainEarningsEgp,
+    captainCompletedDeliveries,
+    captainCashHoldingEgp,
+    orders,
+    captainAcceptDelivery,
+    captainUpdateStep,
+    captainConfirmCashCollection,
+    setIsAuthModalOpen,
+  } = useMarketplace();
+
+  // Active Tab: radar, trips, wallet, profile
   const [activeTab, setActiveTab] = useState<'radar' | 'trips' | 'wallet' | 'profile'>('radar');
 
-  // Simulated Incoming Request & Trip execution
-  const [hasIncomingRequest, setHasIncomingRequest] = useState<boolean>(false);
+  // Request countdown timer
   const [requestCountdown, setRequestCountdown] = useState<number>(15);
-  const [activeTrip, setActiveTrip] = useState<boolean>(false);
-  const [tripStep, setTripStep] = useState<number>(1); // 1: going to pickup, 2: arrived pickup, 3: in transit to dropoff, 4: arrived & cash collection, 5: completed
-  const [cashCollected, setCashCollected] = useState<boolean>(false);
-  const [customerPaidInput, setCustomerPaidInput] = useState<string>('50');
+  const [skippedOrders, setSkippedOrders] = useState<string[]>([]);
 
-  // Captain stats
-  const [todayEarningsEgp, setTodayEarningsEgp] = useState<number>(385);
-  const [todayTripsCount, setTodayTripsCount] = useState<number>(8);
-  const [cashInHandEgp, setCashInHandEgp] = useState<number>(640);
-  const [subscriptionDaysLeft, setSubscriptionDaysLeft] = useState<number>(5);
+  // Cash collection interactive form
+  const [customerPaidInput, setCustomerPaidInput] = useState<string>('');
+  const [cashConfirmed, setCashConfirmed] = useState<boolean>(false);
 
-  // Incoming Request Data (El Bagour Context)
-  const currentRequest = {
-    id: 'REQ-9142',
-    customerName: 'كريم الباجوري',
-    customerRating: 4.95,
-    serviceType: 'سكوتر طرود سريعة',
-    pickupName: 'شارع الجيش - أمام مطعم الشروق',
-    pickupDistance: '800 متر • 2 دقيقة',
-    dropoffName: 'قرية كفر الباجور - شارع داير الناحية',
-    dropoffDistance: '3.6 كم • 8 دقائق',
-    fareEgp: 28,
-    paymentMethodAr: 'نقداً عند التسليم (كاش)',
-    notes: 'طرد أوراق وعلبة دواء هامة يرجى تسليمها للصيدلية',
-  };
+  // Active assigned delivery order for this captain
+  const activeAssignedOrder = orders.find(
+    (o) =>
+      o.assignedCaptainId === currentUser.id &&
+      ['captain_assigned', 'at_pickup', 'in_transit'].includes(o.status)
+  );
 
-  // Timer countdown for incoming request
+  // Ready orders waiting for dispatch (not yet assigned and not skipped)
+  const incomingDispatchOrder = !activeAssignedOrder && isCaptainOnline
+    ? orders.find(
+        (o) => o.status === 'ready_for_pickup' && !skippedOrders.includes(o.id)
+      )
+    : null;
+
+  // Countdown timer when an incoming dispatch order appears
   useEffect(() => {
     let interval: NodeJS.Timeout;
-    if (hasIncomingRequest && requestCountdown > 0) {
+    if (incomingDispatchOrder && requestCountdown > 0) {
       interval = setInterval(() => {
         setRequestCountdown((c) => {
           if (c <= 1) {
-            setHasIncomingRequest(false);
+            setSkippedOrders((prev) => [...prev, incomingDispatchOrder.id]);
             return 15;
           }
           return c - 1;
@@ -80,33 +90,34 @@ export const CaptainMobileExperience: React.FC<CaptainMobileExperienceProps> = (
       }, 1000);
     }
     return () => clearInterval(interval);
-  }, [hasIncomingRequest, requestCountdown]);
+  }, [incomingDispatchOrder, requestCountdown]);
 
-  // Handle Accepting Trip
-  const handleAcceptTrip = () => {
-    setHasIncomingRequest(false);
-    setActiveTrip(true);
-    setTripStep(1);
-    setCashCollected(false);
+  // Handle Accept
+  const handleAccept = (orderId: string) => {
+    captainAcceptDelivery(orderId);
+    setCashConfirmed(false);
   };
 
-  // Handle Completing Trip
-  const handleCompleteTrip = () => {
-    setActiveTrip(false);
-    setTripStep(1);
-    setTodayEarningsEgp((e) => e + currentRequest.fareEgp);
-    setTodayTripsCount((t) => t + 1);
-    setCashInHandEgp((c) => c + currentRequest.fareEgp);
+  // Handle Skip
+  const handleSkip = (orderId: string) => {
+    setSkippedOrders((prev) => [...prev, orderId]);
+    setRequestCountdown(15);
   };
 
-  // Cash change calculation
-  const customerPaidVal = parseFloat(customerPaidInput) || currentRequest.fareEgp;
-  const changeDue = Math.max(0, customerPaidVal - currentRequest.fareEgp);
+  // Completed trips assigned strictly to this captain
+  const captainPastOrders = orders.filter(
+    (o) => o.assignedCaptainId === currentUser.id && o.status === 'delivered'
+  );
+
+  // Cash calculation
+  const totalDue = activeAssignedOrder ? activeAssignedOrder.totalEgp : 0;
+  const paidVal = parseFloat(customerPaidInput) || totalDue;
+  const changeDue = Math.max(0, paidVal - totalDue);
 
   return (
     <div className="relative w-full h-full flex flex-col bg-[#FAFAF9] text-slate-800 font-['Cairo',sans-serif] overflow-hidden select-none" dir="rtl">
       {/* Top Mobile Captain Bar */}
-      <div className="relative z-20 bg-white/95 backdrop-blur-md px-4 pt-3 pb-3 border-b border-slate-100 flex items-center justify-between shadow-xs">
+      <div className="relative z-20 bg-white/95 backdrop-blur-md px-4 pt-3 pb-3 border-b border-slate-100 flex items-center justify-between shadow-2xs">
         <div className="flex items-center gap-2.5">
           <div className="w-8 h-8 rounded-xl bg-slate-900 text-emerald-400 flex items-center justify-center font-bold text-sm shadow-xs">
             <Bike className="w-4 h-4 text-emerald-400" />
@@ -119,7 +130,7 @@ export const CaptainMobileExperience: React.FC<CaptainMobileExperienceProps> = (
               </span>
             </div>
             <div className="flex items-center gap-1 text-[11px] text-slate-500">
-              <span>كابتن محمود الصياد</span>
+              <span>كابتن: {currentUser.name}</span>
               <span className="text-amber-500 font-bold flex items-center">
                 ★ 4.92
               </span>
@@ -127,123 +138,128 @@ export const CaptainMobileExperience: React.FC<CaptainMobileExperienceProps> = (
           </div>
         </div>
 
-        {/* Prototype Switch to Customer View */}
+        {/* Prototype Switchers */}
         <div className="flex items-center gap-2">
           {onSwitchToCustomer && (
             <button
               onClick={onSwitchToCustomer}
-              className="text-xs font-bold text-slate-700 bg-slate-100 hover:bg-slate-200 px-2.5 py-1 rounded-full transition-colors flex items-center gap-1 shadow-xs"
+              className="text-[11px] font-bold text-slate-700 bg-slate-100 hover:bg-slate-200 px-2 py-1 rounded-full transition-colors flex items-center gap-1"
               title="معاينة شاشة العميل"
             >
               <User className="w-3.5 h-3.5" />
-              <span>شاشة العميل</span>
+              <span>العميل</span>
             </button>
           )}
+
+          <button
+            onClick={() => {
+              if (onOpenAuthModal) onOpenAuthModal();
+              else setIsAuthModalOpen(true);
+            }}
+            className="text-[11px] font-bold text-emerald-800 bg-emerald-50 hover:bg-emerald-100 px-2 py-1 rounded-full transition-colors flex items-center gap-1 border border-emerald-200"
+            title="تبديل الحساب"
+          >
+            <span>🔄</span>
+            <span>تبديل</span>
+          </button>
         </div>
       </div>
 
-      {/* Main Captain Body */}
+      {/* Main Captain Body Viewport */}
       <div className="relative flex-1 w-full overflow-hidden flex flex-col">
-        {/* TAB 1: RADAR / ACTIVE MAP */}
+        {/* ========================================================
+            TAB 1: RADAR / LIVE DISPATCH & DELIVERY PROGRESSION
+           ======================================================== */}
         {activeTab === 'radar' && (
           <div className="relative flex-1 w-full h-full flex flex-col">
             {/* Map Canvas Background */}
             <div className="absolute inset-0 z-0">
               <EgyptianMapCanvas
                 mode="captain"
-                pickupText={activeTrip ? currentRequest.pickupName : 'ميدان المحطة'}
-                dropoffText={activeTrip ? currentRequest.dropoffName : 'كفر الباجور'}
-                showRoute={activeTrip}
-                isCaptainOnline={isOnline}
-                hasIncomingRequest={hasIncomingRequest}
-                activeDeliveryStep={tripStep}
+                pickupText={activeAssignedOrder ? activeAssignedOrder.storeAddress : 'ميدان المحطة'}
+                dropoffText={activeAssignedOrder ? activeAssignedOrder.deliveryAddress : 'شارع الجيش'}
+                showRoute={Boolean(activeAssignedOrder)}
+                isCaptainOnline={isCaptainOnline}
+                hasIncomingRequest={Boolean(incomingDispatchOrder)}
+                activeDeliveryStep={
+                  activeAssignedOrder?.status === 'captain_assigned'
+                    ? 1
+                    : activeAssignedOrder?.status === 'at_pickup'
+                    ? 2
+                    : 3
+                }
               />
             </div>
 
-            {/* Floating Top Controls: Online/Offline Switch & Shift Earnings */}
+            {/* Top Online/Offline & Shift Summary Bar */}
             <div className="relative z-10 p-3 flex flex-col gap-2">
-              {/* Online / Offline Status Card */}
               <div className="bg-white/95 backdrop-blur-md rounded-2xl p-3 shadow-lg border border-slate-100 flex items-center justify-between">
                 <div className="flex items-center gap-2.5">
                   <div
-                    className={`w-4 h-4 rounded-full flex items-center justify-center ${
-                      isOnline ? 'bg-emerald-500 ring-4 ring-emerald-100 animate-pulse' : 'bg-slate-400'
+                    className={`w-3.5 h-3.5 rounded-full ${
+                      isCaptainOnline
+                        ? 'bg-emerald-500 ring-4 ring-emerald-100 animate-pulse'
+                        : 'bg-slate-400'
                     }`}
                   />
                   <div>
                     <div className="font-extrabold text-xs text-slate-900">
-                      {isOnline ? 'أنت متصل ومستعد للطلبات' : 'أنت غير متصل (استراحة)'}
+                      {isCaptainOnline ? 'متصل وجاهز للطلبات' : 'غير متصل (استراحة)'}
                     </div>
                     <div className="text-[10px] text-slate-500">
-                      {isOnline ? 'رادار الباجور مفعل • استقبال الطلبات الفورية' : 'لن تصلك أي طلبات جديدة'}
+                      {isCaptainOnline ? 'رادار الباجور مفعل • استقبال فوري' : 'لن تصلك طلبات جديدة'}
                     </div>
                   </div>
                 </div>
 
-                {/* Online Toggle Switch Button */}
                 <button
-                  onClick={() => setIsOnline(!isOnline)}
-                  className={`px-3 py-1.5 rounded-xl font-bold text-xs flex items-center gap-1.5 transition-all shadow-xs ${
-                    isOnline
-                      ? 'bg-rose-50 text-rose-700 border border-rose-200 hover:bg-rose-100'
+                  onClick={() => setIsCaptainOnline(!isCaptainOnline)}
+                  className={`px-3 py-1.5 rounded-xl font-bold text-xs flex items-center gap-1.5 transition-all shadow-2xs ${
+                    isCaptainOnline
+                      ? 'bg-rose-50 text-rose-700 border border-rose-200'
                       : 'bg-emerald-700 text-white hover:bg-emerald-800'
                   }`}
                 >
                   <Power className="w-3.5 h-3.5" />
-                  <span>{isOnline ? 'إيقاف' : 'اتصال'}</span>
+                  <span>{isCaptainOnline ? 'إيقاف' : 'اتصال'}</span>
                 </button>
               </div>
 
-              {/* Today's Earnings Snapshot Bar */}
-              <div className="bg-slate-900/90 backdrop-blur-md text-white rounded-xl p-2.5 shadow-md flex items-center justify-around text-center border border-slate-800">
+              {/* Earnings Strip */}
+              <div className="bg-slate-900/90 backdrop-blur-md text-white rounded-xl p-2 shadow-md flex items-center justify-around text-center border border-slate-800">
                 <div>
-                  <div className="text-[10px] text-slate-400">أرباح اليوم</div>
-                  <div className="text-xs font-black text-emerald-400">{todayEarningsEgp}.00 ج.م</div>
+                  <div className="text-[10px] text-slate-400">أرباح اليوم (٠٪ عمولة)</div>
+                  <div className="text-xs font-black text-emerald-400">{captainEarningsEgp}.00 ج.م</div>
                 </div>
-                <div className="h-6 w-px bg-slate-800" />
+                <div className="h-5 w-px bg-slate-800" />
                 <div>
-                  <div className="text-[10px] text-slate-400">الرحلات</div>
-                  <div className="text-xs font-extrabold text-white">{todayTripsCount} مشاوير</div>
+                  <div className="text-[10px] text-slate-400">الرحلات المكتملة</div>
+                  <div className="text-xs font-extrabold text-white">{captainCompletedDeliveries} مشاوير</div>
                 </div>
-                <div className="h-6 w-px bg-slate-800" />
+                <div className="h-5 w-px bg-slate-800" />
                 <div>
                   <div className="text-[10px] text-slate-400">عهدة الكاش</div>
-                  <div className="text-xs font-extrabold text-amber-300">{cashInHandEgp}.00 ج.م</div>
+                  <div className="text-xs font-extrabold text-amber-300">{captainCashHoldingEgp}.00 ج.م</div>
                 </div>
               </div>
-
-              {/* Trigger Demo Incoming Request (Helpful testing tool for user) */}
-              {!activeTrip && !hasIncomingRequest && isOnline && (
-                <button
-                  onClick={() => {
-                    setRequestCountdown(15);
-                    setHasIncomingRequest(true);
-                  }}
-                  className="mx-auto bg-white/90 backdrop-blur-xs hover:bg-white text-emerald-800 border border-emerald-300/80 px-3 py-1 rounded-full text-[11px] font-bold shadow-md flex items-center gap-1.5 transition-all active:scale-95"
-                >
-                  <Sparkles className="w-3.5 h-3.5 text-emerald-600 animate-spin" />
-                  <span>محاكاة طلب وارد جديد (تجربة الكابتن)</span>
-                </button>
-              )}
             </div>
 
-            {/* MODAL / BOTTOM SHEET: INCOMING REQUEST (High Alert UI with 15s Countdown) */}
-            {hasIncomingRequest && !activeTrip && (
-              <div className="relative z-30 mt-auto bg-white rounded-t-3xl p-5 shadow-2xl border-t-2 border-emerald-600 flex flex-col gap-3.5 animate-in slide-in-from-bottom duration-300">
-                {/* Header & Countdown Bar */}
+            {/* INCOMING DISPATCH MODAL SHEET (When a merchant finishes an order) */}
+            {incomingDispatchOrder && !activeAssignedOrder && (
+              <div className="relative z-30 mt-auto bg-white rounded-t-3xl p-5 shadow-2xl border-t-2 border-emerald-600 flex flex-col gap-3 animate-in slide-in-from-bottom duration-300">
+                {/* Header & Countdown */}
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-2">
                     <span className="w-3 h-3 rounded-full bg-rose-600 animate-ping" />
-                    <span className="font-black text-sm text-slate-900">طلب مشوار جديد وارد!</span>
+                    <span className="font-black text-sm text-slate-900">طلب توصيل جديد وارد!</span>
                   </div>
-                  {/* Circular / Pill countdown */}
-                  <div className="flex items-center gap-1.5 bg-rose-50 text-rose-700 px-3 py-1 rounded-full border border-rose-200 text-xs font-black">
+                  <div className="flex items-center gap-1 bg-rose-50 text-rose-700 px-2.5 py-0.5 rounded-full border border-rose-200 text-xs font-black">
                     <Clock className="w-3.5 h-3.5" />
-                    <span>متبقي: {requestCountdown} ثانية</span>
+                    <span>{requestCountdown} ثانية</span>
                   </div>
                 </div>
 
-                {/* Animated Progress Bar of timer */}
+                {/* Progress countdown bar */}
                 <div className="w-full bg-slate-100 rounded-full h-1.5 overflow-hidden">
                   <div
                     className="bg-rose-600 h-1.5 rounded-full transition-all duration-1000 ease-linear"
@@ -251,229 +267,193 @@ export const CaptainMobileExperience: React.FC<CaptainMobileExperienceProps> = (
                   />
                 </div>
 
-                {/* Fare & Service Tag */}
-                <div className="p-3 bg-emerald-50/80 rounded-2xl border border-emerald-200 flex items-center justify-between">
+                {/* Store and Fare details */}
+                <div className="p-3 bg-emerald-50 rounded-2xl border border-emerald-200 flex items-center justify-between">
                   <div>
-                    <div className="text-[10px] font-bold text-emerald-800">{currentRequest.serviceType}</div>
+                    <span className="text-[10px] font-bold text-emerald-800">أجرة التوصيل لك</span>
                     <div className="text-xl font-black text-emerald-950 mt-0.5">
-                      {currentRequest.fareEgp}.00 ج.م
+                      +{incomingDispatchOrder.deliveryFeeEgp}.00 ج.م
                     </div>
-                    <div className="text-[10px] text-emerald-700 font-semibold">{currentRequest.paymentMethodAr}</div>
+                    <span className="text-[10px] text-slate-500">
+                      المطلوب تحصيله كاش: {incomingDispatchOrder.totalEgp} ج.م
+                    </span>
                   </div>
                   <div className="text-left text-xs">
-                    <div className="font-bold text-slate-800">{currentRequest.customerName}</div>
-                    <div className="text-[10px] text-amber-600 font-bold flex items-center justify-end gap-1">
-                      ★ {currentRequest.customerRating}
-                    </div>
-                    <span className="text-[9px] px-1.5 py-0.2 rounded bg-white text-slate-600 border border-slate-200 inline-block mt-1">
-                      عميل موثوق
+                    <div className="font-extrabold text-slate-900">{incomingDispatchOrder.storeName}</div>
+                    <div className="text-[10px] text-slate-500">{incomingDispatchOrder.storeAddress}</div>
+                    <span className="text-[9px] font-bold px-1.5 py-0.2 rounded bg-white text-emerald-800 border border-emerald-200 inline-block mt-1">
+                      جاهز للاستلام الفوري
                     </span>
                   </div>
                 </div>
 
-                {/* Locations: Pickup & Dropoff */}
-                <div className="bg-slate-50 p-3 rounded-2xl border border-slate-200/80 flex flex-col gap-2 text-xs">
-                  <div className="flex items-start gap-2.5">
-                    <div className="w-3 h-3 rounded-full bg-emerald-600 mt-1 shrink-0" />
-                    <div className="flex-1">
-                      <div className="text-[10px] text-slate-400 font-semibold">موقع الاستلام ({currentRequest.pickupDistance})</div>
-                      <div className="font-bold text-slate-900">{currentRequest.pickupName}</div>
-                    </div>
+                {/* Route points */}
+                <div className="bg-slate-50 p-2.5 rounded-xl border border-slate-200 text-xs flex flex-col gap-1.5">
+                  <div className="flex items-center gap-2">
+                    <Store className="w-3.5 h-3.5 text-amber-700 shrink-0" />
+                    <span className="font-bold text-slate-700">استلام من:</span>
+                    <span className="truncate">{incomingDispatchOrder.storeName} ({incomingDispatchOrder.storeAddress})</span>
                   </div>
-                  <div className="h-px bg-slate-200 mr-5" />
-                  <div className="flex items-start gap-2.5">
-                    <div className="w-3 h-3 rounded-full bg-rose-600 mt-1 shrink-0" />
-                    <div className="flex-1">
-                      <div className="text-[10px] text-slate-400 font-semibold">نقطة التسليم ({currentRequest.dropoffDistance})</div>
-                      <div className="font-bold text-slate-900">{currentRequest.dropoffName}</div>
-                    </div>
+                  <div className="flex items-center gap-2">
+                    <MapPin className="w-3.5 h-3.5 text-rose-600 shrink-0" />
+                    <span className="font-bold text-slate-700">تسليم إلى:</span>
+                    <span className="truncate">{incomingDispatchOrder.customerName} ({incomingDispatchOrder.deliveryAddress})</span>
                   </div>
                 </div>
 
-                {/* Action Buttons: Accept / Decline */}
+                {/* Items preview */}
+                <div className="text-[11px] text-slate-600 bg-white p-2 rounded-lg border border-slate-200/80">
+                  الأصناف: {incomingDispatchOrder.items.map((i) => `${i.quantity}× ${i.productName}`).join('، ')}
+                </div>
+
+                {/* Action buttons */}
                 <div className="grid grid-cols-3 gap-2 pt-1">
                   <button
-                    onClick={() => setHasIncomingRequest(false)}
-                    className="py-3 px-3 rounded-xl border border-slate-200 text-slate-600 hover:bg-slate-100 font-bold text-xs"
+                    onClick={() => handleSkip(incomingDispatchOrder.id)}
+                    className="py-2.5 rounded-xl border border-slate-200 text-slate-600 hover:bg-slate-100 font-bold text-xs"
                   >
-                    تخطي الطلب
+                    تخطي
                   </button>
                   <button
-                    onClick={handleAcceptTrip}
-                    className="col-span-2 py-3 px-4 rounded-xl bg-emerald-700 hover:bg-emerald-800 text-white font-extrabold text-sm shadow-lg shadow-emerald-700/30 flex items-center justify-center gap-2 active:scale-98 transition-all"
+                    onClick={() => handleAccept(incomingDispatchOrder.id)}
+                    className="col-span-2 py-2.5 rounded-xl bg-emerald-700 hover:bg-emerald-800 text-white font-extrabold text-xs shadow-lg shadow-emerald-700/25 flex items-center justify-center gap-1.5 active:scale-95 transition-all"
                   >
                     <CheckCircle2 className="w-4 h-4" />
-                    <span>قبول المشوار الآن</span>
+                    <span>قبول التوصيل الآن (+{incomingDispatchOrder.deliveryFeeEgp} ج.م)</span>
                   </button>
                 </div>
               </div>
             )}
 
-            {/* ACTIVE TRIP EXECUTION SHEET */}
-            {activeTrip && (
+            {/* ACTIVE ASSIGNED DELIVERY SHEET (Linear State Transitions) */}
+            {activeAssignedOrder && (
               <div className="relative z-30 mt-auto bg-white rounded-t-3xl p-5 shadow-2xl border-t border-slate-100 flex flex-col gap-3.5 max-h-[85%] overflow-y-auto">
-                <div className="w-12 h-1 bg-slate-200 rounded-full mx-auto" />
+                <div className="w-10 h-1 bg-slate-200 rounded-full mx-auto" />
 
-                {/* Trip Progress Bar */}
+                {/* Header Stage */}
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-2">
                     <span className="w-2.5 h-2.5 rounded-full bg-emerald-600 animate-ping" />
                     <span className="font-black text-sm text-slate-900">
-                      {tripStep === 1 && 'التحرك لنقطة الاستلام'}
-                      {tripStep === 2 && 'وصلت لموقع العميل'}
-                      {tripStep === 3 && 'في الطريق للوجهة (كفر الباجور)'}
-                      {tripStep === 4 && 'تأكيد التسليم وتحصيل الكاش'}
-                      {tripStep === 5 && 'اكتمل المشوار بنجاح'}
+                      {activeAssignedOrder.status === 'captain_assigned' && 'التحرك لموقع المتجر'}
+                      {activeAssignedOrder.status === 'at_pickup' && 'استلام الطلب من التاجر'}
+                      {activeAssignedOrder.status === 'in_transit' && 'في الطريق للعميل'}
                     </span>
                   </div>
                   <span className="text-xs font-black text-emerald-800 bg-emerald-50 px-2 py-0.5 rounded-full">
-                    {currentRequest.fareEgp}.00 ج.م
+                    {activeAssignedOrder.orderNumber}
                   </span>
                 </div>
 
-                {/* Customer Contact Bar */}
-                <div className="p-3 bg-slate-50 rounded-2xl border border-slate-200/80 flex items-center justify-between">
-                  <div className="flex items-center gap-2.5">
-                    <div className="w-10 h-10 rounded-full bg-slate-200 flex items-center justify-center font-bold text-slate-700">
-                      👤
-                    </div>
-                    <div>
-                      <div className="font-extrabold text-xs text-slate-900">{currentRequest.customerName}</div>
-                      <div className="text-[10px] text-slate-500">طرد خفيف • {currentRequest.paymentMethodAr}</div>
-                    </div>
-                  </div>
-
-                  <div className="flex items-center gap-2">
-                    <a
-                      href="tel:01000000000"
-                      onClick={(e) => e.preventDefault()}
-                      className="w-8 h-8 rounded-full bg-emerald-700 text-white flex items-center justify-center shadow-xs"
-                      title="اتصال بالعميل"
-                    >
-                      <Phone className="w-3.5 h-3.5" />
-                    </a>
-                  </div>
-                </div>
-
                 {/* Current Target Location Highlight */}
-                <div className="p-3 bg-emerald-50/50 rounded-2xl border border-emerald-100 flex items-start gap-2.5">
+                <div className="p-3 bg-emerald-50/60 rounded-2xl border border-emerald-200 flex items-start gap-2.5">
                   <Navigation className="w-4 h-4 text-emerald-700 mt-0.5 shrink-0" />
                   <div className="text-xs">
                     <div className="text-[10px] text-emerald-800 font-bold">
-                      {tripStep <= 2 ? 'الوجهة الحالية: موقع الاستلام' : 'الوجهة الحالية: نقطة التسليم'}
+                      {activeAssignedOrder.status !== 'in_transit'
+                        ? 'الوجهة الحالية: موقع المتجر'
+                        : 'الوجهة الحالية: موقع العميل'}
                     </div>
                     <div className="font-extrabold text-slate-900 mt-0.5">
-                      {tripStep <= 2 ? currentRequest.pickupName : currentRequest.dropoffName}
-                    </div>
-                    <div className="text-[10px] text-slate-500 mt-0.5">
-                      {tripStep <= 2 ? currentRequest.pickupDistance : currentRequest.dropoffDistance}
+                      {activeAssignedOrder.status !== 'in_transit'
+                        ? `${activeAssignedOrder.storeName} - ${activeAssignedOrder.storeAddress}`
+                        : `${activeAssignedOrder.customerName} - ${activeAssignedOrder.deliveryAddress}`}
                     </div>
                   </div>
                 </div>
 
-                {/* Step 4: Cash Collection Assistant */}
-                {tripStep === 4 && (
-                  <div className="p-3.5 bg-amber-50 rounded-2xl border border-amber-200 flex flex-col gap-2.5">
+                {/* Customer / Store Contact info */}
+                <div className="p-3 bg-slate-50 rounded-2xl border border-slate-200/80 flex items-center justify-between text-xs">
+                  <div>
+                    <div className="font-extrabold text-slate-900">
+                      {activeAssignedOrder.customerName} ({activeAssignedOrder.customerPhone})
+                    </div>
+                    <div className="text-[10px] text-slate-500">
+                      الدفع: {activeAssignedOrder.paymentMethod === 'cash' ? 'كاش عند التسليم' : 'إلكتروني'}
+                    </div>
+                  </div>
+                  <a
+                    href="tel:01012345678"
+                    onClick={(e) => e.preventDefault()}
+                    className="w-8 h-8 rounded-full bg-emerald-700 text-white flex items-center justify-center shadow-xs"
+                    title="اتصال"
+                  >
+                    <Phone className="w-3.5 h-3.5" />
+                  </a>
+                </div>
+
+                {/* If In Transit: Cash Collection Confirmation section */}
+                {activeAssignedOrder.status === 'in_transit' && (
+                  <div className="p-3.5 bg-amber-50 rounded-2xl border border-amber-200 flex flex-col gap-2.5 text-xs">
                     <div className="flex items-center justify-between">
-                      <span className="font-extrabold text-xs text-amber-900">
-                        تحصيل المبلغ نقداً من العميل
-                      </span>
-                      <span className="font-black text-sm text-amber-950">
-                        المطلوب: {currentRequest.fareEgp} ج.م
+                      <span className="font-extrabold text-amber-900">تحصيل المبلغ نقداً:</span>
+                      <span className="font-black text-amber-950 text-sm">
+                        المطلوب: {activeAssignedOrder.totalEgp}.00 ج.م
                       </span>
                     </div>
 
-                    <div className="flex items-center gap-2 text-xs">
-                      <span className="text-slate-600 font-semibold shrink-0">المبلغ المستلم:</span>
+                    <div className="flex items-center gap-2">
+                      <span className="text-slate-600 font-semibold shrink-0">المستلم:</span>
                       <input
                         type="number"
+                        placeholder={activeAssignedOrder.totalEgp.toString()}
                         value={customerPaidInput}
                         onChange={(e) => setCustomerPaidInput(e.target.value)}
-                        className="w-20 px-2 py-1 bg-white border border-slate-300 rounded-lg text-center font-bold text-slate-900 focus:outline-hidden"
+                        className="w-20 px-2 py-1 bg-white border border-slate-300 rounded-lg text-center font-bold"
                       />
-                      <span className="text-slate-500 font-medium">ج.م</span>
-                      <div className="flex-1 text-left font-bold text-xs text-emerald-800">
-                        الباقي للعميل: <span className="font-black">{changeDue} ج.م</span>
+                      <span className="text-slate-500">ج.م</span>
+                      <div className="flex-1 text-left font-bold text-emerald-800">
+                        الباقي: {changeDue} ج.م
                       </div>
                     </div>
 
-                    <label className="flex items-center gap-2 text-xs font-bold text-slate-800 cursor-pointer pt-1">
+                    <label className="flex items-center gap-2 font-bold text-slate-800 cursor-pointer pt-1">
                       <input
                         type="checkbox"
-                        checked={cashCollected}
-                        onChange={(e) => setCashCollected(e.target.checked)}
+                        checked={cashConfirmed}
+                        onChange={(e) => setCashConfirmed(e.target.checked)}
                         className="w-4 h-4 text-emerald-600 rounded border-slate-300 accent-emerald-700"
                       />
-                      <span>أؤكد استلام كامل المبلغ ({currentRequest.fareEgp} ج.م) نقداً من العميل</span>
+                      <span>أؤكد استلام كامل المبلغ ({activeAssignedOrder.totalEgp} ج.م) نقداً من العميل</span>
                     </label>
                   </div>
                 )}
 
-                {/* Step Action Buttons */}
-                <div className="pt-1">
-                  {tripStep === 1 && (
+                {/* Stage Progression Buttons */}
+                <div>
+                  {activeAssignedOrder.status === 'captain_assigned' && (
                     <button
-                      onClick={() => setTripStep(2)}
-                      className="w-full py-3.5 rounded-xl bg-emerald-700 hover:bg-emerald-800 text-white font-extrabold text-sm shadow-lg shadow-emerald-700/25 flex items-center justify-center gap-2"
+                      onClick={() => captainUpdateStep(activeAssignedOrder.id, 'at_pickup')}
+                      className="w-full py-3 rounded-xl bg-emerald-700 hover:bg-emerald-800 text-white font-extrabold text-xs shadow-md shadow-emerald-700/20 flex items-center justify-center gap-1.5"
                     >
                       <MapPin className="w-4 h-4" />
-                      <span>وصلت لموقع الاستلام</span>
+                      <span>وصلت لموقع المتجر لاستلام الطلب</span>
                     </button>
                   )}
 
-                  {tripStep === 2 && (
+                  {activeAssignedOrder.status === 'at_pickup' && (
                     <button
-                      onClick={() => setTripStep(3)}
-                      className="w-full py-3.5 rounded-xl bg-emerald-700 hover:bg-emerald-800 text-white font-extrabold text-sm shadow-lg shadow-emerald-700/25 flex items-center justify-center gap-2"
+                      onClick={() => captainUpdateStep(activeAssignedOrder.id, 'in_transit')}
+                      className="w-full py-3 rounded-xl bg-emerald-700 hover:bg-emerald-800 text-white font-extrabold text-xs shadow-md shadow-emerald-700/20 flex items-center justify-center gap-1.5"
                     >
                       <Bike className="w-4 h-4" />
-                      <span>استلام الشحنة وبدء المشوار</span>
+                      <span>استلمت الشحنة وبدأت التحرك للعميل</span>
                     </button>
                   )}
 
-                  {tripStep === 3 && (
+                  {activeAssignedOrder.status === 'in_transit' && (
                     <button
-                      onClick={() => setTripStep(4)}
-                      className="w-full py-3.5 rounded-xl bg-emerald-700 hover:bg-emerald-800 text-white font-extrabold text-sm shadow-lg shadow-emerald-700/25 flex items-center justify-center gap-2"
-                    >
-                      <CheckCircle2 className="w-4 h-4" />
-                      <span>وصلت لنقطة التسليم للعميل</span>
-                    </button>
-                  )}
-
-                  {tripStep === 4 && (
-                    <button
-                      onClick={() => {
-                        setTripStep(5);
-                        handleCompleteTrip();
-                      }}
-                      disabled={!cashCollected}
-                      className={`w-full py-3.5 rounded-xl font-extrabold text-sm shadow-lg flex items-center justify-center gap-2 transition-all ${
-                        cashCollected
-                          ? 'bg-emerald-700 hover:bg-emerald-800 text-white shadow-emerald-700/25 cursor-pointer'
+                      onClick={() => captainConfirmCashCollection(activeAssignedOrder.id)}
+                      disabled={!cashConfirmed}
+                      className={`w-full py-3 rounded-xl font-extrabold text-xs shadow-md flex items-center justify-center gap-1.5 transition-all ${
+                        cashConfirmed
+                          ? 'bg-emerald-700 hover:bg-emerald-800 text-white cursor-pointer shadow-emerald-700/20'
                           : 'bg-slate-200 text-slate-400 cursor-not-allowed'
                       }`}
                     >
                       <CheckCircle2 className="w-4 h-4" />
-                      <span>تأكيد التسليم وإنهاء المشوار (+{currentRequest.fareEgp} ج.م)</span>
+                      <span>تأكيد التسليم وتحصيل الكاش (+{activeAssignedOrder.deliveryFeeEgp} ج.م)</span>
                     </button>
-                  )}
-
-                  {tripStep === 5 && (
-                    <div className="text-center py-2 flex flex-col gap-2">
-                      <div className="text-xs font-bold text-emerald-800">
-                        تم تسجيل الرحلة وإضافة الأرباح لمحفظتك بنجاح!
-                      </div>
-                      <button
-                        onClick={() => {
-                          setActiveTrip(false);
-                          setTripStep(1);
-                        }}
-                        className="w-full py-3 rounded-xl bg-slate-900 text-white text-xs font-bold"
-                      >
-                        العودة للرادار والجاهزية
-                      </button>
-                    </div>
                   )}
                 </div>
               </div>
@@ -481,146 +461,112 @@ export const CaptainMobileExperience: React.FC<CaptainMobileExperienceProps> = (
           </div>
         )}
 
-        {/* TAB 2: TRIP HISTORY */}
+        {/* ========================================================
+            TAB 2: CAPTAIN TRIP HISTORY
+           ======================================================== */}
         {activeTab === 'trips' && (
           <div className="flex-1 p-4 overflow-y-auto flex flex-col gap-3">
-            <h2 className="font-extrabold text-base text-slate-900">سجل مشاوير الكابتن</h2>
-            <div className="flex flex-col gap-3">
-              {[
-                {
-                  id: 'CAP-7491',
-                  time: 'منذ 35 دقيقة',
-                  from: 'ميدان المحطة',
-                  to: 'مستشفى الباجور العام',
-                  fare: '21.00 ج.م',
-                  type: 'سكوتر طرود',
-                  status: 'مكتملة',
-                },
-                {
-                  id: 'CAP-7488',
-                  time: 'منذ ساعتين',
-                  from: 'شارع الجمهورية - أمام بنك مصر',
-                  to: 'قرية كفر الباجور',
-                  fare: '26.00 ج.م',
-                  type: 'سكوتر طرود',
-                  status: 'مكتملة',
-                },
-                {
-                  id: 'CAP-7480',
-                  time: 'صباح اليوم، 08:30 ص',
-                  from: 'مجلس مدينة الباجور',
-                  to: 'شارع الجيش',
-                  fare: '18.00 ج.م',
-                  type: 'سكوتر طرود',
-                  status: 'مكتملة',
-                },
-              ].map((trip) => (
-                <div key={trip.id} className="bg-white p-3.5 rounded-2xl border border-slate-100 shadow-xs flex flex-col gap-2 text-xs">
-                  <div className="flex items-center justify-between">
-                    <span className="font-extrabold text-slate-900">{trip.id} • {trip.type}</span>
-                    <span className="font-black text-emerald-800 text-sm">+{trip.fare}</span>
+            <h2 className="font-extrabold text-base text-slate-900">سجل المشاوير المكتملة للكابتن</h2>
+            {captainPastOrders.length === 0 ? (
+              <div className="bg-white p-6 rounded-2xl border border-slate-100 text-center text-xs text-slate-400">
+                لا توجد مشاوير مكتملة مسجلة في هذه الوردية بعد.
+              </div>
+            ) : (
+              <div className="flex flex-col gap-2.5">
+                {captainPastOrders.map((ord) => (
+                  <div
+                    key={ord.id}
+                    className="bg-white p-3.5 rounded-2xl border border-slate-200/80 shadow-2xs flex flex-col gap-1.5 text-xs"
+                  >
+                    <div className="flex items-center justify-between">
+                      <span className="font-extrabold text-slate-900">
+                        {ord.orderNumber} • {ord.storeName}
+                      </span>
+                      <span className="font-black text-emerald-800">
+                        +{ord.deliveryFeeEgp}.00 ج.م
+                      </span>
+                    </div>
+                    <div className="text-[11px] text-slate-500 flex justify-between">
+                      <span>العميل: {ord.customerName}</span>
+                      <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700">
+                        مكتمل وتحصيل كاش
+                      </span>
+                    </div>
+                    <div className="text-[10px] text-slate-400 truncate">
+                      التسليم: {ord.deliveryAddress}
+                    </div>
                   </div>
-                  <div className="text-[11px] text-slate-500 flex justify-between">
-                    <span>{trip.time}</span>
-                    <span className="text-emerald-700 font-bold bg-emerald-50 px-2 py-0.5 rounded-full">
-                      {trip.status}
-                    </span>
-                  </div>
-                  <div className="text-slate-700 pt-1 border-t border-slate-100 flex flex-col gap-0.5">
-                    <div className="truncate">من: {trip.from}</div>
-                    <div className="truncate">إلى: {trip.to}</div>
-                  </div>
-                </div>
-              ))}
-            </div>
+                ))}
+              </div>
+            )}
           </div>
         )}
 
-        {/* TAB 3: WALLET & SUBSCRIPTION */}
+        {/* ========================================================
+            TAB 3: WALLET & SUBSCRIPTION
+           ======================================================== */}
         {activeTab === 'wallet' && (
-          <div className="flex-1 p-4 overflow-y-auto flex flex-col gap-3">
-            <h2 className="font-extrabold text-base text-slate-900">المحفظة والاشتراك (0% عمولة)</h2>
+          <div className="flex-1 p-4 overflow-y-auto flex flex-col gap-3.5">
+            <h2 className="font-extrabold text-base text-slate-900">المحفظة والاشتراك (٠٪ عمولة)</h2>
 
-            {/* Subscription Status Card */}
-            <div className="p-4 rounded-2xl bg-gradient-to-r from-emerald-800 to-emerald-950 text-white shadow-lg flex flex-col gap-3">
+            <div className="p-4 rounded-2xl bg-gradient-to-r from-emerald-800 to-emerald-950 text-white shadow-lg flex flex-col gap-2.5">
               <div className="flex items-center justify-between">
                 <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-500/30 text-emerald-200">
                   باقة الكابتن الأسبوعية
                 </span>
-                <span className="font-extrabold text-xs text-amber-300">
-                  نشطة (متبقي {subscriptionDaysLeft} أيام)
-                </span>
+                <span className="text-xs font-bold text-amber-300">سارية (متبقي ٥ أيام)</span>
               </div>
               <div>
-                <div className="text-xs text-emerald-200">نموذج اشتراك بدون عمولة</div>
-                <div className="text-lg font-black mt-0.5">١٠٠٪ من قيمة المشاوير لك بالكامل</div>
-              </div>
-              <div className="text-[11px] text-emerald-100/80 pt-2 border-t border-emerald-700/60 flex items-center justify-between">
-                <span>تاريخ التجديد: ٢٦ أكتوبر ٢٠٢٥</span>
-                <button className="px-2.5 py-1 bg-white text-emerald-950 rounded-lg font-bold text-xs shadow-xs">
-                  تجديد الباقة
-                </button>
+                <h3 className="font-black text-lg">١٠٠٪ من قيمة المشاوير لك بالكامل</h3>
+                <p className="text-xs text-emerald-100/80">
+                  لا نقتطع نسب مئوية من مشاويرك داخل مركز الباجور.
+                </p>
               </div>
             </div>
 
-            {/* Cash in Hand & Remittance Card */}
-            <div className="bg-white p-4 rounded-2xl border border-slate-100 shadow-xs flex flex-col gap-3">
+            <div className="bg-white p-4 rounded-2xl border border-slate-200/80 shadow-2xs space-y-3 text-xs">
               <div className="flex items-center justify-between">
-                <div className="flex items-center gap-2">
-                  <Banknote className="w-5 h-5 text-amber-600" />
-                  <div>
-                    <div className="text-xs font-bold text-slate-800">عهدة الكاش المحصلة</div>
-                    <div className="text-[10px] text-slate-500">مبالغ المشاوير المسددة نقداً اليوم</div>
-                  </div>
-                </div>
-                <div className="text-base font-black text-slate-900">{cashInHandEgp}.00 ج.م</div>
+                <span className="text-slate-500">أرباح اليوم:</span>
+                <span className="font-black text-emerald-800 text-sm">{captainEarningsEgp}.00 ج.م</span>
               </div>
-
-              <div className="p-2.5 bg-slate-50 rounded-xl text-[11px] text-slate-600 flex items-center justify-between">
-                <span>الحد الأقصى المسموح للعهدة النقدية:</span>
-                <span className="font-bold text-slate-800">1,500 ج.م</span>
+              <div className="flex items-center justify-between">
+                <span className="text-slate-500">عهدة الكاش المحصلة باليد:</span>
+                <span className="font-black text-amber-900 text-sm">{captainCashHoldingEgp}.00 ج.م</span>
+              </div>
+              <div className="flex items-center justify-between">
+                <span className="text-slate-500">سقف العهدة المسموح:</span>
+                <span className="font-bold text-slate-800">1,000 ج.م</span>
               </div>
             </div>
           </div>
         )}
 
-        {/* TAB 4: PROFILE */}
+        {/* ========================================================
+            TAB 4: PROFILE
+           ======================================================== */}
         {activeTab === 'profile' && (
           <div className="flex-1 p-4 overflow-y-auto flex flex-col gap-3">
-            <div className="bg-white p-4 rounded-2xl border border-slate-100 shadow-xs flex items-center gap-3">
-              <div className="w-14 h-14 rounded-full bg-slate-900 text-emerald-400 flex items-center justify-center font-black text-2xl">
-                👨‍✈️
+            <div className="bg-white p-4 rounded-2xl border border-slate-200/80 shadow-2xs flex items-center gap-3">
+              <div className="w-14 h-14 rounded-2xl bg-slate-900 text-emerald-400 flex items-center justify-center font-black text-2xl shadow-xs">
+                {currentUser.avatar}
               </div>
               <div>
-                <h3 className="font-extrabold text-sm text-slate-900">محمود السيد الصياد</h3>
-                <p className="text-xs text-slate-500">+20 11 9876 5432</p>
-                <div className="flex items-center gap-1.5 mt-1">
-                  <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200">
-                    كابتن معتمد
-                  </span>
-                  <span className="text-[10px] font-bold text-amber-600 flex items-center">
-                    ★ 4.92 (420 مشوار)
-                  </span>
+                <h3 className="font-extrabold text-sm text-slate-900">{currentUser.name}</h3>
+                <p className="text-xs text-slate-500">{currentUser.phone}</p>
+                <div className="text-[11px] text-emerald-800 font-semibold mt-0.5">
+                  {currentUser.vehicleInfo}
                 </div>
               </div>
             </div>
 
-            <div className="bg-white rounded-2xl border border-slate-100 shadow-xs divide-y divide-slate-100 text-xs text-slate-700 font-semibold">
+            <div className="bg-white rounded-2xl border border-slate-200/80 shadow-2xs divide-y divide-slate-100 text-xs text-slate-700 font-semibold">
               <div className="p-3.5 flex items-center justify-between">
-                <span>بيانات المركبة (سكوتر بينيلي - ٥٨٢٤ م ن و)</span>
-                <ChevronLeft className="w-4 h-4 text-slate-400" />
+                <span>التقييم العام في الباجور</span>
+                <span className="text-amber-600 font-bold">★ 4.92 (420 مشوار)</span>
               </div>
               <div className="p-3.5 flex items-center justify-between">
-                <span>وثائق ورخصة القيادة</span>
-                <span className="text-emerald-700 font-bold">موثقة وسارية</span>
-              </div>
-              <div className="p-3.5 flex items-center justify-between">
-                <span>شروط ومعايير السلامة بالباجور</span>
-                <ChevronLeft className="w-4 h-4 text-slate-400" />
-              </div>
-              <div className="p-3.5 flex items-center justify-between">
-                <span>الدعم الفني لكباتن مشوار</span>
-                <ChevronLeft className="w-4 h-4 text-slate-400" />
+                <span>حالة الوثائق والرخصة</span>
+                <span className="text-emerald-700 font-bold">معتمدة وسارية</span>
               </div>
             </div>
           </div>
@@ -628,7 +574,7 @@ export const CaptainMobileExperience: React.FC<CaptainMobileExperienceProps> = (
       </div>
 
       {/* Captain Mobile Bottom Navigation Bar */}
-      <div className="relative z-20 bg-white border-t border-slate-100 py-1.5 px-3 flex items-center justify-around shadow-sm">
+      <div className="relative z-20 bg-white border-t border-slate-100 py-1.5 px-3 flex items-center justify-around shadow-sm shrink-0">
         <button
           onClick={() => setActiveTab('radar')}
           className={`flex flex-col items-center py-1 px-3 rounded-xl transition-colors ${
