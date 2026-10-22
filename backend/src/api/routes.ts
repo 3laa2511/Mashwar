@@ -9,7 +9,6 @@ import { PricingEngine } from '../pricing/pricingEngine.js';
 import { OrderFsm } from '../orders/orderFsm.js';
 import { CaptainEligibilityEngine } from '../captain/captainEligibility.js';
 import { AssignmentService } from '../dispatch/assignmentService.js';
-import { WebhookService } from '../payments/webhookService.js';
 import { AccessControlGuard, UserRole, SecurityPermission } from '../security/rbac.js';
 import { AuditLogger, AuditActionType } from '../security/auditLogger.js';
 import { PersistentStore, SystemSettings } from '../store/persistentStore.js';
@@ -18,7 +17,6 @@ import {
   CaptainProfile,
   ServiceTypeId,
   OrderStatus,
-  WebhookEventPayload,
 } from '../types/index.js';
 
 export const router = Router();
@@ -186,6 +184,15 @@ router.post('/orders', (req: Request, res: Response) => {
       quoteSignature,
     } = req.body;
 
+    if (paymentMethod !== 'cash_on_delivery') {
+      return sendError(
+        res,
+        'ELECTRONIC_PAYMENTS_DISABLED',
+        'الدفع الإلكتروني غير متاح حاليًا. اختر الدفع النقدي عند الاستلام.',
+        503
+      );
+    }
+
     if (!serviceTypeId || !pickup || !dropoff || !itemDescription || !quoteSignature) {
       return sendError(res, 'VALIDATION_ERROR', 'بيانات الطلب غير مكتملة أو توقيع التسعيرة مفقود.', 400);
     }
@@ -216,7 +223,8 @@ router.post('/orders', (req: Request, res: Response) => {
       specialInstructions,
       totalFarePiasters: Number(totalFarePiasters),
       paymentMethod,
-      isPaid: paymentMethod !== 'cash_on_delivery',
+      // Creating an order never proves that money has been collected.
+      isPaid: false,
       createdAt: now,
       updatedAt: now,
     };
@@ -447,51 +455,22 @@ router.post('/captain/orders/:id/cash-collection', (req: Request, res: Response)
 // ----------------------------------------------------------------------------
 // 5. Payment Intents & Verified Webhooks
 // ----------------------------------------------------------------------------
-router.post('/payments/intents', (req: Request, res: Response) => {
-  const { orderId, provider = 'paymob' } = req.body;
-  const order = ordersDb.get(orderId) || PersistentStore.getOrderById(orderId);
-
-  if (!order) {
-    return sendError(res, 'ORDER_NOT_FOUND', 'الطلب غير موجود لإصدار تفويض دفع.', 404);
-  }
-
-  const paymentIntentId = `pi_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
-  return sendSuccess(res, {
-    paymentIntentId,
-    orderId: order.id,
-    amountPiasters: order.totalFarePiasters,
-    formattedAmount: `${(order.totalFarePiasters / 100).toFixed(2)} ج.م`,
-    currency: 'EGP',
-    provider,
-    clientSecret: `sec_${Math.random().toString(36).substring(2, 12)}`,
-    status: 'requires_customer_action',
-  });
+router.post('/payments/intents', (_req: Request, res: Response) => {
+  return sendError(
+    res,
+    'ELECTRONIC_PAYMENTS_DISABLED',
+    'الدفع الإلكتروني غير مفعّل؛ لم يتم إنشاء تفويض أو تحصيل أي مبلغ.',
+    503
+  );
 });
 
-router.post('/webhooks/payments/:provider', async (req: Request, res: Response) => {
-  try {
-    const provider = req.params.provider as 'paymob' | 'fawry' | 'vodafone_cash';
-    const signature = (req.headers['x-provider-signature'] as string) || '';
-    const rawBody = JSON.stringify(req.body);
-    const payload = req.body as WebhookEventPayload;
-
-    const result = await WebhookService.processWebhook(rawBody, signature, payload, async (event) => {
-      if (event.orderId && (ordersDb.has(event.orderId) || PersistentStore.getOrderById(event.orderId))) {
-        const ord = ordersDb.get(event.orderId) || PersistentStore.getOrderById(event.orderId)!;
-        ord.isPaid = true;
-        ordersDb.set(ord.id, ord);
-        PersistentStore.saveOrder(ord);
-      }
-    });
-
-    if (!result.received && result.status === 'SIGNATURE_FAILED') {
-      return res.status(401).json(result);
-    }
-
-    return res.status(200).json(result);
-  } catch (err: any) {
-    return res.status(400).json({ received: false, error: err.message });
-  }
+router.post('/webhooks/payments/:provider', (_req: Request, res: Response) => {
+  return sendError(
+    res,
+    'ELECTRONIC_PAYMENTS_DISABLED',
+    'معالجة إشعارات الدفع الإلكتروني غير مفعّلة؛ لم يتم تأكيد أي عملية دفع.',
+    503
+  );
 });
 
 // ----------------------------------------------------------------------------

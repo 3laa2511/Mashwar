@@ -23,6 +23,7 @@ import { WebhookService } from '../src/payments/webhookService.js';
 import { AccessControlGuard } from '../src/security/rbac.js';
 import { AuditLogger } from '../src/security/auditLogger.js';
 import { PersistentStore } from '../src/store/persistentStore.js';
+import { createServer } from '../src/api/server.js';
 import { Order, CaptainProfile, WebhookEventPayload } from '../src/types/index.js';
 
 interface TestResult {
@@ -642,6 +643,104 @@ export async function runAllTests(): Promise<{
     }
     assert(threw, 'Must reject unlocking passenger transport');
     assert(PersistentStore.getSettings().passengerMobilityLocked === true, 'Lock must remain enforced');
+  });
+
+  // --------------------------------------------------------------------------
+  // SUITE 12: Electronic Payment Fail-Closed Safety
+  // --------------------------------------------------------------------------
+  console.log('\n▶ SUITE 12: Electronic Payment Fail-Closed Safety');
+
+  await runTest('Payment safety', 'Never marks a new cash-on-delivery order paid and disables simulated electronic collection', async () => {
+    const app = createServer();
+    const server = app.listen(0);
+    try {
+      await new Promise<void>((resolve, reject) => {
+        server.once('listening', resolve);
+        server.once('error', reject);
+      });
+      const address = server.address() as { port: number } | null;
+      assert(address !== null && typeof address.port === 'number', 'Test API must bind to an ephemeral port');
+      const baseUrl = `http://127.0.0.1:${address!.port}/api/v1`;
+
+      const quoteResponse = await fetch(`${baseUrl}/quotes`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ serviceTypeId: 'package', distanceKm: 2 }),
+      });
+      const quoteBody = await quoteResponse.json() as any;
+      assert(quoteResponse.status === 201, 'Quote endpoint must return 201 for the integration test');
+      const quote = quoteBody.data;
+      assert(typeof quote.signature === 'string' && quote.signature.length > 0, 'Quote must include a server signature');
+
+      const electronicOrderResponse = await fetch(`${baseUrl}/orders`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          customerId: 'test-customer',
+          customerName: 'Test Customer',
+          customerPhone: '01000000000',
+          serviceTypeId: quote.serviceTypeId,
+          quoteId: quote.quoteId,
+          pickup: { address: 'Pickup test' },
+          dropoff: { address: 'Dropoff test' },
+          itemDescription: 'Test parcel',
+          totalFarePiasters: quote.totalFarePiasters,
+          paymentMethod: 'card',
+          quoteExpiresAt: quote.expiresAt,
+          quoteSignature: quote.signature,
+        }),
+      });
+      const electronicOrderBody = await electronicOrderResponse.json() as any;
+      assert(electronicOrderResponse.status === 503, 'Electronic order payment must be rejected with 503');
+      assert(electronicOrderBody.error?.code === 'ELECTRONIC_PAYMENTS_DISABLED', 'Electronic order payment must use the explicit disabled code');
+
+      const orderResponse = await fetch(`${baseUrl}/orders`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', 'idempotency-key': `payment-safety-${Date.now()}` },
+        body: JSON.stringify({
+          customerId: 'test-customer',
+          customerName: 'Test Customer',
+          customerPhone: '01000000000',
+          serviceTypeId: quote.serviceTypeId,
+          quoteId: quote.quoteId,
+          pickup: { address: 'Pickup test' },
+          dropoff: { address: 'Dropoff test' },
+          itemDescription: 'Test parcel',
+          totalFarePiasters: quote.totalFarePiasters,
+          paymentMethod: 'cash_on_delivery',
+          quoteExpiresAt: quote.expiresAt,
+          quoteSignature: quote.signature,
+        }),
+      });
+      const orderBody = await orderResponse.json() as any;
+      assert(orderResponse.status === 201, 'Cash-on-delivery order must still be creatable');
+      assert(orderBody.data?.isPaid === false, 'New cash-on-delivery order must start unpaid');
+      const orderId = orderBody.data.id;
+
+      const intentResponse = await fetch(`${baseUrl}/payments/intents`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ orderId, provider: 'paymob' }),
+      });
+      const intentBody = await intentResponse.json() as any;
+      assert(intentResponse.status === 503, 'Payment intent endpoint must be disabled');
+      assert(intentBody.error?.code === 'ELECTRONIC_PAYMENTS_DISABLED', 'Payment intent must not return a fake client secret');
+
+      const webhookResponse = await fetch(`${baseUrl}/webhooks/payments/paymob`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ provider: 'paymob', eventId: 'fake-event', eventType: 'TRANSACTION_SUCCESS', orderId }),
+      });
+      const webhookBody = await webhookResponse.json() as any;
+      assert(webhookResponse.status === 503, 'Electronic payment webhook must be disabled until a real provider is integrated');
+      assert(webhookBody.error?.code === 'ELECTRONIC_PAYMENTS_DISABLED', 'Webhook must not claim a fake payment was processed');
+
+      const persistedOrderResponse = await fetch(`${baseUrl}/orders/${orderId}`);
+      const persistedOrderBody = await persistedOrderResponse.json() as any;
+      assert(persistedOrderBody.data?.isPaid === false, 'Rejected electronic payment flow must not mark the order paid');
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
   });
 
   // --------------------------------------------------------------------------
