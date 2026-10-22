@@ -26,6 +26,7 @@ import { PersistentStore } from '../src/store/persistentStore.js';
 import { Order, CaptainProfile, WebhookEventPayload } from '../src/types/index.js';
 import express from 'express';
 import { router as apiRouter } from '../src/api/routes.js';
+import { createServer } from '../src/api/server.js';
 
 interface TestResult {
   suite: string;
@@ -688,6 +689,65 @@ export async function runAllTests(): Promise<{
       await new Promise<void>((resolve, reject) => {
         server.close((error) => error ? reject(error) : resolve());
       });
+    }
+  });
+
+  // --------------------------------------------------------------------------
+  // SUITE 13: Production API Authentication Wiring
+  // --------------------------------------------------------------------------
+  console.log('\n▶ SUITE 13: Production API Authentication Wiring');
+
+  await runTest('AuthWiring', 'Rejects missing auth and spoofed admin headers through createServer', async () => {
+    const previousUrl = process.env.SUPABASE_URL;
+    const previousKey = process.env.SUPABASE_ANON_KEY;
+    delete process.env.SUPABASE_URL;
+    delete process.env.SUPABASE_ANON_KEY;
+
+    const app = createServer();
+    const server = app.listen(0, '127.0.0.1');
+    try {
+      await new Promise<void>((resolve, reject) => {
+        server.once('listening', resolve);
+        server.once('error', reject);
+      });
+      const address = server.address();
+      assert(address !== null && typeof address !== 'string', 'Auth wiring test server must bind an ephemeral port');
+      const baseUrl = `http://127.0.0.1:${address.port}/api/v1`;
+
+      const protectedResponse = await fetch(`${baseUrl}/orders`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ customerId: 'victim', actorRole: 'owner' }),
+      });
+      const protectedPayload = await protectedResponse.json() as { error?: { code?: string } };
+      assert(protectedResponse.status === 503, 'Order creation without a principal must fail closed');
+      assert(protectedPayload.error?.code === 'AUTHENTICATION_REQUIRED', 'Missing principal must be rejected');
+
+      const adminResponse = await fetch(`${baseUrl}/admin/overview`, {
+        headers: { 'x-actor-id': 'attacker', 'x-actor-role': 'owner', 'x-actor-name': 'spoofed owner' },
+      });
+      assert(adminResponse.status === 401, 'Admin access without a verified principal must be rejected');
+
+      const invalidTokenResponse = await fetch(`${baseUrl}/orders`, {
+        method: 'POST',
+        headers: {
+          authorization: 'Bearer definitely-not-a-real-token',
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify({ customerId: 'victim' }),
+      });
+      const invalidTokenPayload = await invalidTokenResponse.json() as { error?: { code?: string } };
+      assert(invalidTokenResponse.status === 503, 'Auth provider misconfiguration must fail closed');
+      assert(invalidTokenPayload.error?.code === 'AUTH_PROVIDER_NOT_CONFIGURED', 'Auth misconfiguration must be explicit');
+
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => error ? reject(error) : resolve());
+      });
+      if (previousUrl === undefined) delete process.env.SUPABASE_URL;
+      else process.env.SUPABASE_URL = previousUrl;
+      if (previousKey === undefined) delete process.env.SUPABASE_ANON_KEY;
+      else process.env.SUPABASE_ANON_KEY = previousKey;
     }
   });
 
