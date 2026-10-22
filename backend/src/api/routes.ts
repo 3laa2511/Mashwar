@@ -114,6 +114,38 @@ function sendError(res: Response, code: string, message: string, statusCode: num
   });
 }
 
+/**
+ * Fail closed until a trusted authentication middleware attaches a verified principal.
+ * Client-supplied actorId/actorRole/captainId are never authentication credentials.
+ *
+ * This router intentionally has no JWT verifier yet. Therefore sensitive routes stay
+ * unavailable (503) until the server application wires a real verifier before this router.
+ */
+type VerifiedPrincipal = {
+  userId: string;
+  role: UserRole;
+};
+
+type RequestWithPrincipal = Request & { auth?: VerifiedPrincipal };
+
+function requireVerifiedPrincipal(req: Request, res: Response, next: NextFunction) {
+  const principal = (req as RequestWithPrincipal).auth;
+  if (
+    !principal ||
+    typeof principal.userId !== 'string' ||
+    principal.userId.trim().length === 0 ||
+    typeof principal.role !== 'string'
+  ) {
+    return sendError(
+      res,
+      'AUTHENTICATION_REQUIRED',
+      'يلزم تسجيل الدخول والتحقق من الهوية قبل تنفيذ هذه العملية.',
+      503
+    );
+  }
+  return next();
+}
+
 // ----------------------------------------------------------------------------
 // 1. Health & Hub Status
 // ----------------------------------------------------------------------------
@@ -162,7 +194,7 @@ router.post('/quotes', (req: Request, res: Response) => {
 // ----------------------------------------------------------------------------
 // 3. Order Creation & Life Cycle
 // ----------------------------------------------------------------------------
-router.post('/orders', (req: Request, res: Response) => {
+router.post('/orders', requireVerifiedPrincipal, (req: Request, res: Response) => {
   try {
     const idempotencyKey = req.headers['idempotency-key'] as string;
     if (idempotencyKey && idempotencyStore.has(idempotencyKey)) {
@@ -249,7 +281,7 @@ router.post('/orders', (req: Request, res: Response) => {
   }
 });
 
-router.get('/orders/:id', (req: Request, res: Response) => {
+router.get('/orders/:id', requireVerifiedPrincipal, (req: Request, res: Response) => {
   const order = ordersDb.get(req.params.id) || PersistentStore.getOrderById(req.params.id);
   if (!order) {
     return sendError(res, 'ORDER_NOT_FOUND', 'عذراً، الطلب المطلوب غير موجود.', 404);
@@ -257,7 +289,7 @@ router.get('/orders/:id', (req: Request, res: Response) => {
   return sendSuccess(res, order);
 });
 
-router.post('/orders/:id/transitions', (req: Request, res: Response) => {
+router.post('/orders/:id/transitions', requireVerifiedPrincipal, (req: Request, res: Response) => {
   try {
     const order = ordersDb.get(req.params.id) || PersistentStore.getOrderById(req.params.id);
     if (!order) {
@@ -294,7 +326,7 @@ router.post('/orders/:id/transitions', (req: Request, res: Response) => {
   }
 });
 
-router.post('/orders/:id/cancel', (req: Request, res: Response) => {
+router.post('/orders/:id/cancel', requireVerifiedPrincipal, (req: Request, res: Response) => {
   try {
     const order = ordersDb.get(req.params.id) || PersistentStore.getOrderById(req.params.id);
     if (!order) {
@@ -373,7 +405,7 @@ router.get('/captain/subscription', (req: Request, res: Response) => {
   });
 });
 
-router.post('/captain/orders/:id/accept', async (req: Request, res: Response) => {
+router.post('/captain/orders/:id/accept', requireVerifiedPrincipal, async (req: Request, res: Response) => {
   try {
     const { captainId } = req.body;
     const captain = mockCaptains.get(captainId) || PersistentStore.getCaptainById(captainId);
@@ -405,7 +437,7 @@ router.post('/captain/orders/:id/accept', async (req: Request, res: Response) =>
   }
 });
 
-router.post('/captain/orders/:id/cash-collection', (req: Request, res: Response) => {
+router.post('/captain/orders/:id/cash-collection', requireVerifiedPrincipal, (req: Request, res: Response) => {
   try {
     const { captainId, amountCollectedPiasters, customerConfirmed, notes } = req.body;
     const order = ordersDb.get(req.params.id) || PersistentStore.getOrderById(req.params.id);
