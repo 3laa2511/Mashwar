@@ -129,7 +129,8 @@ type VerifiedPrincipal = {
 type RequestWithPrincipal = Request & { auth?: VerifiedPrincipal };
 
 function requireVerifiedPrincipal(req: Request, res: Response, next: NextFunction) {
-  const principal = (req as RequestWithPrincipal).auth;
+  const authenticatedRequest = req as RequestWithPrincipal;
+  const principal = authenticatedRequest.auth;
   if (
     !principal ||
     typeof principal.userId !== 'string' ||
@@ -143,6 +144,31 @@ function requireVerifiedPrincipal(req: Request, res: Response, next: NextFunctio
       503
     );
   }
+
+  // Never allow body fields to override the identity established by the verifier.
+  if (req.body && typeof req.body === 'object' && !Array.isArray(req.body)) {
+    req.body.actorId = principal.userId;
+    req.body.actorRole = principal.role;
+    if (req.path === '/orders') {
+      req.body.customerId = principal.userId;
+    }
+  }
+
+  // Captain endpoints must resolve the captain profile from the verified user,
+  // not from a client-supplied captainId.
+  if (req.path.startsWith('/captain/orders/')) {
+    if (principal.role !== 'captain') {
+      return sendError(res, 'INSUFFICIENT_PERMISSIONS', 'هذه العملية متاحة للكابتن فقط.', 403);
+    }
+    const captain = Array.from(mockCaptains.values()).find((item) => item.userId === principal.userId);
+    if (!captain) {
+      return sendError(res, 'CAPTAIN_PROFILE_REQUIRED', 'لا يوجد ملف كابتن موثق لهذا الحساب.', 403);
+    }
+    if (req.body && typeof req.body === 'object' && !Array.isArray(req.body)) {
+      req.body.captainId = captain.id;
+    }
+  }
+
   return next();
 }
 
