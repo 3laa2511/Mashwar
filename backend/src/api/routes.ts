@@ -283,8 +283,8 @@ router.post('/orders/:id/transitions', (req: Request, res: Response) => {
       transition: {
         from: result.previousStatus,
         to: result.order.status,
-        at: result.transitionedAt,
-        messageAr: result.messageAr,
+        at: result.auditLog.timestamp,
+        messageAr: 'تم تحديث حالة الطلب بنجاح.',
       },
     });
   } catch (err: any) {
@@ -325,7 +325,7 @@ router.post('/orders/:id/cancel', (req: Request, res: Response) => {
 
     return sendSuccess(res, {
       order: result.order,
-      cancelledAt: result.transitionedAt,
+      cancelledAt: result.auditLog.timestamp,
       reason,
     });
   } catch (err: any) {

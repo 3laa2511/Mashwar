@@ -6,6 +6,7 @@
 import React, { useState } from 'react';
 import JSZip from 'jszip';
 import { OwnerAdminDashboard } from './components/OwnerAdminDashboard';
+import { MobileAppFrame } from './components/mobile/MobileAppFrame';
 import {
   Smartphone,
   Tablet,
@@ -473,8 +474,8 @@ All 11 invariant suites verified with zero live DB connection or secret leakage.
 ];
 
 export default function App() {
-  // Top-Level Mode: Owner Admin Dashboard vs Developer Testing Workbench
-  const [workspaceMode, setWorkspaceMode] = useState<'admin' | 'workbench'>('admin');
+  // Top-Level Mode: Mobile App Prototype vs Owner Admin Dashboard vs Developer Testing Workbench
+  const [workspaceMode, setWorkspaceMode] = useState<'mobile' | 'admin' | 'workbench'>('mobile');
 
   // Navigation & role state
   const [activeRole, setActiveRole] = useState<'customer' | 'captain' | 'merchant' | 'operations'>('customer');
@@ -649,9 +650,20 @@ export default function App() {
             </div>
           </div>
 
-          {/* Primary Mode Switcher: Owner Admin Dashboard vs Developer Testing Workbench */}
+          {/* Primary Mode Switcher: Mobile App vs Owner Dashboard vs Developer Workbench */}
           <div className="flex items-center flex-wrap gap-2">
-            <div className="bg-slate-900 p-1 rounded-xl flex items-center border border-amber-500/30 shadow-inner">
+            <div className="bg-slate-900 p-1 rounded-xl flex items-center border border-emerald-500/30 shadow-inner">
+              <button
+                onClick={() => setWorkspaceMode('mobile')}
+                className={`px-3 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1.5 transition-all ${
+                  workspaceMode === 'mobile'
+                    ? 'bg-emerald-600 text-white shadow-md font-black ring-1 ring-emerald-400/40'
+                    : 'text-slate-300 hover:text-white'
+                }`}
+              >
+                <Smartphone className="w-3.5 h-3.5" />
+                <span>📱 تطبيق الموبايل (المحاكي)</span>
+              </button>
               <button
                 onClick={() => setWorkspaceMode('admin')}
                 className={`px-3 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1.5 transition-all ${
@@ -661,7 +673,7 @@ export default function App() {
                 }`}
               >
                 <ShieldCheck className="w-3.5 h-3.5" />
-                <span>غرفة تحكم وعمليات المالك</span>
+                <span>💻 لوحة تحكم وعمليات المالك</span>
               </button>
               <button
                 onClick={() => setWorkspaceMode('workbench')}
@@ -672,7 +684,7 @@ export default function App() {
                 }`}
               >
                 <Code2 className="w-3.5 h-3.5" />
-                <span>منصة المطور والمحاكي</span>
+                <span>🛠️ منصة المطور والمعمارية</span>
               </button>
             </div>
 
@@ -742,7 +754,10 @@ export default function App() {
       </header>
 
       {/* Main Content Area */}
-      <main className="flex-1 max-w-7xl w-full mx-auto p-4 flex flex-col gap-4">
+      <main className="flex-1 max-w-7xl w-full mx-auto p-2 sm:p-4 flex flex-col gap-4">
+        {/* Render Mobile App Prototype (Customer & Captain Home Screens First) */}
+        {workspaceMode === 'mobile' && <MobileAppFrame />}
+
         {/* Render Phase 4.1 Owner & Operations Admin Dashboard */}
         {workspaceMode === 'admin' && <OwnerAdminDashboard />}
 
@@ -2128,7 +2143,9 @@ export default function App() {
                   <strong>• Testing:</strong> اختبارات وحدات شاملة لحساب التسعيرات وخطوات حالات الطلبات داخل مجلد <code className="bg-slate-950 px-1 py-0.5 rounded text-amber-300 font-mono">test/</code>.
                 </p>
               </div>
-            )}
+            </div>
+          </div>
+        )}
           </>
         )}
       </main>
