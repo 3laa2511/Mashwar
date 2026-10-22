@@ -414,44 +414,6 @@ router.post('/captain/orders/:id/cash-collection', (_req: Request, res: Response
     503
   );
 
-  /*
-  try {
-    const { captainId, amountCollectedPiasters, customerConfirmed, notes } = req.body;
-    const order = ordersDb.get(req.params.id) || PersistentStore.getOrderById(req.params.id);
-
-    if (!order) {
-      return sendError(res, 'ORDER_NOT_FOUND', 'الطلب غير موجود لتسجيل النقدية.', 404);
-    }
-
-    const captain = mockCaptains.get(captainId) || PersistentStore.getCaptainById(captainId);
-    if (!captain) {
-      return sendError(res, 'CAPTAIN_NOT_FOUND', 'الكابتن غير موجود.', 404);
-    }
-
-    const amount = Number(amountCollectedPiasters);
-    order.cashCollectedPiasters = amount;
-    order.isPaid = true;
-    ordersDb.set(order.id, order);
-    PersistentStore.saveOrder(order);
-
-    // Update captain cash holding
-    captain.cashHoldingPiasters += amount;
-    mockCaptains.set(captain.id, captain);
-    PersistentStore.saveCaptain(captain);
-
-    return sendSuccess(res, {
-      orderId: order.id,
-      amountCollectedPiasters: amount,
-      formattedAmountEgp: `${(amount / 100).toFixed(2)} ج.م`,
-      captainCurrentCashPiasters: captain.cashHoldingPiasters,
-      customerConfirmed: Boolean(customerConfirmed),
-      notes,
-      recordedAt: new Date().toISOString(),
-    });
-  } catch (err: any) {
-    return sendError(res, 'CASH_COLLECTION_ERROR', err.message, 400);
-  }
-  */
 });
 
 // ----------------------------------------------------------------------------
