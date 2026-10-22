@@ -405,7 +405,16 @@ router.post('/captain/orders/:id/accept', async (req: Request, res: Response) =>
   }
 });
 
-router.post('/captain/orders/:id/cash-collection', (req: Request, res: Response) => {
+router.post('/captain/orders/:id/cash-collection', (_req: Request, res: Response) => {
+  // Fail closed until authenticated captain identity, order ownership, and exact fare matching are enforced.
+  return sendError(
+    res,
+    'CASH_COLLECTION_DISABLED',
+    'تسجيل التحصيل النقدي متوقف مؤقتًا لحين تفعيل التحقق الآمن من هوية الكابتن والطلب والمبلغ.',
+    503
+  );
+
+  /*
   try {
     const { captainId, amountCollectedPiasters, customerConfirmed, notes } = req.body;
     const order = ordersDb.get(req.params.id) || PersistentStore.getOrderById(req.params.id);
@@ -442,6 +451,7 @@ router.post('/captain/orders/:id/cash-collection', (req: Request, res: Response)
   } catch (err: any) {
     return sendError(res, 'CASH_COLLECTION_ERROR', err.message, 400);
   }
+  */
 });
 
 // ----------------------------------------------------------------------------
