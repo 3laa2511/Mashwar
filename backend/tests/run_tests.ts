@@ -23,6 +23,7 @@ import { WebhookService } from '../src/payments/webhookService.js';
 import { AccessControlGuard } from '../src/security/rbac.js';
 import { AuditLogger } from '../src/security/auditLogger.js';
 import { PersistentStore } from '../src/store/persistentStore.js';
+import { createServer } from '../src/api/server.js';
 import { Order, CaptainProfile, WebhookEventPayload } from '../src/types/index.js';
 
 interface TestResult {
@@ -642,6 +643,38 @@ export async function runAllTests(): Promise<{
     }
     assert(threw, 'Must reject unlocking passenger transport');
     assert(PersistentStore.getSettings().passengerMobilityLocked === true, 'Lock must remain enforced');
+  });
+
+  // --------------------------------------------------------------------------
+  // SUITE 12: Unauthenticated Cash Collection Fail-Closed
+  // --------------------------------------------------------------------------
+  console.log('\\n▶ SUITE 12: Unauthenticated Cash Collection Fail-Closed');
+
+  await runTest('Cash collection security', 'Rejects unauthenticated cash collection without mutating order or captain balances', async () => {
+    const app = createServer();
+    const server = app.listen(0);
+    try {
+      await new Promise<void>((resolve, reject) => {
+        server.once('listening', resolve);
+        server.once('error', reject);
+      });
+      const address = server.address() as { port: number } | null;
+      assert(address !== null && typeof address.port === 'number', 'Test API must bind to an ephemeral port');
+      const response = await fetch(`http://127.0.0.1:${address!.port}/api/v1/captain/orders/ord_test_unauthenticated/cash-collection`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          captainId: 'cap_el_bagour_01',
+          amountCollectedPiasters: 1,
+          customerConfirmed: true,
+        }),
+      });
+      const body = await response.json() as any;
+      assert(response.status === 503, 'Cash collection must stay disabled until identity and amount checks are enforced');
+      assert(body.error?.code === 'CASH_COLLECTION_DISABLED', 'Disabled cash collection must return an explicit error');
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
   });
 
   // --------------------------------------------------------------------------

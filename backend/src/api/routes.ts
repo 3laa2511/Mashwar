@@ -405,43 +405,15 @@ router.post('/captain/orders/:id/accept', async (req: Request, res: Response) =>
   }
 });
 
-router.post('/captain/orders/:id/cash-collection', (req: Request, res: Response) => {
-  try {
-    const { captainId, amountCollectedPiasters, customerConfirmed, notes } = req.body;
-    const order = ordersDb.get(req.params.id) || PersistentStore.getOrderById(req.params.id);
+router.post('/captain/orders/:id/cash-collection', (_req: Request, res: Response) => {
+  // Fail closed until authenticated captain identity, order ownership, and exact fare matching are enforced.
+  return sendError(
+    res,
+    'CASH_COLLECTION_DISABLED',
+    'تسجيل التحصيل النقدي متوقف مؤقتًا لحين تفعيل التحقق الآمن من هوية الكابتن والطلب والمبلغ.',
+    503
+  );
 
-    if (!order) {
-      return sendError(res, 'ORDER_NOT_FOUND', 'الطلب غير موجود لتسجيل النقدية.', 404);
-    }
-
-    const captain = mockCaptains.get(captainId) || PersistentStore.getCaptainById(captainId);
-    if (!captain) {
-      return sendError(res, 'CAPTAIN_NOT_FOUND', 'الكابتن غير موجود.', 404);
-    }
-
-    const amount = Number(amountCollectedPiasters);
-    order.cashCollectedPiasters = amount;
-    order.isPaid = true;
-    ordersDb.set(order.id, order);
-    PersistentStore.saveOrder(order);
-
-    // Update captain cash holding
-    captain.cashHoldingPiasters += amount;
-    mockCaptains.set(captain.id, captain);
-    PersistentStore.saveCaptain(captain);
-
-    return sendSuccess(res, {
-      orderId: order.id,
-      amountCollectedPiasters: amount,
-      formattedAmountEgp: `${(amount / 100).toFixed(2)} ج.م`,
-      captainCurrentCashPiasters: captain.cashHoldingPiasters,
-      customerConfirmed: Boolean(customerConfirmed),
-      notes,
-      recordedAt: new Date().toISOString(),
-    });
-  } catch (err: any) {
-    return sendError(res, 'CASH_COLLECTION_ERROR', err.message, 400);
-  }
 });
 
 // ----------------------------------------------------------------------------
