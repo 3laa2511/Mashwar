@@ -109,3 +109,6 @@ export interface DatabaseSchema {
   financial_ledger: FinancialLedgerTable;
   idempotency_keys: IdempotencyKeysTable;
 }
+
+export type Database = DatabaseSchema;
+

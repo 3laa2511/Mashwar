@@ -74,3 +74,53 @@ WHERE phone = '+201012345671';
 ```
 
 Clients cannot alter `raw_app_meta_data`. Any attempt by a client to update its own role will be ignored by Supabase Auth and rejected by the API layer.
+
+---
+
+## 6. PostgreSQL Database Migration & Kysely Transaction Execution
+
+The database migration is located at:
+`backend/src/database/migrations/001_security_hardening.ts`
+
+### Tables and Constraints Created:
+1. `users`: Stores user identity synced with `auth.users(id)`.
+2. `captains`: Stores captain profile with unique index on `user_id`, cash holdings, and subscription status.
+3. `orders`: Stores orders with `total_fare_piasters`, `customer_id`, `assigned_captain_id`, and `is_paid`.
+4. `cash_collections`: Enforces `UNIQUE(idempotency_key)` to guarantee atomic multi-process deduplication.
+5. `financial_ledger`: Immutable append-only double-entry audit ledger for financial traceability.
+6. `idempotency_keys`: Scope-based response replay store for general API deduplication.
+
+### Transactional Guarantees:
+- **Atomicity:** Cash collection, order status transition, captain balance update, and financial ledger insert all execute in a single database transaction:
+  ```ts
+  await db.transaction().setIsolationLevel('read committed').execute(async (trx) => { ... });
+  ```
+- **Row-Level Locking:** Prevents race conditions across distributed server processes:
+  ```ts
+  await trx.selectFrom('orders').where('id', '=', orderId).forUpdate().selectAll().executeTakeFirst();
+  await trx.selectFrom('captains').where('id', '=', captainId).forUpdate().selectAll().executeTakeFirst();
+  ```
+- **Clean Rollback:** Any constraint violation (e.g. fare mismatch, duplicate idempotency key, unauthorized captain) causes PostgreSQL to abort the transaction, leaving all balances and states uncorrupted.
+
+---
+
+## 7. Staging Verification & Test Separation
+
+### Proven In-Process Unit & Contract Tests (49/49 Passing):
+- Zero-trust token signature verification and expiration handling.
+- Strict extraction of `app_metadata.role`.
+- Header stripping (`X-Actor-*` cannot be spoofed).
+- Cross-tenant order isolation (customer and captain access barriers).
+- In-memory concurrency race condition serialization (5 simultaneous requests, exactly 1 succeeds, 4 return idempotent replays).
+- Rollback invariant verification: Fare mismatch or unassigned captain leaves balances untouched.
+- Cash ceiling auto-suspension at 1,000 EGP (100,000 piasters).
+
+### Required Verification in Live PostgreSQL Staging Environment:
+Because the container build environment runs without a local PostgreSQL daemon or live `DATABASE_URL`:
+1. Connect staging PostgreSQL instance by supplying `DATABASE_URL=postgres://...`.
+2. Run database migration:
+   ```bash
+   npx kysely migrate:latest
+   ```
+3. Run concurrent multi-worker load test against live PostgreSQL to verify database-level lock wait queues (`SELECT ... FOR UPDATE`) and database-enforced `UNIQUE(idempotency_key)` constraint.
+

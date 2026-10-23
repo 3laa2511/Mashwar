@@ -4,18 +4,23 @@
  * Monetary Unit: Egyptian Piasters (integer minor units, 1 EGP = 100 Piasters)
  *
  * Enforces:
- * - Atomic row-locking (mutex / PostgreSQL SELECT FOR UPDATE semantics)
+ * - Real PostgreSQL transactions with atomic row-locking (SELECT ... FOR UPDATE)
+ * - Multi-process race condition safety via PostgreSQL database locks
+ * - Database-enforced idempotency key uniqueness constraint
  * - Strict captain ownership verification (assigned_captain_id === calling_captain.id)
- * - Idempotency key deduplication to prevent double credit / double debit
  * - Strict cash-on-delivery payment method invariant
  * - Immutable financial ledger recording
  * - Automatic suspension upon exceeding 1,000 EGP (100,000 piasters) cash ceiling
+ * - Clean rollback of all mutations if any invariant or constraint fails
  */
 
 import crypto from 'node:crypto';
+import { Kysely } from 'kysely';
 import { Order, CaptainProfile } from '../types/index.js';
 import { PersistentStore } from '../store/persistentStore.js';
 import { AuditLogger } from '../security/auditLogger.js';
+import { Database } from '../database/schema.js';
+import { getDb } from '../database/db.js';
 
 export interface CashCollectionRequest {
   orderId: string;
@@ -42,17 +47,245 @@ export interface CashCollectionResult {
 }
 
 export class CashCollectionService {
-  // Order mutex lock table simulating PostgreSQL row-level locks
+  // Order mutex lock table simulating PostgreSQL row-level locks for in-memory testing
   private static orderLocks: Map<string, Promise<void>> = new Map();
 
-  // In-memory idempotency cache synchronized with persistent ledger
+  // In-memory idempotency cache synchronized with persistent ledger for in-memory testing
   private static idempotencyCache: Map<string, CashCollectionResult> = new Map();
 
   /**
-   * Atomically executes cash collection for an order with strict row-locking,
-   * ownership verification, idempotency protection, and audit ledger emission.
+   * Primary entry point: Routes to PostgreSQL transactional engine if DB is available,
+   * otherwise falls back to memory mutex engine for offline testing.
    */
   public static async recordCashCollection(
+    request: CashCollectionRequest,
+    customDb?: Kysely<Database> | null
+  ): Promise<CashCollectionResult> {
+    const db = customDb !== undefined ? customDb : getDb();
+    if (db) {
+      return this.recordCashCollectionPostgres(db, request);
+    }
+    return this.recordCashCollectionInMemory(request);
+  }
+
+  /**
+   * Production-grade PostgreSQL Transactional Execution.
+   * Uses real database transactions, row-level locks (SELECT ... FOR UPDATE),
+   * and database-level unique constraint on idempotency keys.
+   */
+  public static async recordCashCollectionPostgres(
+    db: Kysely<Database>,
+    request: CashCollectionRequest
+  ): Promise<CashCollectionResult> {
+    const { orderId, captain, amountPiasters, idempotencyKey, customerConfirmed = true, notes } = request;
+
+    // 1. Monetary validation (must be positive integer minor units)
+    if (!Number.isInteger(amountPiasters) || amountPiasters <= 0) {
+      const err = new Error('مبلغ التحصيل بالقرش غير صالح (يجب أن يكون رقماً صحيحاً موجباً).');
+      (err as any).code = 'INVALID_PIASTERS_AMOUNT';
+      (err as any).statusCode = 400;
+      throw err;
+    }
+
+    const effectiveKey = idempotencyKey || `cash_${orderId}_${captain.id}`;
+
+    // 2. Execute within an ACID PostgreSQL transaction with READ COMMITTED isolation
+    return await db.transaction().setIsolationLevel('read committed').execute(async (trx) => {
+      // 2a. Check database-backed idempotency table first
+      const existingCollection = await trx
+        .selectFrom('cash_collections')
+        .where('idempotency_key', '=', effectiveKey)
+        .selectAll()
+        .executeTakeFirst();
+
+      if (existingCollection) {
+        // Idempotent replay: Fetch order and captain rows to construct authoritative receipt
+        const orderRow = await trx
+          .selectFrom('orders')
+          .where('id', '=', existingCollection.order_id)
+          .selectAll()
+          .executeTakeFirst();
+
+        const captainRow = await trx
+          .selectFrom('captains')
+          .where('id', '=', existingCollection.captain_id)
+          .selectAll()
+          .executeTakeFirst();
+
+        const currentCash = captainRow ? captainRow.cash_holding_piasters : existingCollection.amount_piasters;
+        const maxCash = captainRow ? captainRow.max_cash_holding_piasters : 100000;
+
+        return {
+          success: true,
+          orderId: existingCollection.order_id,
+          amountCollectedPiasters: existingCollection.amount_piasters,
+          formattedAmountEgp: `${(existingCollection.amount_piasters / 100).toFixed(2)} ج.م`,
+          captainCurrentCashPiasters: currentCash,
+          formattedCaptainCashEgp: `${(currentCash / 100).toFixed(2)} ج.م`,
+          ceilingExceeded: currentCash > maxCash,
+          customerConfirmed: existingCollection.customer_confirmed,
+          idempotencyKey: effectiveKey,
+          isIdempotentReplay: true,
+          ledgerEntryId: `ledger_replay_${existingCollection.id}`,
+          recordedAt: existingCollection.created_at,
+        };
+      }
+
+      // 2b. Atomic Row-Level Lock on Order (PostgreSQL: SELECT ... FOR UPDATE)
+      const order = await trx
+        .selectFrom('orders')
+        .where('id', '=', orderId)
+        .forUpdate()
+        .selectAll()
+        .executeTakeFirst();
+
+      if (!order) {
+        const err = new Error('الطلب غير موجود لتسجيل التحصيل النقدي.');
+        (err as any).code = 'ORDER_NOT_FOUND';
+        (err as any).statusCode = 404;
+        throw err;
+      }
+
+      // 2c. Atomic Row-Level Lock on Captain (PostgreSQL: SELECT ... FOR UPDATE)
+      const captainRow = await trx
+        .selectFrom('captains')
+        .where('id', '=', captain.id)
+        .forUpdate()
+        .selectAll()
+        .executeTakeFirst();
+
+      if (!captainRow) {
+        const err = new Error('سجل الكابتن غير موجود.');
+        (err as any).code = 'CAPTAIN_NOT_FOUND';
+        (err as any).statusCode = 404;
+        throw err;
+      }
+
+      // 2d. Invariant: Verify payment method is cash on delivery
+      if (order.payment_method !== 'cash_on_delivery') {
+        const err = new Error('الطلب ليس دفعاً عند الاستلام؛ لا يمكن تحصيل نقدية على طلب إلكتروني.');
+        (err as any).code = 'INVALID_PAYMENT_METHOD_FOR_CASH';
+        (err as any).statusCode = 400;
+        throw err;
+      }
+
+      // 2e. Invariant: Verify Captain Ownership (fail-closed authorization)
+      if (order.assigned_captain_id !== captain.id) {
+        const err = new Error(
+          'غير مصرح لك بتسجيل تحصيل هذا الطلب: الكابتن الحالي ليس الكابتن المسند له الطلب.'
+        );
+        (err as any).code = 'UNAUTHORIZED_CAPTAIN_ACTION';
+        (err as any).statusCode = 403;
+        throw err;
+      }
+
+      // 2f. Invariant: Prevent double collection if already paid
+      if (order.is_paid && order.cash_collected_piasters !== null && order.cash_collected_piasters > 0) {
+        const err = new Error('تم تحصيل قيمة هذا الطلب مسبقاً.');
+        (err as any).code = 'ORDER_ALREADY_PAID';
+        (err as any).statusCode = 409;
+        throw err;
+      }
+
+      // 2g. Invariant: Amount must strictly match authoritative order fare
+      if (amountPiasters !== order.total_fare_piasters) {
+        const err = new Error(
+          `المبلغ المحصل (${amountPiasters} قرش) غير مطابق لإجمالي تسعيرة الطلب المعتمدة (${order.total_fare_piasters} قرش).`
+        );
+        (err as any).code = 'FARE_MISMATCH';
+        (err as any).statusCode = 422;
+        throw err;
+      }
+
+      // 2h. Calculate balance and check 100,000 piasters (1,000 EGP) ceiling
+      const previousHolding = captainRow.cash_holding_piasters;
+      const newHolding = previousHolding + amountPiasters;
+      const ceilingExceeded = newHolding > captainRow.max_cash_holding_piasters;
+      const newSubscriptionStatus = (ceilingExceeded && captainRow.subscription_status === 'active')
+        ? 'suspended'
+        : captainRow.subscription_status;
+
+      const nowIso = new Date().toISOString();
+      const collectionId = `col_${crypto.randomBytes(8).toString('hex')}`;
+      const ledgerId = `ledger_${crypto.randomBytes(8).toString('hex')}`;
+
+      // 2i. Insert cash_collections record (enforces UNIQUE idempotency_key constraint)
+      await trx
+        .insertInto('cash_collections')
+        .values({
+          id: collectionId,
+          order_id: order.id,
+          captain_id: captainRow.id,
+          amount_piasters: amountPiasters,
+          idempotency_key: effectiveKey,
+          customer_confirmed: Boolean(customerConfirmed),
+          notes: notes || null,
+          created_at: nowIso,
+        })
+        .execute();
+
+      // 2j. Update order state (mark is_paid, set cash_collected_piasters, transition status)
+      const targetStatus = order.status === 'in_transit' ? 'delivered' : order.status;
+      await trx
+        .updateTable('orders')
+        .set({
+          is_paid: true,
+          cash_collected_piasters: amountPiasters,
+          status: targetStatus,
+          updated_at: nowIso,
+        })
+        .where('id', '=', order.id)
+        .execute();
+
+      // 2k. Update captain balance and suspension state
+      await trx
+        .updateTable('captains')
+        .set({
+          cash_holding_piasters: newHolding,
+          subscription_status: newSubscriptionStatus,
+          updated_at: nowIso,
+        })
+        .where('id', '=', captainRow.id)
+        .execute();
+
+      // 2l. Insert append-only immutable financial ledger entry
+      await trx
+        .insertInto('financial_ledger')
+        .values({
+          id: ledgerId,
+          transaction_type: 'CASH_COLLECTED',
+          order_id: order.id,
+          captain_id: captainRow.id,
+          amount_piasters: amountPiasters,
+          balance_after_piasters: newHolding,
+          actor_id: captainRow.user_id,
+          actor_role: 'captain',
+          notes: notes || (ceilingExceeded ? 'تجاوز حد العهدة المسموح به (1,000 ج.م) وتم تعليق الحساب مؤقتاً لحين التوريد' : null),
+          created_at: nowIso,
+        })
+        .execute();
+
+      return {
+        success: true,
+        orderId: order.id,
+        amountCollectedPiasters: amountPiasters,
+        formattedAmountEgp: `${(amountPiasters / 100).toFixed(2)} ج.م`,
+        captainCurrentCashPiasters: newHolding,
+        formattedCaptainCashEgp: `${(newHolding / 100).toFixed(2)} ج.م`,
+        ceilingExceeded,
+        customerConfirmed: Boolean(customerConfirmed),
+        idempotencyKey: effectiveKey,
+        isIdempotentReplay: false,
+        ledgerEntryId: ledgerId,
+        recordedAt: nowIso,
+      };
+    });
+  }
+
+  /**
+   * In-memory critical section fallback used for unit tests and offline development.
+   */
+  public static async recordCashCollectionInMemory(
     request: CashCollectionRequest
   ): Promise<CashCollectionResult> {
     const { orderId, captain, amountPiasters, idempotencyKey, customerConfirmed = true, notes } = request;
@@ -115,7 +348,6 @@ export class CashCollectionService {
 
       // 7. Prevent duplicate cash collection if order is already marked paid
       if (order.isPaid && order.cashCollectedPiasters !== undefined && order.cashCollectedPiasters > 0) {
-        // Return existing receipt
         const existingResult: CashCollectionResult = {
           success: true,
           orderId: order.id,
@@ -153,7 +385,6 @@ export class CashCollectionService {
         updatedAt: nowIso,
       };
 
-      // If order was in_transit, transition to delivered
       if (updatedOrder.status === 'in_transit') {
         updatedOrder.status = 'delivered';
       }
