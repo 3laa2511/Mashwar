@@ -28,9 +28,9 @@ Accounts without a recognized role are denied. Before production, define and rev
 
 This change verifies identity and attaches a trusted principal. It is not the completion of authorization:
 
-- Order ownership checks are still required on reads, cancellation, and state transitions.
-- Captain identity must be mapped to a verified captain profile; request-supplied captain IDs must not authorize actions.
-- Cash collection must verify assignment, exact outstanding amount, allowed order state, and idempotency in an atomic durable transaction.
+- Order reads are restricted to the owning customer, assigned captain, or listed operations roles; cancellation and state transitions now perform ownership/role checks. These checks still need positive and negative regression tests.
+- Captain identity is resolved from the verified user against the current in-memory captain profiles. This mapping is temporary and must move to durable database-backed identity records before production.
+- Cash collection checks assignment, cash payment method, exact total in piasters, delivered state, and duplicate submission. It is not yet atomic or concurrency-safe and must be moved into a durable transaction with an idempotent ledger entry before production.
 - Every admin operation must enforce its permission, and sensitive non-admin routes such as captain eligibility/subscription must not leak another user's information.
 - The existing in-memory store is not production persistence.
 - Add automated tests for valid, invalid, expired, unprovisioned-role, provider-timeout, and role/ownership abuse cases.
