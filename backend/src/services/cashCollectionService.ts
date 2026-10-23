@@ -46,12 +46,19 @@ export interface CashCollectionResult {
   recordedAt: string;
 }
 
+interface IdempotencyCacheEntry {
+  result: CashCollectionResult;
+  orderId: string;
+  captainId: string;
+  amountPiasters: number;
+}
+
 export class CashCollectionService {
   // Order mutex lock table simulating PostgreSQL row-level locks for in-memory testing
   private static orderLocks: Map<string, Promise<void>> = new Map();
 
   // In-memory idempotency cache synchronized with persistent ledger for in-memory testing
-  private static idempotencyCache: Map<string, CashCollectionResult> = new Map();
+  private static idempotencyCache: Map<string, IdempotencyCacheEntry> = new Map();
 
   /**
    * Primary entry point: Routes to PostgreSQL transactional engine if DB is available,
@@ -99,6 +106,18 @@ export class CashCollectionService {
         .executeTakeFirst();
 
       if (existingCollection) {
+        // Enforce idempotency payload safety: reject reuse of same key with different payload
+        if (
+          existingCollection.order_id !== orderId ||
+          existingCollection.captain_id !== captain.id ||
+          existingCollection.amount_piasters !== amountPiasters
+        ) {
+          const err = new Error('مفتاح عدم التكرار (Idempotency Key) مستخدم مسبقاً لطلب أو بمبلغ مختلف.');
+          (err as any).code = 'IDEMPOTENCY_PAYLOAD_MISMATCH';
+          (err as any).statusCode = 409;
+          throw err;
+        }
+
         // Idempotent replay: Fetch order and captain rows to construct authoritative receipt
         const orderRow = await trx
           .selectFrom('orders')
@@ -176,6 +195,22 @@ export class CashCollectionService {
         );
         (err as any).code = 'UNAUTHORIZED_CAPTAIN_ACTION';
         (err as any).statusCode = 403;
+        throw err;
+      }
+
+      // 2f. Invariant: Order status must be in an active delivery state
+      if (order.status === 'cancelled') {
+        const err = new Error('لا يمكن تحصيل قيمة نقدية لطلب ملغي.');
+        (err as any).code = 'ORDER_CANCELLED';
+        (err as any).statusCode = 400;
+        throw err;
+      }
+
+      const eligibleDeliveryStatuses = ['picked_up', 'in_transit', 'arrived_dropoff', 'delivered'];
+      if (!eligibleDeliveryStatuses.includes(order.status)) {
+        const err = new Error('لا يمكن تحصيل نقدية قبل استلام الشحنة وتوصيلها.');
+        (err as any).code = 'ORDER_NOT_IN_DELIVERY';
+        (err as any).statusCode = 400;
         throw err;
       }
 
@@ -302,8 +337,18 @@ export class CashCollectionService {
     const effectiveKey = idempotencyKey || `cash_${orderId}_${captain.id}`;
     if (this.idempotencyCache.has(effectiveKey)) {
       const cached = this.idempotencyCache.get(effectiveKey)!;
+      if (
+        cached.orderId !== orderId ||
+        cached.captainId !== captain.id ||
+        cached.amountPiasters !== amountPiasters
+      ) {
+        const err = new Error('مفتاح عدم التكرار (Idempotency Key) مستخدم مسبقاً لطلب أو بمبلغ مختلف.');
+        (err as any).code = 'IDEMPOTENCY_PAYLOAD_MISMATCH';
+        (err as any).statusCode = 409;
+        throw err;
+      }
       return {
-        ...cached,
+        ...cached.result,
         isIdempotentReplay: true,
       };
     }
@@ -346,6 +391,22 @@ export class CashCollectionService {
         throw err;
       }
 
+      // 7. Verify Order Status is in active delivery state
+      if (order.status === 'cancelled') {
+        const err = new Error('لا يمكن تحصيل قيمة نقدية لطلب ملغي.');
+        (err as any).code = 'ORDER_CANCELLED';
+        (err as any).statusCode = 400;
+        throw err;
+      }
+
+      const eligibleDeliveryStatuses = ['picked_up', 'in_transit', 'arrived_dropoff', 'delivered'];
+      if (!eligibleDeliveryStatuses.includes(order.status)) {
+        const err = new Error('لا يمكن تحصيل نقدية قبل استلام الشحنة وتوصيلها.');
+        (err as any).code = 'ORDER_NOT_IN_DELIVERY';
+        (err as any).statusCode = 400;
+        throw err;
+      }
+
       // 7. Prevent duplicate cash collection if order is already marked paid
       if (order.isPaid && order.cashCollectedPiasters !== undefined && order.cashCollectedPiasters > 0) {
         const existingResult: CashCollectionResult = {
@@ -362,7 +423,12 @@ export class CashCollectionService {
           ledgerEntryId: `ledger_existing_${order.id}`,
           recordedAt: order.updatedAt,
         };
-        this.idempotencyCache.set(effectiveKey, existingResult);
+        this.idempotencyCache.set(effectiveKey, {
+          result: existingResult,
+          orderId: order.id,
+          captainId: captain.id,
+          amountPiasters: order.cashCollectedPiasters,
+        });
         return existingResult;
       }
 
@@ -438,7 +504,12 @@ export class CashCollectionService {
         recordedAt: nowIso,
       };
 
-      this.idempotencyCache.set(effectiveKey, result);
+      this.idempotencyCache.set(effectiveKey, {
+        result,
+        orderId,
+        captainId: captain.id,
+        amountPiasters,
+      });
       return result;
     } finally {
       releaseLock();

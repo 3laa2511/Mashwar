@@ -1,0 +1,80 @@
+[
+  {
+    "path": "backend/src/security/auth.ts",
+    "sizeBytes": 8691,
+    "sha256": "03a70456d1f7a5bf846c21aa0901d43fffc33ddc471df51c28416a76eab97c23",
+    "status": "VERIFIED"
+  },
+  {
+    "path": "backend/src/security/supabaseAuth.ts",
+    "sizeBytes": 291,
+    "sha256": "791654d955fbc9d2871413419ba5aa6d070252b75a4d971ca011745293c32c07",
+    "status": "VERIFIED"
+  },
+  {
+    "path": "backend/src/services/cashCollectionService.ts",
+    "sizeBytes": 20935,
+    "sha256": "bf9e53c55b5bf0559ce3fa2398e99e58ed535d72b0754c8e56666790b0e52f97",
+    "status": "VERIFIED"
+  },
+  {
+    "path": "backend/src/api/routes.ts",
+    "sizeBytes": 31680,
+    "sha256": "b4fe8c35e72caa75e1d70fac8519088695c8645cbb1852f70df318d6e99a66d8",
+    "status": "VERIFIED"
+  },
+  {
+    "path": "backend/src/database/schema.ts",
+    "sizeBytes": 3308,
+    "sha256": "dec6e5f0ac3720cee6bb4f1432c1b5e0261efb897407fbba2236a1a61bbaaa66",
+    "status": "VERIFIED"
+  },
+  {
+    "path": "backend/src/database/db.ts",
+    "sizeBytes": 1520,
+    "sha256": "430dc1de44e4697320baefeb98a10fb146ef764bbef50e2b8ca0eeabbb3e40e0",
+    "status": "VERIFIED"
+  },
+  {
+    "path": "backend/src/database/migrations/001_security_hardening.ts",
+    "sizeBytes": 7399,
+    "sha256": "68229a3211a9f887a8eac680e44b8a8e10e6da689dac36e31af3286663df5f59",
+    "status": "VERIFIED"
+  },
+  {
+    "path": "backend/src/services/captainService.ts",
+    "sizeBytes": 3745,
+    "sha256": "919c8536f79dc67004400ba78831966039c6dd0b490f34f85805848bd4bc5782",
+    "status": "VERIFIED"
+  },
+  {
+    "path": "backend/src/types/index.ts",
+    "sizeBytes": 3022,
+    "sha256": "8dd71588df718703fc4a70c4a8ff75b2ece992304df0ea26c02b2de5aa6161ae",
+    "status": "VERIFIED"
+  },
+  {
+    "path": "backend/tests/run_tests.ts",
+    "sizeBytes": 49614,
+    "sha256": "be85edc5d88bff70e1bd00394a89e368bdadb69f2743d95275ffdb0e00230ff8",
+    "status": "VERIFIED"
+  },
+  {
+    "path": "docs/backend/SUPABASE_AUTH_SETUP.md",
+    "sizeBytes": 8186,
+    "sha256": "f76d2aecb77d05defa210499c16642a9971fe7fe9652394289059bc47ff2d158",
+    "status": "VERIFIED"
+  },
+  {
+    "path": ".github/workflows/quality.yml",
+    "sizeBytes": 1919,
+    "sha256": "648991eb73ffb7545630457dafdc7a0959bb7d730daed77e726af19be11d96d0",
+    "status": "VERIFIED"
+  },
+  {
+    "path": "package.json",
+    "sizeBytes": 1148,
+    "sha256": "afa5aa8ca1b41d29cb39e66e55887955b8b3378688218ef25898955f415d6293",
+    "status": "VERIFIED"
+  }
+]

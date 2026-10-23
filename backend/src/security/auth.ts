@@ -87,6 +87,14 @@ export function verifyToken(token: string): AuthenticatedUser {
         throw err;
       }
 
+      // Check token audience if provided (standard Supabase JWT aud is 'authenticated')
+      if (payload.aud && payload.aud !== 'authenticated') {
+        const err = new Error('جمهور الرمز الأمني غير صالح.');
+        (err as any).code = 'INVALID_TOKEN_AUDIENCE';
+        (err as any).statusCode = 401;
+        throw err;
+      }
+
       // Check principal ID
       const userId = payload.sub || payload.id;
       if (!userId) {
@@ -96,9 +104,9 @@ export function verifyToken(token: string): AuthenticatedUser {
         throw err;
       }
 
-      // Role must strictly come from app_metadata.role (never user_metadata or request body)
+      // Role must strictly come from server-managed app_metadata.role (never top-level payload.role or user_metadata)
       const appMetadata = payload.app_metadata || {};
-      const role = (appMetadata.role || payload.role) as UserRole;
+      const role = appMetadata.role as UserRole;
 
       const validRoles: UserRole[] = [
         'owner',

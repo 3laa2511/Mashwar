@@ -22,6 +22,7 @@ import { AssignmentService } from '../src/dispatch/assignmentService.js';
 import { WebhookService } from '../src/payments/webhookService.js';
 import { AccessControlGuard } from '../src/security/rbac.js';
 import { AuditLogger } from '../src/security/auditLogger.js';
+import crypto from 'node:crypto';
 import { PersistentStore } from '../src/store/persistentStore.js';
 import { Order, CaptainProfile, WebhookEventPayload } from '../src/types/index.js';
 import { verifyToken, generateTestToken } from '../src/security/auth.js';
@@ -691,6 +692,43 @@ export async function runAllTests(): Promise<{
     }, 'UNAUTHORIZED_ROLE');
   });
 
+  await runTest('Auth', 'Rejects token with invalid audience', () => {
+    // Generate token with invalid aud
+    const header = Buffer.from(JSON.stringify({ alg: 'HS256', typ: 'JWT' })).toString('base64url');
+    const payload = Buffer.from(JSON.stringify({
+      sub: 'usr_cpt_01',
+      aud: 'external_client_aud',
+      app_metadata: { role: 'captain' },
+      exp: Math.floor(Date.now() / 1000) + 3600,
+    })).toString('base64url');
+    const sig = crypto.createHmac('sha256', 'mashwar_secure_supabase_jwt_secret_el_bagour_2026')
+      .update(`${header}.${payload}`)
+      .digest('base64url');
+    const badAudToken = `${header}.${payload}.${sig}`;
+
+    assertThrows(() => {
+      verifyToken(badAudToken);
+    }, 'INVALID_TOKEN_AUDIENCE');
+  });
+
+  await runTest('Auth', 'Rejects token relying on top-level payload.role when app_metadata.role is missing', () => {
+    const header = Buffer.from(JSON.stringify({ alg: 'HS256', typ: 'JWT' })).toString('base64url');
+    const payload = Buffer.from(JSON.stringify({
+      sub: 'usr_hacker_01',
+      role: 'owner', // Top-level role only
+      app_metadata: {}, // Empty app_metadata
+      exp: Math.floor(Date.now() / 1000) + 3600,
+    })).toString('base64url');
+    const sig = crypto.createHmac('sha256', 'mashwar_secure_supabase_jwt_secret_el_bagour_2026')
+      .update(`${header}.${payload}`)
+      .digest('base64url');
+    const spoofedToken = `${header}.${payload}.${sig}`;
+
+    assertThrows(() => {
+      verifyToken(spoofedToken);
+    }, 'UNAUTHORIZED_ROLE');
+  });
+
   await runTest('Auth', 'Authoritatively extracts principal ID and app_metadata.role from valid token', () => {
     const validToken = generateTestToken({
       userId: 'usr_cpt_01',
@@ -802,6 +840,57 @@ export async function runAllTests(): Promise<{
       captainAfterReplay.cashHoldingPiasters === currentHoldingBeforeReplay,
       'Captain cash holding must NOT be incremented twice on duplicate request'
     );
+  });
+
+  await runTest('CashCollection', 'Rejects idempotency key reuse with mismatched payload', async () => {
+    const captain = PersistentStore.getCaptainById('cpt_ahmed_fathy')!;
+    await assertThrowsAsync(async () => {
+      // Re-use idemp_key_cod_101 with different amount (3000 vs 2500)
+      await CashCollectionService.recordCashCollection({
+        orderId: 'ord_cash_test_101',
+        captain,
+        amountPiasters: 3000,
+        idempotencyKey: 'idemp_key_cod_101',
+      });
+    }, 'IDEMPOTENCY_PAYLOAD_MISMATCH');
+  });
+
+  await runTest('CashCollection', 'Rejects cash collection on cancelled order', async () => {
+    const captain = PersistentStore.getCaptainById('cpt_ahmed_fathy')!;
+    const cancelledOrder: Order = {
+      ...codOrder,
+      id: 'ord_cancelled_test',
+      status: 'cancelled',
+      isPaid: false,
+    };
+    PersistentStore.saveOrder(cancelledOrder);
+
+    await assertThrowsAsync(async () => {
+      await CashCollectionService.recordCashCollection({
+        orderId: 'ord_cancelled_test',
+        captain,
+        amountPiasters: 2500,
+      });
+    }, 'ORDER_CANCELLED');
+  });
+
+  await runTest('CashCollection', 'Rejects cash collection on order in created state before dispatch', async () => {
+    const captain = PersistentStore.getCaptainById('cpt_ahmed_fathy')!;
+    const createdOrder: Order = {
+      ...codOrder,
+      id: 'ord_created_predispatch_test',
+      status: 'created',
+      isPaid: false,
+    };
+    PersistentStore.saveOrder(createdOrder);
+
+    await assertThrowsAsync(async () => {
+      await CashCollectionService.recordCashCollection({
+        orderId: 'ord_created_predispatch_test',
+        captain,
+        amountPiasters: 2500,
+      });
+    }, 'ORDER_NOT_IN_DELIVERY');
   });
 
   await runTest('CashCollection', 'Blocks cash collection if requesting captain is not the assigned captain (403)', async () => {
