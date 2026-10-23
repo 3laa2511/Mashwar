@@ -1,7 +1,14 @@
 /**
- * Mashwar — REST API Router implementation
+ * Mashwar — Authoritative REST API Router implementation
  * Target Hub: El Bagour, Menoufia Governorate, Egypt
  * Base URL: /api/v1
+ *
+ * Security Model:
+ * - Fail-closed token verification (Supabase Auth / Bearer JWT)
+ * - Server-derived identity (customerId, captainId derived from auth principal)
+ * - Strict ownership checks (Customer, Captain, Merchant, Admin)
+ * - Zero trust in client-supplied X-Actor-* or body identity parameters
+ * - Transactional, idempotent cash collection in integer Egyptian Piasters
  */
 
 import { Router, Request, Response, NextFunction } from 'express';
@@ -13,6 +20,9 @@ import { WebhookService } from '../payments/webhookService.js';
 import { AccessControlGuard, UserRole, SecurityPermission } from '../security/rbac.js';
 import { AuditLogger, AuditActionType } from '../security/auditLogger.js';
 import { PersistentStore, SystemSettings } from '../store/persistentStore.js';
+import { authenticate, requireRoles, AuthenticatedUser } from '../security/auth.js';
+import { CaptainService } from '../services/captainService.js';
+import { CashCollectionService } from '../services/cashCollectionService.js';
 import {
   Order,
   CaptainProfile,
@@ -24,7 +34,7 @@ import {
 export const router = Router();
 const pricingEngine = new PricingEngine();
 
-// Initialize the persistent store
+// Initialize persistent store
 PersistentStore.initialize();
 
 // In-memory repositories synchronized with PersistentStore
@@ -46,7 +56,7 @@ function syncWithStore() {
 // Initial sync
 syncWithStore();
 
-// Also seed existing test captains for backwards-compatible integration tests
+// Backwards-compatible seed captains for tests
 if (!mockCaptains.has('cap_el_bagour_01')) {
   mockCaptains.set('cap_el_bagour_01', {
     id: 'cap_el_bagour_01',
@@ -114,8 +124,26 @@ function sendError(res: Response, code: string, message: string, statusCode: num
   });
 }
 
+/**
+ * Extracts actor credentials securely from the verified Supabase principal.
+ * Strips and completely rejects client-supplied X-Actor-* spoofing headers.
+ */
+function getActorFromAuth(req: Request): { actorId: string; actorRole: UserRole; actorName: string } {
+  if (!req.user) {
+    const err = new Error('غير مصرح: يجب تسجيل الدخول برمز مصادقة صالح للوصول إلى هذه العمليات.');
+    (err as any).code = 'UNAUTHENTICATED';
+    (err as any).statusCode = 401;
+    throw err;
+  }
+  return {
+    actorId: req.user.id,
+    actorRole: req.user.role,
+    actorName: req.user.fullName || 'مسؤول عمليات مشوار',
+  };
+}
+
 // ----------------------------------------------------------------------------
-// 1. Health & Hub Status
+// 1. Health & Hub Status (Public)
 // ----------------------------------------------------------------------------
 router.get('/health', (_req: Request, res: Response) => {
   return sendSuccess(res, {
@@ -128,12 +156,17 @@ router.get('/health', (_req: Request, res: Response) => {
       passengerMobilityActive: false,
       lockReason: 'Egyptian Law No. 73 of 2018 Compliance Lock',
     },
+    security: {
+      authProvider: 'Supabase Auth',
+      roleVerification: 'app_metadata.role',
+      zeroTrustClient: true,
+    },
     systemTime: new Date().toISOString(),
   });
 });
 
 // ----------------------------------------------------------------------------
-// 2. Authoritative Pricing Quotes
+// 2. Authoritative Pricing Quotes (Public or Authenticated)
 // ----------------------------------------------------------------------------
 router.post('/quotes', (req: Request, res: Response) => {
   try {
@@ -160,9 +193,9 @@ router.post('/quotes', (req: Request, res: Response) => {
 });
 
 // ----------------------------------------------------------------------------
-// 3. Order Creation & Life Cycle
+// 3. Order Creation & Life Cycle (Authenticated)
 // ----------------------------------------------------------------------------
-router.post('/orders', (req: Request, res: Response) => {
+router.post('/orders', authenticate, (req: Request, res: Response) => {
   try {
     const idempotencyKey = req.headers['idempotency-key'] as string;
     if (idempotencyKey && idempotencyStore.has(idempotencyKey)) {
@@ -170,10 +203,13 @@ router.post('/orders', (req: Request, res: Response) => {
       return res.status(200).json(cached.responseBody);
     }
 
+    // Role check: Only customer, merchant, or admin can place orders
+    const user = req.user!;
+    if (user.role !== 'customer' && user.role !== 'merchant' && user.role !== 'owner') {
+      return sendError(res, 'FORBIDDEN_ROLE', 'غير مصرح لهذا الحساب بإنشاء طلبات.', 403);
+    }
+
     const {
-      customerId,
-      customerName,
-      customerPhone,
       serviceTypeId,
       quoteId,
       pickup,
@@ -199,14 +235,20 @@ router.post('/orders', (req: Request, res: Response) => {
       signature: quoteSignature,
     });
 
+    // Server-derived identity: customerId MUST strictly come from req.user.id!
+    // Never trust client-supplied customerId in body
+    const customerId = user.id;
+    const customerName = user.fullName || req.body.customerName || 'عميل مشوار الباجور';
+    const customerPhone = user.phone || req.body.customerPhone || '01000000000';
+
     const now = new Date().toISOString();
     const orderNumber = `MSH-${Math.floor(1000 + Math.random() * 9000)}`;
     const newOrder: Order = {
       id: `ord_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
       orderNumber,
-      customerId: customerId || `cust_${Date.now()}`,
-      customerName: customerName || 'عميل الباجور',
-      customerPhone: customerPhone || '01000000000',
+      customerId,
+      customerName,
+      customerPhone,
       serviceTypeId: serviceTypeId as ServiceTypeId,
       status: 'created',
       quoteId,
@@ -249,27 +291,75 @@ router.post('/orders', (req: Request, res: Response) => {
   }
 });
 
-router.get('/orders/:id', (req: Request, res: Response) => {
+// 3.2 Read Order (Authenticated with strict tenant ownership)
+router.get('/orders/:id', authenticate, async (req: Request, res: Response) => {
   const order = ordersDb.get(req.params.id) || PersistentStore.getOrderById(req.params.id);
   if (!order) {
     return sendError(res, 'ORDER_NOT_FOUND', 'عذراً، الطلب المطلوب غير موجود.', 404);
   }
+
+  const user = req.user!;
+
+  // Ownership verification:
+  // 1. Customer: can only read own order
+  if (user.role === 'customer' && order.customerId !== user.id) {
+    return sendError(res, 'FORBIDDEN_RESOURCE', 'غير مصرح لك بالاطلاع على تفاصيل طلب لا يخص حسابك.', 403);
+  }
+
+  // 2. Captain: can only read if assigned to them or if currently in searching_captain
+  if (user.role === 'captain') {
+    const captain = await CaptainService.resolveByUserId(user.id);
+    if (!captain) {
+      return sendError(res, 'CAPTAIN_NOT_FOUND', 'ملف الكابتن غير مسجل بالنظام.', 403);
+    }
+
+    const isAssigned = order.assignedCaptainId === captain.id;
+    const isBroadcast = order.status === 'searching_captain' || order.status === 'created';
+
+    if (!isAssigned && !isBroadcast) {
+      return sendError(res, 'FORBIDDEN_RESOURCE', 'غير مصرح لك بالاطلاع على طلب مسند لكابتن آخر.', 403);
+    }
+  }
+
+  // 3. Merchant: can only read own order
+  if (user.role === 'merchant' && order.customerId !== user.id) {
+    return sendError(res, 'FORBIDDEN_RESOURCE', 'غير مصرح للمتجر بالاطلاع على طلبات متجر آخر.', 403);
+  }
+
+  // Admin/Owner/Support can read all orders
   return sendSuccess(res, order);
 });
 
-router.post('/orders/:id/transitions', (req: Request, res: Response) => {
+// 3.3 Transition Order (Authenticated with actor role check)
+router.post('/orders/:id/transitions', authenticate, async (req: Request, res: Response) => {
   try {
     const order = ordersDb.get(req.params.id) || PersistentStore.getOrderById(req.params.id);
     if (!order) {
       return sendError(res, 'ORDER_NOT_FOUND', 'الطلب غير موجود لإجراء التغيير.', 404);
     }
 
-    const { targetStatus, actorId, actorRole, cashCollectedPiasters, cancellationReason, notes } = req.body;
+    const user = req.user!;
+    const { targetStatus, cashCollectedPiasters, cancellationReason, notes } = req.body;
+
+    // Captain transition ownership check
+    let resolvedActorId = user.id;
+    if (user.role === 'captain') {
+      const captain = await CaptainService.requireActiveCaptain(user.id);
+      if (order.assignedCaptainId && order.assignedCaptainId !== captain.id) {
+        return sendError(res, 'UNAUTHORIZED_CAPTAIN_ACTION', 'غير مصرح لك بتحديث حالة طلب مسند لكابتن آخر.', 403);
+      }
+      resolvedActorId = captain.id;
+    }
+
+    // Customers cannot perform arbitrary status transitions (only cancel via /cancel)
+    if (user.role === 'customer' && targetStatus !== 'cancelled') {
+      return sendError(res, 'FORBIDDEN_ACTION', 'العميل لا يمكنه تغيير مسار الطلب التشغيلي.', 403);
+    }
 
     const result = OrderFsm.transition(order, {
       targetStatus: targetStatus as OrderStatus,
-      actorId,
-      actorRole,
+      actorId: resolvedActorId,
+      actorRole: user.role,
       cashCollectedPiasters: cashCollectedPiasters ? Number(cashCollectedPiasters) : undefined,
       cancellationReason,
       notes,
@@ -294,29 +384,47 @@ router.post('/orders/:id/transitions', (req: Request, res: Response) => {
   }
 });
 
-router.post('/orders/:id/cancel', (req: Request, res: Response) => {
+// 3.4 Cancel Order (Authenticated with customer ownership)
+router.post('/orders/:id/cancel', authenticate, (req: Request, res: Response) => {
   try {
     const order = ordersDb.get(req.params.id) || PersistentStore.getOrderById(req.params.id);
     if (!order) {
       return sendError(res, 'ORDER_NOT_FOUND', 'الطلب المطلوب إلغاؤه غير موجود.', 404);
     }
 
-    const { actorId, actorRole, reason } = req.body;
+    const user = req.user!;
+    const { reason = 'إلغاء الطلب من المستخدم' } = req.body;
 
-    // Check cancellation permission
-    if (!AccessControlGuard.canCancelOrder(actorRole, order.status)) {
-      return sendError(
-        res,
-        'CANCELLATION_NOT_ALLOWED',
-        'لا يمكن إلغاء الطلب في هذه المرحلة بواسطة هذا الحساب.',
-        403
-      );
+    // Customer ownership & stage check
+    if (user.role === 'customer') {
+      if (order.customerId !== user.id) {
+        return sendError(res, 'FORBIDDEN_RESOURCE', 'لا يمكنك إلغاء طلب لا يخص حسابك.', 403);
+      }
+
+      if (!AccessControlGuard.canCancelOrder('customer', order.status)) {
+        return sendError(
+          res,
+          'CANCELLATION_NOT_ALLOWED',
+          'لا يمكن للعميل إلغاء الطلب بعد تحرك الكابتن أو استلام الشحنة.',
+          403
+        );
+      }
+    } else {
+      // Non-customer role check
+      if (!AccessControlGuard.canCancelOrder(user.role, order.status)) {
+        return sendError(
+          res,
+          'CANCELLATION_NOT_ALLOWED',
+          'لا يمكن إلغاء الطلب في هذه المرحلة بواسطة هذا الحساب.',
+          403
+        );
+      }
     }
 
     const result = OrderFsm.transition(order, {
       targetStatus: 'cancelled',
-      actorId,
-      actorRole,
+      actorId: user.id,
+      actorRole: user.role,
       cancellationReason: reason,
     });
 
@@ -337,50 +445,75 @@ router.post('/orders/:id/cancel', (req: Request, res: Response) => {
 // ----------------------------------------------------------------------------
 // 4. Captain Fleet, Eligibility & Dispatch Acceptance
 // ----------------------------------------------------------------------------
-router.get('/captain/eligibility', (req: Request, res: Response) => {
-  const captainId = (req.query.captainId as string) || 'cap_el_bagour_01';
-  const captain = mockCaptains.get(captainId) || PersistentStore.getCaptainById(captainId);
 
-  if (!captain) {
-    return sendError(res, 'CAPTAIN_NOT_FOUND', 'سجل الكابتن غير موجود بالنظام.', 404);
-  }
-
-  const eligibility = CaptainEligibilityEngine.evaluate(captain);
-  return sendSuccess(res, {
-    captainId: captain.id,
-    fullName: captain.fullName,
-    subscriptionStatus: captain.subscriptionStatus,
-    eligibility,
-  });
-});
-
-router.get('/captain/subscription', (req: Request, res: Response) => {
-  const captainId = (req.query.captainId as string) || 'cap_el_bagour_01';
-  const captain = mockCaptains.get(captainId) || PersistentStore.getCaptainById(captainId);
-
-  if (!captain) {
-    return sendError(res, 'CAPTAIN_NOT_FOUND', 'سجل الكابتن غير موجود.', 404);
-  }
-
-  const eligibility = CaptainEligibilityEngine.evaluate(captain);
-  return sendSuccess(res, {
-    captainId: captain.id,
-    planCode: captain.subscriptionPlanCode,
-    commissionModel: '0% Order Commission (100% of Delivery Fare retained by Captain)',
-    currentPeriodEndsAt: captain.currentPeriodEndsAt,
-    gracePeriodEndsAt: captain.gracePeriodEndsAt,
-    eligibility,
-  });
-});
-
-router.post('/captain/orders/:id/accept', async (req: Request, res: Response) => {
+// 4.1 Eligibility (Database-backed from verified token)
+router.get('/captain/eligibility', authenticate, async (req: Request, res: Response) => {
   try {
-    const { captainId } = req.body;
-    const captain = mockCaptains.get(captainId) || PersistentStore.getCaptainById(captainId);
+    const user = req.user!;
+    let captain: CaptainProfile | null = null;
+
+    if (user.role === 'captain') {
+      // Derive captain strictly from authenticated token principal
+      captain = await CaptainService.resolveByUserId(user.id);
+    } else if (user.role === 'owner' || user.role === 'operations_dispatcher') {
+      // Admin can query by captainId query parameter
+      const captainId = req.query.captainId as string;
+      captain = captainId ? await CaptainService.getById(captainId) : null;
+    }
 
     if (!captain) {
-      return sendError(res, 'CAPTAIN_NOT_FOUND', 'بيانات الكابتن غير مسجلة.', 404);
+      return sendError(res, 'CAPTAIN_NOT_FOUND', 'سجل الكابتن غير موجود بالنظام.', 404);
     }
+
+    const eligibility = CaptainEligibilityEngine.evaluate(captain);
+    return sendSuccess(res, {
+      captainId: captain.id,
+      fullName: captain.fullName,
+      subscriptionStatus: captain.subscriptionStatus,
+      eligibility,
+    });
+  } catch (err: any) {
+    return sendError(res, err.code || 'ELIGIBILITY_ERROR', err.message, err.statusCode || 400);
+  }
+});
+
+// 4.2 Subscription Details (Database-backed from verified token)
+router.get('/captain/subscription', authenticate, async (req: Request, res: Response) => {
+  try {
+    const user = req.user!;
+    let captain: CaptainProfile | null = null;
+
+    if (user.role === 'captain') {
+      captain = await CaptainService.resolveByUserId(user.id);
+    } else if (user.role === 'owner' || user.role === 'operations_dispatcher') {
+      const captainId = req.query.captainId as string;
+      captain = captainId ? await CaptainService.getById(captainId) : null;
+    }
+
+    if (!captain) {
+      return sendError(res, 'CAPTAIN_NOT_FOUND', 'سجل الكابتن غير موجود.', 404);
+    }
+
+    const eligibility = CaptainEligibilityEngine.evaluate(captain);
+    return sendSuccess(res, {
+      captainId: captain.id,
+      planCode: captain.subscriptionPlanCode,
+      commissionModel: '0% Order Commission (100% of Delivery Fare retained by Captain)',
+      currentPeriodEndsAt: captain.currentPeriodEndsAt,
+      gracePeriodEndsAt: captain.gracePeriodEndsAt,
+      eligibility,
+    });
+  } catch (err: any) {
+    return sendError(res, err.code || 'SUBSCRIPTION_ERROR', err.message, err.statusCode || 400);
+  }
+});
+
+// 4.3 Claim / Accept Order (Authenticated Captain only, server-derived captainId)
+router.post('/captain/orders/:id/accept', authenticate, requireRoles('captain'), async (req: Request, res: Response) => {
+  try {
+    const user = req.user!;
+    // Sourced directly from verified token principal
+    const captain = await CaptainService.requireActiveCaptain(user.id);
 
     const orderId = req.params.id;
     const order = ordersDb.get(orderId) || PersistentStore.getOrderById(orderId);
@@ -405,54 +538,58 @@ router.post('/captain/orders/:id/accept', async (req: Request, res: Response) =>
   }
 });
 
-router.post('/captain/orders/:id/cash-collection', (req: Request, res: Response) => {
+// 4.4 Transactional Cash Collection (Atomic, Idempotent, Integer Piasters)
+router.post('/captain/orders/:id/cash-collection', authenticate, requireRoles('captain'), async (req: Request, res: Response) => {
   try {
-    const { captainId, amountCollectedPiasters, customerConfirmed, notes } = req.body;
-    const order = ordersDb.get(req.params.id) || PersistentStore.getOrderById(req.params.id);
+    const user = req.user!;
+    // Derived from authenticated token principal
+    const captain = await CaptainService.requireActiveCaptain(user.id);
 
-    if (!order) {
-      return sendError(res, 'ORDER_NOT_FOUND', 'الطلب غير موجود لتسجيل النقدية.', 404);
-    }
+    const { amountCollectedPiasters, customerConfirmed, notes } = req.body;
+    const idempotencyKey = req.headers['idempotency-key'] as string | undefined;
 
-    const captain = mockCaptains.get(captainId) || PersistentStore.getCaptainById(captainId);
-    if (!captain) {
-      return sendError(res, 'CAPTAIN_NOT_FOUND', 'الكابتن غير موجود.', 404);
-    }
-
-    const amount = Number(amountCollectedPiasters);
-    order.cashCollectedPiasters = amount;
-    order.isPaid = true;
-    ordersDb.set(order.id, order);
-    PersistentStore.saveOrder(order);
-
-    // Update captain cash holding
-    captain.cashHoldingPiasters += amount;
-    mockCaptains.set(captain.id, captain);
-    PersistentStore.saveCaptain(captain);
-
-    return sendSuccess(res, {
-      orderId: order.id,
-      amountCollectedPiasters: amount,
-      formattedAmountEgp: `${(amount / 100).toFixed(2)} ج.م`,
-      captainCurrentCashPiasters: captain.cashHoldingPiasters,
-      customerConfirmed: Boolean(customerConfirmed),
+    const result = await CashCollectionService.recordCashCollection({
+      orderId: req.params.id,
+      captain,
+      amountPiasters: Number(amountCollectedPiasters),
+      idempotencyKey,
+      customerConfirmed: customerConfirmed !== undefined ? Boolean(customerConfirmed) : true,
       notes,
-      recordedAt: new Date().toISOString(),
     });
+
+    // Keep memory map in sync
+    const updatedOrder = PersistentStore.getOrderById(req.params.id);
+    if (updatedOrder) {
+      ordersDb.set(updatedOrder.id, updatedOrder);
+    }
+    const updatedCaptain = PersistentStore.getCaptainById(captain.id);
+    if (updatedCaptain) {
+      mockCaptains.set(updatedCaptain.id, updatedCaptain);
+    }
+
+    return sendSuccess(res, result);
   } catch (err: any) {
-    return sendError(res, 'CASH_COLLECTION_ERROR', err.message, 400);
+    const statusCode = err.statusCode || 400;
+    const code = err.code || 'CASH_COLLECTION_ERROR';
+    return sendError(res, code, err.message, statusCode);
   }
 });
 
 // ----------------------------------------------------------------------------
 // 5. Payment Intents & Verified Webhooks
 // ----------------------------------------------------------------------------
-router.post('/payments/intents', (req: Request, res: Response) => {
+router.post('/payments/intents', authenticate, (req: Request, res: Response) => {
   const { orderId, provider = 'paymob' } = req.body;
   const order = ordersDb.get(orderId) || PersistentStore.getOrderById(orderId);
 
   if (!order) {
     return sendError(res, 'ORDER_NOT_FOUND', 'الطلب غير موجود لإصدار تفويض دفع.', 404);
+  }
+
+  // Only the ordering customer or admin can generate a payment intent
+  const user = req.user!;
+  if (user.role === 'customer' && order.customerId !== user.id) {
+    return sendError(res, 'FORBIDDEN_RESOURCE', 'غير مصرح لك بإصدار دفع لطلب عميل آخر.', 403);
   }
 
   const paymentIntentId = `pi_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
@@ -495,20 +632,12 @@ router.post('/webhooks/payments/:provider', async (req: Request, res: Response) 
 });
 
 // ----------------------------------------------------------------------------
-// 6. PHASE 4.1: Owner & Operations Admin Endpoints (RBAC Guarded)
+// 6. Owner & Operations Admin Endpoints (RBAC Guarded & Authenticated)
 // ----------------------------------------------------------------------------
 
-// Middleware to extract and verify admin role
-function getActorFromHeaders(req: Request): { actorId: string; actorRole: UserRole; actorName: string } {
-  const actorId = (req.headers['x-actor-id'] as string) || 'usr_owner_01';
-  const actorRole = (req.headers['x-actor-role'] as UserRole) || 'owner';
-  const actorName = (req.headers['x-actor-name'] as string) || 'د. علاء (مالك المنصة)';
-  return { actorId, actorRole, actorName };
-}
-
 // 6.1 Hub Overview & KPIs
-router.get('/admin/overview', (req: Request, res: Response) => {
-  const { actorRole } = getActorFromHeaders(req);
+router.get('/admin/overview', authenticate, (req: Request, res: Response) => {
+  const { actorRole } = getActorFromAuth(req);
   AccessControlGuard.checkPermission(actorRole, 'view_hub_analytics');
 
   const orders = PersistentStore.getAllOrders();
@@ -544,8 +673,8 @@ router.get('/admin/overview', (req: Request, res: Response) => {
 });
 
 // 6.2 Admin Orders List
-router.get('/admin/orders', (req: Request, res: Response) => {
-  const { actorRole } = getActorFromHeaders(req);
+router.get('/admin/orders', authenticate, (req: Request, res: Response) => {
+  const { actorRole } = getActorFromAuth(req);
   AccessControlGuard.checkPermission(actorRole, 'view_hub_analytics');
 
   const statusFilter = req.query.status as string;
@@ -562,8 +691,8 @@ router.get('/admin/orders', (req: Request, res: Response) => {
 });
 
 // 6.3 Admin Captains Fleet List
-router.get('/admin/captains', (req: Request, res: Response) => {
-  const { actorRole } = getActorFromHeaders(req);
+router.get('/admin/captains', authenticate, (req: Request, res: Response) => {
+  const { actorRole } = getActorFromAuth(req);
   AccessControlGuard.checkPermission(actorRole, 'view_hub_analytics');
 
   const captains = PersistentStore.getAllCaptains();
@@ -574,9 +703,9 @@ router.get('/admin/captains', (req: Request, res: Response) => {
 });
 
 // 6.4 Manual Dispatch Override
-router.post('/admin/orders/:id/override-dispatch', (req: Request, res: Response) => {
+router.post('/admin/orders/:id/override-dispatch', authenticate, (req: Request, res: Response) => {
   try {
-    const { actorId, actorRole, actorName } = getActorFromHeaders(req);
+    const { actorId, actorRole, actorName } = getActorFromAuth(req);
     AccessControlGuard.checkPermission(actorRole, 'manual_dispatch_override');
 
     const { captainId } = req.body;
@@ -602,9 +731,9 @@ router.post('/admin/orders/:id/override-dispatch', (req: Request, res: Response)
 });
 
 // 6.5 Emergency Order Cancellation
-router.post('/admin/orders/:id/emergency-cancel', (req: Request, res: Response) => {
+router.post('/admin/orders/:id/emergency-cancel', authenticate, (req: Request, res: Response) => {
   try {
-    const { actorId, actorRole, actorName } = getActorFromHeaders(req);
+    const { actorId, actorRole, actorName } = getActorFromAuth(req);
     AccessControlGuard.checkPermission(actorRole, 'cancel_order');
 
     const { reason = 'إلغاء طارئ من مركز عمليات الباجور' } = req.body;
@@ -625,9 +754,9 @@ router.post('/admin/orders/:id/emergency-cancel', (req: Request, res: Response) 
 });
 
 // 6.6 Settle Captain Cash Remittance
-router.post('/admin/captains/:id/settle-cash', (req: Request, res: Response) => {
+router.post('/admin/captains/:id/settle-cash', authenticate, (req: Request, res: Response) => {
   try {
-    const { actorId, actorRole, actorName } = getActorFromHeaders(req);
+    const { actorId, actorRole, actorName } = getActorFromAuth(req);
     AccessControlGuard.checkPermission(actorRole, 'settle_cash_remittance');
 
     const { amountPiasters, notes } = req.body;
@@ -658,9 +787,9 @@ router.post('/admin/captains/:id/settle-cash', (req: Request, res: Response) => 
 });
 
 // 6.7 Renew Captain Subscription
-router.post('/admin/captains/:id/renew-subscription', (req: Request, res: Response) => {
+router.post('/admin/captains/:id/renew-subscription', authenticate, (req: Request, res: Response) => {
   try {
-    const { actorId, actorRole, actorName } = getActorFromHeaders(req);
+    const { actorId, actorRole, actorName } = getActorFromAuth(req);
     AccessControlGuard.checkPermission(actorRole, 'manage_captain_accounts');
 
     const { daysToAdd = 30 } = req.body;
@@ -685,8 +814,8 @@ router.post('/admin/captains/:id/renew-subscription', (req: Request, res: Respon
 });
 
 // 6.8 Get System & Tariff Settings
-router.get('/admin/settings', (req: Request, res: Response) => {
-  const { actorRole } = getActorFromHeaders(req);
+router.get('/admin/settings', authenticate, (req: Request, res: Response) => {
+  const { actorRole } = getActorFromAuth(req);
   AccessControlGuard.checkPermission(actorRole, 'view_hub_analytics');
 
   const settings = PersistentStore.getSettings();
@@ -694,9 +823,9 @@ router.get('/admin/settings', (req: Request, res: Response) => {
 });
 
 // 6.9 Update Tariff Settings (Owner Only)
-router.put('/admin/settings', (req: Request, res: Response) => {
+router.put('/admin/settings', authenticate, (req: Request, res: Response) => {
   try {
-    const { actorId, actorRole, actorName } = getActorFromHeaders(req);
+    const { actorId, actorRole, actorName } = getActorFromAuth(req);
     AccessControlGuard.checkPermission(actorRole, 'manage_pricing');
 
     const updatedSettings = PersistentStore.updateSettings(req.body, actorId, actorName);
@@ -707,8 +836,8 @@ router.put('/admin/settings', (req: Request, res: Response) => {
 });
 
 // 6.10 Query Audit Ledger
-router.get('/admin/audit-logs', (req: Request, res: Response) => {
-  const { actorRole } = getActorFromHeaders(req);
+router.get('/admin/audit-logs', authenticate, (req: Request, res: Response) => {
+  const { actorRole } = getActorFromAuth(req);
   AccessControlGuard.checkPermission(actorRole, 'view_audit_logs');
 
   const actionType = req.query.actionType as AuditActionType | undefined;
@@ -729,6 +858,7 @@ export function resetTestDatabases() {
   idempotencyStore.clear();
   mockCaptains.clear();
   WebhookService.clearCache();
+  CashCollectionService.clearCache();
   PersistentStore.initialize();
   syncWithStore();
 }

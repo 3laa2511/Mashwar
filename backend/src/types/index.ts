@@ -101,7 +101,7 @@ export interface CaptainProfile {
 export interface OrderTransitionRequest {
   targetStatus: OrderStatus;
   actorId: string;
-  actorRole: 'customer' | 'captain' | 'merchant' | 'operations';
+  actorRole: 'customer' | 'captain' | 'merchant' | 'operations' | 'owner' | 'operations_dispatcher' | 'support_agent';
   cashCollectedPiasters?: number;
   cancellationReason?: string;
   notes?: string;

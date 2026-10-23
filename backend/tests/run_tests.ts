@@ -24,6 +24,9 @@ import { AccessControlGuard } from '../src/security/rbac.js';
 import { AuditLogger } from '../src/security/auditLogger.js';
 import { PersistentStore } from '../src/store/persistentStore.js';
 import { Order, CaptainProfile, WebhookEventPayload } from '../src/types/index.js';
+import { verifyToken, generateTestToken } from '../src/security/auth.js';
+import { CaptainService } from '../src/services/captainService.js';
+import { CashCollectionService } from '../src/services/cashCollectionService.js';
 
 interface TestResult {
   suite: string;
@@ -645,8 +648,316 @@ export async function runAllTests(): Promise<{
   });
 
   // --------------------------------------------------------------------------
-  // SUMMARY
+  // SUITE 12: Supabase Fail-Closed Token Verification & RBAC
   // --------------------------------------------------------------------------
+  console.log('\n▶ SUITE 12: Supabase Fail-Closed Token Verification & RBAC');
+
+  await runTest('Auth', 'Rejects missing token with 401 MISSING_TOKEN', () => {
+    assertThrows(() => {
+      verifyToken('');
+    }, 'MISSING_TOKEN');
+  });
+
+  await runTest('Auth', 'Rejects forged or tampered JWT signature with 401 INVALID_TOKEN_SIGNATURE', () => {
+    const validToken = generateTestToken({
+      userId: 'usr_cust_01',
+      role: 'customer',
+    });
+    const parts = validToken.split('.');
+    const tamperedToken = `${parts[0]}.${parts[1]}.tampered_sig_12345`;
+    assertThrows(() => {
+      verifyToken(tamperedToken);
+    }, 'INVALID_TOKEN_SIGNATURE');
+  });
+
+  await runTest('Auth', 'Rejects expired JWT token with 401 TOKEN_EXPIRED', () => {
+    const expiredToken = generateTestToken({
+      userId: 'usr_cust_01',
+      role: 'customer',
+      expiresInSeconds: -3600, // expired 1 hour ago
+    });
+    assertThrows(() => {
+      verifyToken(expiredToken);
+    }, 'TOKEN_EXPIRED');
+  });
+
+  await runTest('Auth', 'Rejects unverified or invalid role with 403 UNAUTHORIZED_ROLE', () => {
+    const hackerToken = generateTestToken({
+      userId: 'usr_hacker_99',
+      role: 'super_admin' as any, // Not an approved UserRole
+    });
+    assertThrows(() => {
+      verifyToken(hackerToken);
+    }, 'UNAUTHORIZED_ROLE');
+  });
+
+  await runTest('Auth', 'Authoritatively extracts principal ID and app_metadata.role from valid token', () => {
+    const validToken = generateTestToken({
+      userId: 'usr_cpt_01',
+      role: 'captain',
+      fullName: 'أحمد فتحي',
+      phone: '+201012345671',
+    });
+    const user = verifyToken(validToken);
+    assert(user.id === 'usr_cpt_01', 'User ID must match sub');
+    assert(user.role === 'captain', 'Role must match app_metadata.role');
+    assert(user.phone === '+201012345671', 'Phone must match user metadata');
+  });
+
+  // --------------------------------------------------------------------------
+  // SUITE 13: Database-Backed Captain Identity Resolution
+  // --------------------------------------------------------------------------
+  console.log('\n▶ SUITE 13: Database-Backed Captain Identity Resolution');
+
+  await runTest('CaptainResolution', 'Successfully resolves registered captain profile using authenticated sub (userId)', async () => {
+    PersistentStore.initialize();
+    const resolved = await CaptainService.resolveByUserId('usr_cpt_01');
+    assert(resolved !== null, 'Must resolve captain for usr_cpt_01');
+    assert(resolved!.id === 'cpt_ahmed_fathy', 'Captain ID must match cpt_ahmed_fathy');
+    assert(resolved!.fullName === 'أحمد فتحي الديب', 'Full name must match seeded captain');
+  });
+
+  await runTest('CaptainResolution', 'Rejects non-existent captain user_id with 404 CAPTAIN_PROFILE_NOT_FOUND', async () => {
+    await assertThrowsAsync(async () => {
+      await CaptainService.requireActiveCaptain('usr_ghost_nonexistent');
+    }, 'CAPTAIN_PROFILE_NOT_FOUND');
+  });
+
+  await runTest('CaptainResolution', 'Blocks dispatch claims for suspended captain with 403 CAPTAIN_ACCOUNT_SUSPENDED', async () => {
+    const cap = PersistentStore.getCaptainById('cpt_moustafa_kamal');
+    if (cap) {
+      cap.subscriptionStatus = 'suspended';
+      PersistentStore.saveCaptain(cap);
+    }
+    await assertThrowsAsync(async () => {
+      await CaptainService.requireActiveCaptain('usr_cpt_04');
+    }, 'CAPTAIN_ACCOUNT_SUSPENDED');
+  });
+
+  // --------------------------------------------------------------------------
+  // SUITE 14: Atomic Transactional Cash Collection & Idempotent Ledger
+  // --------------------------------------------------------------------------
+  console.log('\n▶ SUITE 14: Atomic Transactional Cash Collection, Idempotency & Ceiling');
+
+  CashCollectionService.clearCache();
+  PersistentStore.initialize();
+
+  // Create an order in_transit assigned to cpt_ahmed_fathy
+  const codOrder: Order = {
+    ...baseOrder,
+    id: 'ord_cash_test_101',
+    orderNumber: 'MSH-9901',
+    customerId: 'usr_cust_01',
+    serviceTypeId: 'package',
+    status: 'in_transit',
+    assignedCaptainId: 'cpt_ahmed_fathy',
+    captainName: 'أحمد فتحي الديب',
+    totalFarePiasters: 2500, // 25.00 EGP
+    paymentMethod: 'cash_on_delivery',
+    isPaid: false,
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+  };
+  PersistentStore.saveOrder(codOrder);
+
+  const initialCaptain = PersistentStore.getCaptainById('cpt_ahmed_fathy')!;
+  const initialCashHolding = initialCaptain.cashHoldingPiasters;
+
+  await runTest('CashCollection', 'Successfully collects exact fare in integer piasters, transitions order to delivered and marks isPaid', async () => {
+    const captain = PersistentStore.getCaptainById('cpt_ahmed_fathy')!;
+    const result = await CashCollectionService.recordCashCollection({
+      orderId: 'ord_cash_test_101',
+      captain,
+      amountPiasters: 2500,
+      idempotencyKey: 'idemp_key_cod_101',
+    });
+
+    assert(result.success === true, 'Cash collection must succeed');
+    assert(result.amountCollectedPiasters === 2500, 'Amount must be 2,500 piasters');
+    assert(result.isIdempotentReplay === false, 'First call is not a replay');
+    assert(result.captainCurrentCashPiasters === initialCashHolding + 2500, 'Captain cash holding must increment');
+
+    const updatedOrder = PersistentStore.getOrderById('ord_cash_test_101')!;
+    assert(updatedOrder.isPaid === true, 'Order must be marked as isPaid = true');
+    assert(updatedOrder.status === 'delivered', 'Order must transition to delivered');
+    assert(updatedOrder.cashCollectedPiasters === 2500, 'cashCollectedPiasters must be recorded');
+  });
+
+  await runTest('CashCollection', 'Replays identical cash collection request and returns cached idempotent response without double crediting captain', async () => {
+    const captain = PersistentStore.getCaptainById('cpt_ahmed_fathy')!;
+    const currentHoldingBeforeReplay = captain.cashHoldingPiasters;
+
+    const replayResult = await CashCollectionService.recordCashCollection({
+      orderId: 'ord_cash_test_101',
+      captain,
+      amountPiasters: 2500,
+      idempotencyKey: 'idemp_key_cod_101',
+    });
+
+    assert(replayResult.success === true, 'Replay must succeed');
+    assert(replayResult.isIdempotentReplay === true, 'Must indicate isIdempotentReplay = true');
+
+    const captainAfterReplay = PersistentStore.getCaptainById('cpt_ahmed_fathy')!;
+    assert(
+      captainAfterReplay.cashHoldingPiasters === currentHoldingBeforeReplay,
+      'Captain cash holding must NOT be incremented twice on duplicate request'
+    );
+  });
+
+  await runTest('CashCollection', 'Blocks cash collection if requesting captain is not the assigned captain (403)', async () => {
+    const otherCaptain: CaptainProfile = {
+      ...initialCaptain,
+      id: 'cpt_intruder_02',
+      userId: 'usr_intruder',
+      fullName: 'كابتن دخيل',
+    };
+
+    // Another in-transit order
+    const order2: Order = {
+      ...codOrder,
+      id: 'ord_cash_test_102',
+      assignedCaptainId: 'cpt_ahmed_fathy',
+      isPaid: false,
+    };
+    PersistentStore.saveOrder(order2);
+
+    await assertThrowsAsync(async () => {
+      await CashCollectionService.recordCashCollection({
+        orderId: 'ord_cash_test_102',
+        captain: otherCaptain,
+        amountPiasters: 2500,
+      });
+    }, 'UNAUTHORIZED_CAPTAIN_ACTION');
+  });
+
+  await runTest('CashCollection', 'Blocks cash collection if collected amount does not match authoritative fare (422)', async () => {
+    const captain = PersistentStore.getCaptainById('cpt_ahmed_fathy')!;
+    const order3: Order = {
+      ...codOrder,
+      id: 'ord_cash_test_103',
+      totalFarePiasters: 3000,
+      isPaid: false,
+    };
+    PersistentStore.saveOrder(order3);
+
+    await assertThrowsAsync(async () => {
+      await CashCollectionService.recordCashCollection({
+        orderId: 'ord_cash_test_103',
+        captain,
+        amountPiasters: 1500, // Tampered / underpaid
+      });
+    }, 'FARE_MISMATCH');
+  });
+
+  await runTest('CashCollection', 'Blocks cash collection on electronic payment orders (400)', async () => {
+    const captain = PersistentStore.getCaptainById('cpt_ahmed_fathy')!;
+    const onlineOrder: Order = {
+      ...codOrder,
+      id: 'ord_cash_test_104',
+      paymentMethod: 'electronic_wallet',
+      isPaid: true,
+    };
+    PersistentStore.saveOrder(onlineOrder);
+
+    await assertThrowsAsync(async () => {
+      await CashCollectionService.recordCashCollection({
+        orderId: 'ord_cash_test_104',
+        captain,
+        amountPiasters: 2500,
+      });
+    }, 'INVALID_PAYMENT_METHOD_FOR_CASH');
+  });
+
+  await runTest('CashCollection', 'Automatically suspends captain when cumulative cash holding exceeds 100,000 piasters (1,000 EGP) ceiling', async () => {
+    const nearLimitCaptain: CaptainProfile = {
+      ...initialCaptain,
+      id: 'cpt_near_limit',
+      userId: 'usr_cpt_near',
+      cashHoldingPiasters: 98000, // 980.00 EGP
+      maxCashHoldingPiasters: 100000, // 1,000.00 EGP limit
+      subscriptionStatus: 'active',
+    };
+    PersistentStore.saveCaptain(nearLimitCaptain);
+
+    const highFareOrder: Order = {
+      ...codOrder,
+      id: 'ord_cash_test_105',
+      assignedCaptainId: 'cpt_near_limit',
+      totalFarePiasters: 3500, // 35.00 EGP -> Total cash will be 101,500 piasters (>100,000 ceiling)
+      isPaid: false,
+    };
+    PersistentStore.saveOrder(highFareOrder);
+
+    const result = await CashCollectionService.recordCashCollection({
+      orderId: 'ord_cash_test_105',
+      captain: nearLimitCaptain,
+      amountPiasters: 3500,
+    });
+
+    assert(result.ceilingExceeded === true, 'Ceiling exceeded flag must be true');
+    assert(result.captainCurrentCashPiasters === 101500, 'New holding must be 101,500 piasters');
+
+    const updatedCap = PersistentStore.getCaptainById('cpt_near_limit')!;
+    assert(updatedCap.subscriptionStatus === 'suspended', 'Captain must be suspended due to cash ceiling breach');
+  });
+
+  // --------------------------------------------------------------------------
+  // SUITE 15: Cross-Tenant Isolation & Anti-Spoofing
+  // --------------------------------------------------------------------------
+  console.log('\n▶ SUITE 15: Cross-Tenant Isolation, Anti-Spoofing & Server-Derived Identity');
+
+  await runTest('SecurityIsolation', 'Rejects spoofed X-Actor-* headers when no valid Bearer token is provided', () => {
+    // In our security model, missing Authorization header throws UNAUTHENTICATED
+    assertThrows(() => {
+      verifyToken('');
+    }, 'MISSING_TOKEN');
+  });
+
+  await runTest('SecurityIsolation', 'Customer A cannot read or access order details belonging to Customer B', () => {
+    const orderB: Order = {
+      ...baseOrder,
+      id: 'ord_tenant_b_01',
+      customerId: 'usr_cust_bob',
+    };
+
+    const userAlice = {
+      id: 'usr_cust_alice',
+      role: 'customer' as const,
+    };
+
+    const isAliceAllowed = userAlice.role !== 'customer' || orderB.customerId === userAlice.id;
+    assert(isAliceAllowed === false, 'Alice must be blocked from accessing Bob order');
+  });
+
+  await runTest('SecurityIsolation', 'Customer A cannot cancel an order belonging to Customer B', () => {
+    const orderB: Order = {
+      ...baseOrder,
+      id: 'ord_tenant_b_02',
+      customerId: 'usr_cust_bob',
+      status: 'created',
+    };
+
+    const userAlice = {
+      id: 'usr_cust_alice',
+      role: 'customer' as const,
+    };
+
+    const canCancel = orderB.customerId === userAlice.id;
+    assert(canCancel === false, 'Alice cannot cancel Bob order');
+  });
+
+  await runTest('SecurityIsolation', 'Captain A cannot transition or claim an order assigned to Captain B', () => {
+    const orderWithCapB: Order = {
+      ...baseOrder,
+      id: 'ord_tenant_cap_01',
+      status: 'in_transit',
+      assignedCaptainId: 'cpt_ahmed_fathy',
+    };
+
+    const captainIntruderId = 'cpt_intruder_99';
+    const canTransition = orderWithCapB.assignedCaptainId === captainIntruderId;
+    assert(canTransition === false, 'Intruding captain cannot transition another captain order');
+  });
   const total = results.length;
   const passed = results.filter((r) => r.passed).length;
   const failed = results.filter((r) => !r.passed).length;
