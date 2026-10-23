@@ -1,10 +1,10 @@
 # MASHWAR SECURITY HARDENING — UNIFIED GIT PATCH
 # Branch: security/fail-closed-order-authorization
-# Generated: 2026-10-23T03:01:32.468Z
+# Generated: 2026-10-23T03:39:40.089Z
 # Target: 3laa2511/Mashwar
 
---- a/backend/src/security/auth.ts	2026-10-23T03:01:32.470Z
-+++ b/backend/src/security/auth.ts	2026-10-23T03:01:32.470Z
+--- a/backend/src/security/auth.ts	2026-10-23T03:39:40.090Z
++++ b/backend/src/security/auth.ts	2026-10-23T03:39:40.090Z
 @@ -0,0 +1,263 @@
 +/**
 + * Mashwar — Authentication & Token Verification Middleware
@@ -270,8 +270,22 @@
 +}
 +
 
---- a/backend/src/api/routes.ts	2026-10-23T03:01:32.471Z
-+++ b/backend/src/api/routes.ts	2026-10-23T03:01:32.471Z
+--- a/backend/src/security/supabaseAuth.ts	2026-10-23T03:39:40.091Z
++++ b/backend/src/security/supabaseAuth.ts	2026-10-23T03:39:40.091Z
+@@ -0,0 +1,10 @@
++/**
++ * Mashwar — Supabase Auth Provider & Middleware Alias
++ * Target Hub: El Bagour, Menoufia Governorate, Egypt
++ *
++ * Re-exports the authoritative zero-trust authentication implementation
++ * from ./auth.js to provide alias parity without code duplication.
++ */
++
++export * from './auth.js';
++
+
+--- a/backend/src/api/routes.ts	2026-10-23T03:39:40.091Z
++++ b/backend/src/api/routes.ts	2026-10-23T03:39:40.091Z
 @@ -0,0 +1,867 @@
 +/**
 + * Mashwar — Authoritative REST API Router implementation
@@ -1141,8 +1155,8 @@
 +export { ordersDb, mockCaptains };
 +
 
---- a/backend/src/database/schema.ts	2026-10-23T03:01:32.471Z
-+++ b/backend/src/database/schema.ts	2026-10-23T03:01:32.471Z
+--- a/backend/src/database/schema.ts	2026-10-23T03:39:40.091Z
++++ b/backend/src/database/schema.ts	2026-10-23T03:39:40.091Z
 @@ -0,0 +1,115 @@
 +/**
 + * Mashwar — Kysely Database Schema Definition
@@ -1260,8 +1274,8 @@
 +
 +
 
---- a/backend/src/database/db.ts	2026-10-23T03:01:32.471Z
-+++ b/backend/src/database/db.ts	2026-10-23T03:01:32.471Z
+--- a/backend/src/database/db.ts	2026-10-23T03:39:40.092Z
++++ b/backend/src/database/db.ts	2026-10-23T03:39:40.092Z
 @@ -0,0 +1,61 @@
 +/**
 + * Mashwar — Kysely Database Connection & Client Provider
@@ -1325,8 +1339,8 @@
 +}
 +
 
---- a/backend/src/database/migrations/001_security_hardening.ts	2026-10-23T03:01:32.471Z
-+++ b/backend/src/database/migrations/001_security_hardening.ts	2026-10-23T03:01:32.471Z
+--- a/backend/src/database/migrations/001_security_hardening.ts	2026-10-23T03:39:40.092Z
++++ b/backend/src/database/migrations/001_security_hardening.ts	2026-10-23T03:39:40.092Z
 @@ -0,0 +1,151 @@
 +/**
 + * Migration 001: Security Hardening, Captain Identity Derivation & Atomic Cash Collection Ledger
@@ -1480,8 +1494,8 @@
 +}
 +
 
---- a/backend/src/services/captainService.ts	2026-10-23T03:01:32.472Z
-+++ b/backend/src/services/captainService.ts	2026-10-23T03:01:32.472Z
+--- a/backend/src/services/captainService.ts	2026-10-23T03:39:40.092Z
++++ b/backend/src/services/captainService.ts	2026-10-23T03:39:40.092Z
 @@ -0,0 +1,102 @@
 +/**
 + * Mashwar — Database-Backed Captain Identity Resolution Service
@@ -1586,8 +1600,8 @@
 +}
 +
 
---- a/backend/src/services/cashCollectionService.ts	2026-10-23T03:01:32.472Z
-+++ b/backend/src/services/cashCollectionService.ts	2026-10-23T03:01:32.472Z
+--- a/backend/src/services/cashCollectionService.ts	2026-10-23T03:39:40.092Z
++++ b/backend/src/services/cashCollectionService.ts	2026-10-23T03:39:40.092Z
 @@ -0,0 +1,456 @@
 +/**
 + * Mashwar — Transactional Cash Collection & Financial Ledger Service
@@ -2046,8 +2060,8 @@
 +}
 +
 
---- a/backend/src/types/index.ts	2026-10-23T03:01:32.474Z
-+++ b/backend/src/types/index.ts	2026-10-23T03:01:32.474Z
+--- a/backend/src/types/index.ts	2026-10-23T03:39:40.092Z
++++ b/backend/src/types/index.ts	2026-10-23T03:39:40.092Z
 @@ -0,0 +1,121 @@
 +/**
 + * Mashwar — Backend Type Definitions & Domain Enums
@@ -2171,8 +2185,8 @@
 +}
 +
 
---- a/backend/tests/run_tests.ts	2026-10-23T03:01:32.475Z
-+++ b/backend/tests/run_tests.ts	2026-10-23T03:01:32.475Z
+--- a/backend/tests/run_tests.ts	2026-10-23T03:39:40.094Z
++++ b/backend/tests/run_tests.ts	2026-10-23T03:39:40.094Z
 @@ -0,0 +1,1117 @@
 +/**
 + * Mashwar — Backend Automated Quality Gates & Integration Test Suite
@@ -3292,8 +3306,8 @@
 +}
 +
 
---- a/docs/backend/SUPABASE_AUTH_SETUP.md	2026-10-23T03:01:32.475Z
-+++ b/docs/backend/SUPABASE_AUTH_SETUP.md	2026-10-23T03:01:32.475Z
+--- a/docs/backend/SUPABASE_AUTH_SETUP.md	2026-10-23T03:39:40.095Z
++++ b/docs/backend/SUPABASE_AUTH_SETUP.md	2026-10-23T03:39:40.095Z
 @@ -0,0 +1,127 @@
 +# Mashwar — Supabase Authentication & Fail-Closed Authorization Architecture
 +
@@ -3423,8 +3437,76 @@
 +
 +
 
---- a/package.json	2026-10-23T03:01:32.475Z
-+++ b/package.json	2026-10-23T03:01:32.475Z
+--- a/.github/workflows/quality.yml	2026-10-23T03:39:40.095Z
++++ b/.github/workflows/quality.yml	2026-10-23T03:39:40.095Z
+@@ -0,0 +1,64 @@
++name: Quality & Security CI
++
++on:
++  push:
++    branches:
++      - main
++  pull_request:
++    branches:
++      - main
++
++permissions:
++  contents: read
++
++jobs:
++  backend-and-web:
++    name: Backend & Web (Lint, Test, Build)
++    runs-on: ubuntu-latest
++    steps:
++      - name: Checkout repository
++        uses: actions/checkout@v4
++
++      - name: Setup Bun runtime
++        uses: oven-sh/setup-bun@v2
++        with:
++          bun-version: latest
++
++      - name: Install dependencies
++        run: bun install --frozen-lockfile
++
++      - name: Type check & Lint
++        run: bun run lint
++
++      - name: Execute backend security & integration tests
++        run: bun run test
++
++      - name: Build web application
++        run: bun run build
++
++  flutter-app:
++    name: Flutter Mobile Checks
++    runs-on: ubuntu-latest
++    steps:
++      - name: Checkout repository
++        uses: actions/checkout@v4
++
++      - name: Setup Flutter SDK
++        uses: subosito/flutter-action@v2
++        with:
++          flutter-version: '3.22.x'
++          channel: 'stable'
++          cache: true
++
++      - name: Install Flutter dependencies
++        working-directory: flutter_mashwar
++        run: flutter pub get
++
++      - name: Analyze Flutter codebase
++        working-directory: flutter_mashwar
++        run: flutter analyze
++
++      - name: Run Flutter unit tests
++        working-directory: flutter_mashwar
++        run: flutter test
++
+
+--- a/package.json	2026-10-23T03:39:40.095Z
++++ b/package.json	2026-10-23T03:39:40.095Z
 @@ -0,0 +1,44 @@
 +{
 +  "name": "react-example",

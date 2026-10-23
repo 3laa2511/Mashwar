@@ -5,6 +5,7 @@ import JSZip from 'jszip';
 
 const exportFiles = [
   'backend/src/security/auth.ts',
+  'backend/src/security/supabaseAuth.ts',
   'backend/src/api/routes.ts',
   'backend/src/database/schema.ts',
   'backend/src/database/db.ts',
@@ -14,6 +15,7 @@ const exportFiles = [
   'backend/src/types/index.ts',
   'backend/tests/run_tests.ts',
   'docs/backend/SUPABASE_AUTH_SETUP.md',
+  '.github/workflows/quality.yml',
   'package.json',
 ];
 
@@ -29,6 +31,10 @@ const filePurposes: Record<string, { type: 'NEW' | 'MODIFIED'; purpose: string }
   'backend/src/security/auth.ts': {
     type: 'NEW',
     purpose: 'Zero-trust Supabase token verifier, app_metadata.role extractor, X-Actor header stripper, and tenant isolation guards.',
+  },
+  'backend/src/security/supabaseAuth.ts': {
+    type: 'NEW',
+    purpose: 'Supabase authentication alias module re-exporting authoritative auth middleware.',
   },
   'backend/src/api/routes.ts': {
     type: 'MODIFIED',
@@ -65,6 +71,10 @@ const filePurposes: Record<string, { type: 'NEW' | 'MODIFIED'; purpose: string }
   'docs/backend/SUPABASE_AUTH_SETUP.md': {
     type: 'MODIFIED',
     purpose: 'Architecture documentation, Supabase claims setup, endpoint authorization matrix, and PostgreSQL transaction guide.',
+  },
+  '.github/workflows/quality.yml': {
+    type: 'NEW',
+    purpose: 'GitHub Actions workflow running lint, backend tests, and web build on push/PR to main with contents:read.',
   },
   'package.json': {
     type: 'MODIFIED',
