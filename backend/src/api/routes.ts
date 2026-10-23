@@ -382,9 +382,16 @@ router.post('/orders/:id/cancel', requireVerifiedPrincipal, (req: Request, res: 
       return sendError(res, 'ORDER_NOT_FOUND', 'الطلب المطلوب إلغاؤه غير موجود.', 404);
     }
 
+    const principal = (req as RequestWithPrincipal).auth!;
+    const isOperations = principal.role === 'owner' || principal.role === 'operations_dispatcher' || principal.role === 'support_agent';
+    const isCustomerOwner = principal.role === 'customer' && order.customerId === principal.userId;
+    if (!isOperations && !isCustomerOwner) {
+      return sendError(res, 'ORDER_NOT_FOUND', 'الطلب المطلوب إلغاؤه غير موجود.', 404);
+    }
+
     const { actorId, actorRole, reason } = req.body;
 
-    // Check cancellation permission
+    // Check cancellation permission after ownership has been established.
     if (!AccessControlGuard.canCancelOrder(actorRole, order.status)) {
       return sendError(
         res,
