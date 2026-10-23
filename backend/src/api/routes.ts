@@ -114,6 +114,64 @@ function sendError(res: Response, code: string, message: string, statusCode: num
   });
 }
 
+/**
+ * Fail closed until a trusted authentication middleware attaches a verified principal.
+ * Client-supplied actorId/actorRole/captainId are never authentication credentials.
+ *
+ * This router intentionally has no JWT verifier yet. Therefore sensitive routes stay
+ * unavailable (503) until the server application wires a real verifier before this router.
+ */
+type VerifiedPrincipal = {
+  userId: string;
+  role: UserRole;
+};
+
+type RequestWithPrincipal = Request & { auth?: VerifiedPrincipal };
+
+function requireVerifiedPrincipal(req: Request, res: Response, next: NextFunction) {
+  const authenticatedRequest = req as RequestWithPrincipal;
+  const principal = authenticatedRequest.auth;
+  if (
+    !principal ||
+    typeof principal.userId !== 'string' ||
+    principal.userId.trim().length === 0 ||
+    typeof principal.role !== 'string'
+  ) {
+    return sendError(
+      res,
+      'AUTHENTICATION_REQUIRED',
+      'يلزم تسجيل الدخول والتحقق من الهوية قبل تنفيذ هذه العملية.',
+      503
+    );
+  }
+
+  // Never allow body fields to override the identity established by the verifier.
+  if (req.body && typeof req.body === 'object' && !Array.isArray(req.body)) {
+    req.body.actorId = principal.userId;
+    req.body.actorRole = principal.role;
+    if (req.path === '/orders') {
+      req.body.customerId = principal.userId;
+    }
+  }
+
+  // Captain endpoints must resolve the captain profile from the verified user,
+  // not from a client-supplied captainId.
+  if (req.path.startsWith('/captain/orders/')) {
+    if (principal.role !== 'captain') {
+      return sendError(res, 'INSUFFICIENT_PERMISSIONS', 'هذه العملية متاحة للكابتن فقط.', 403);
+    }
+    const captain = Array.from(mockCaptains.values()).find((item) => item.userId === principal.userId);
+    if (!captain) {
+      return sendError(res, 'CAPTAIN_PROFILE_REQUIRED', 'لا يوجد ملف كابتن موثق لهذا الحساب.', 403);
+    }
+    if (req.body && typeof req.body === 'object' && !Array.isArray(req.body)) {
+      req.body.captainId = captain.id;
+    }
+  }
+
+  return next();
+}
+
 // ----------------------------------------------------------------------------
 // 1. Health & Hub Status
 // ----------------------------------------------------------------------------
@@ -162,7 +220,7 @@ router.post('/quotes', (req: Request, res: Response) => {
 // ----------------------------------------------------------------------------
 // 3. Order Creation & Life Cycle
 // ----------------------------------------------------------------------------
-router.post('/orders', (req: Request, res: Response) => {
+router.post('/orders', requireVerifiedPrincipal, (req: Request, res: Response) => {
   try {
     const idempotencyKey = req.headers['idempotency-key'] as string;
     if (idempotencyKey && idempotencyStore.has(idempotencyKey)) {
@@ -249,22 +307,45 @@ router.post('/orders', (req: Request, res: Response) => {
   }
 });
 
-router.get('/orders/:id', (req: Request, res: Response) => {
+router.get('/orders/:id', requireVerifiedPrincipal, (req: Request, res: Response) => {
   const order = ordersDb.get(req.params.id) || PersistentStore.getOrderById(req.params.id);
   if (!order) {
+    return sendError(res, 'ORDER_NOT_FOUND', 'عذراً، الطلب المطلوب غير موجود.', 404);
+  }
+  const principal = (req as RequestWithPrincipal).auth!;
+  const isOperations = principal.role === 'owner' || principal.role === 'operations_dispatcher' || principal.role === 'support_agent';
+  const isCustomerOwner = principal.role === 'customer' && order.customerId === principal.userId;
+  const captain = Array.from(mockCaptains.values()).find((item) => item.userId === principal.userId);
+  const isAssignedCaptain = principal.role === 'captain' && Boolean(captain) && order.assignedCaptainId === captain!.id;
+  if (!isOperations && !isCustomerOwner && !isAssignedCaptain) {
     return sendError(res, 'ORDER_NOT_FOUND', 'عذراً، الطلب المطلوب غير موجود.', 404);
   }
   return sendSuccess(res, order);
 });
 
-router.post('/orders/:id/transitions', (req: Request, res: Response) => {
+router.post('/orders/:id/transitions', requireVerifiedPrincipal, (req: Request, res: Response) => {
   try {
     const order = ordersDb.get(req.params.id) || PersistentStore.getOrderById(req.params.id);
     if (!order) {
       return sendError(res, 'ORDER_NOT_FOUND', 'الطلب غير موجود لإجراء التغيير.', 404);
     }
 
+    const principal = (req as RequestWithPrincipal).auth!;
+    const isOperations = principal.role === 'owner' || principal.role === 'operations_dispatcher' || principal.role === 'support_agent';
+    const isCustomerOwner = principal.role === 'customer' && order.customerId === principal.userId;
+    const captain = Array.from(mockCaptains.values()).find((item) => item.userId === principal.userId);
+    const isAssignedCaptain = principal.role === 'captain' && Boolean(captain) && order.assignedCaptainId === captain!.id;
+    if (!isOperations && !isCustomerOwner && !isAssignedCaptain) {
+      return sendError(res, 'ORDER_NOT_FOUND', 'الطلب غير موجود لإجراء التغيير.', 404);
+    }
+
     const { targetStatus, actorId, actorRole, cashCollectedPiasters, cancellationReason, notes } = req.body;
+    if (principal.role === 'customer' && targetStatus !== 'cancelled') {
+      return sendError(res, 'INSUFFICIENT_PERMISSIONS', 'لا يمكن للعميل تنفيذ هذا التغيير.', 403);
+    }
+    if (principal.role === 'captain' && !isAssignedCaptain) {
+      return sendError(res, 'INSUFFICIENT_PERMISSIONS', 'الكابتن غير معيّن لهذا الطلب.', 403);
+    }
 
     const result = OrderFsm.transition(order, {
       targetStatus: targetStatus as OrderStatus,
@@ -294,16 +375,23 @@ router.post('/orders/:id/transitions', (req: Request, res: Response) => {
   }
 });
 
-router.post('/orders/:id/cancel', (req: Request, res: Response) => {
+router.post('/orders/:id/cancel', requireVerifiedPrincipal, (req: Request, res: Response) => {
   try {
     const order = ordersDb.get(req.params.id) || PersistentStore.getOrderById(req.params.id);
     if (!order) {
       return sendError(res, 'ORDER_NOT_FOUND', 'الطلب المطلوب إلغاؤه غير موجود.', 404);
     }
 
+    const principal = (req as RequestWithPrincipal).auth!;
+    const isOperations = principal.role === 'owner' || principal.role === 'operations_dispatcher' || principal.role === 'support_agent';
+    const isCustomerOwner = principal.role === 'customer' && order.customerId === principal.userId;
+    if (!isOperations && !isCustomerOwner) {
+      return sendError(res, 'ORDER_NOT_FOUND', 'الطلب المطلوب إلغاؤه غير موجود.', 404);
+    }
+
     const { actorId, actorRole, reason } = req.body;
 
-    // Check cancellation permission
+    // Check cancellation permission after ownership has been established.
     if (!AccessControlGuard.canCancelOrder(actorRole, order.status)) {
       return sendError(
         res,
@@ -373,7 +461,7 @@ router.get('/captain/subscription', (req: Request, res: Response) => {
   });
 });
 
-router.post('/captain/orders/:id/accept', async (req: Request, res: Response) => {
+router.post('/captain/orders/:id/accept', requireVerifiedPrincipal, async (req: Request, res: Response) => {
   try {
     const { captainId } = req.body;
     const captain = mockCaptains.get(captainId) || PersistentStore.getCaptainById(captainId);
@@ -405,7 +493,7 @@ router.post('/captain/orders/:id/accept', async (req: Request, res: Response) =>
   }
 });
 
-router.post('/captain/orders/:id/cash-collection', (req: Request, res: Response) => {
+router.post('/captain/orders/:id/cash-collection', requireVerifiedPrincipal, (req: Request, res: Response) => {
   try {
     const { captainId, amountCollectedPiasters, customerConfirmed, notes } = req.body;
     const order = ordersDb.get(req.params.id) || PersistentStore.getOrderById(req.params.id);
@@ -414,12 +502,24 @@ router.post('/captain/orders/:id/cash-collection', (req: Request, res: Response)
       return sendError(res, 'ORDER_NOT_FOUND', 'الطلب غير موجود لتسجيل النقدية.', 404);
     }
 
-    const captain = mockCaptains.get(captainId) || PersistentStore.getCaptainById(captainId);
-    if (!captain) {
-      return sendError(res, 'CAPTAIN_NOT_FOUND', 'الكابتن غير موجود.', 404);
+    const principal = (req as RequestWithPrincipal).auth!;
+    const captain = Array.from(mockCaptains.values()).find((item) => item.userId === principal.userId);
+    if (principal.role !== 'captain' || !captain || captain.id !== order.assignedCaptainId) {
+      return sendError(res, 'ORDER_NOT_FOUND', 'الطلب غير موجود لتسجيل النقدية.', 404);
     }
-
+    if (order.paymentMethod !== 'cash_on_delivery') {
+      return sendError(res, 'CASH_COLLECTION_NOT_APPLICABLE', 'طريقة الدفع لهذا الطلب ليست نقدية.', 409);
+    }
+    if (order.isPaid || order.cashCollectedPiasters !== undefined) {
+      return sendError(res, 'CASH_ALREADY_RECORDED', 'تم تسجيل تحصيل هذا الطلب مسبقاً.', 409);
+    }
     const amount = Number(amountCollectedPiasters);
+    if (!Number.isSafeInteger(amount) || amount <= 0 || amount !== order.totalFarePiasters) {
+      return sendError(res, 'CASH_AMOUNT_MISMATCH', 'مبلغ التحصيل يجب أن يطابق إجمالي الطلب بالقرش.', 409);
+    }
+    if (order.status !== 'delivered') {
+      return sendError(res, 'ORDER_NOT_DELIVERED', 'لا يمكن تسجيل التحصيل قبل تسليم الطلب.', 409);
+    }
     order.cashCollectedPiasters = amount;
     order.isPaid = true;
     ordersDb.set(order.id, order);

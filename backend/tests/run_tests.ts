@@ -24,6 +24,9 @@ import { AccessControlGuard } from '../src/security/rbac.js';
 import { AuditLogger } from '../src/security/auditLogger.js';
 import { PersistentStore } from '../src/store/persistentStore.js';
 import { Order, CaptainProfile, WebhookEventPayload } from '../src/types/index.js';
+import express from 'express';
+import { router as apiRouter } from '../src/api/routes.js';
+import { createServer } from '../src/api/server.js';
 
 interface TestResult {
   suite: string;
@@ -642,6 +645,110 @@ export async function runAllTests(): Promise<{
     }
     assert(threw, 'Must reject unlocking passenger transport');
     assert(PersistentStore.getSettings().passengerMobilityLocked === true, 'Lock must remain enforced');
+  });
+
+  // --------------------------------------------------------------------------
+  // SUITE 12: Fail-Closed Authentication Boundary
+  // --------------------------------------------------------------------------
+  console.log('\n▶ SUITE 12: Fail-Closed Authentication Boundary');
+
+  await runTest('AuthBoundary', 'Blocks sensitive order routes when no verified principal is attached', async () => {
+    const app = express();
+    app.use(express.json());
+    app.use('/api/v1', apiRouter);
+    const server = app.listen(0, '127.0.0.1');
+    try {
+      await new Promise<void>((resolve, reject) => {
+        server.once('listening', resolve);
+        server.once('error', reject);
+      });
+      const address = server.address();
+      assert(address !== null && typeof address !== 'string', 'Test server must bind an ephemeral port');
+      const baseUrl = `http://127.0.0.1:${address.port}/api/v1`;
+      const cases = [
+        { method: 'POST', path: '/orders', body: { customerId: 'victim', actorRole: 'customer' } },
+        { method: 'GET', path: '/orders/ord_auth_test' },
+        { method: 'POST', path: '/orders/ord_auth_test/transitions', body: { actorId: 'attacker', actorRole: 'owner', targetStatus: 'delivered' } },
+        { method: 'POST', path: '/orders/ord_auth_test/cancel', body: { actorId: 'attacker', actorRole: 'owner' } },
+        { method: 'POST', path: '/captain/orders/ord_auth_test/accept', body: { captainId: 'cap_el_bagour_01' } },
+        { method: 'POST', path: '/captain/orders/ord_auth_test/cash-collection', body: { captainId: 'cap_el_bagour_01', amountCollectedPiasters: 100 } },
+      ];
+
+      for (const testCase of cases) {
+        const response = await fetch(`${baseUrl}${testCase.path}`, {
+          method: testCase.method,
+          headers: { 'content-type': 'application/json' },
+          ...(testCase.body ? { body: JSON.stringify(testCase.body) } : {}),
+        });
+        const payload = await response.json() as { success: boolean; error?: { code?: string } };
+        assert(response.status === 503, `${testCase.method} ${testCase.path} must fail closed with HTTP 503`);
+        assert(payload.success === false, `${testCase.method} ${testCase.path} must not report success`);
+        assert(payload.error?.code === 'AUTHENTICATION_REQUIRED', `${testCase.method} ${testCase.path} must require verified authentication`);
+      }
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => error ? reject(error) : resolve());
+      });
+    }
+  });
+
+  // --------------------------------------------------------------------------
+  // SUITE 13: Production API Authentication Wiring
+  // --------------------------------------------------------------------------
+  console.log('\n▶ SUITE 13: Production API Authentication Wiring');
+
+  await runTest('AuthWiring', 'Rejects missing auth and spoofed admin headers through createServer', async () => {
+    const previousUrl = process.env.SUPABASE_URL;
+    const previousKey = process.env.SUPABASE_ANON_KEY;
+    delete process.env.SUPABASE_URL;
+    delete process.env.SUPABASE_ANON_KEY;
+
+    const app = createServer();
+    const server = app.listen(0, '127.0.0.1');
+    try {
+      await new Promise<void>((resolve, reject) => {
+        server.once('listening', resolve);
+        server.once('error', reject);
+      });
+      const address = server.address();
+      assert(address !== null && typeof address !== 'string', 'Auth wiring test server must bind an ephemeral port');
+      const baseUrl = `http://127.0.0.1:${address.port}/api/v1`;
+
+      const protectedResponse = await fetch(`${baseUrl}/orders`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ customerId: 'victim', actorRole: 'owner' }),
+      });
+      const protectedPayload = await protectedResponse.json() as { error?: { code?: string } };
+      assert(protectedResponse.status === 503, 'Order creation without a principal must fail closed');
+      assert(protectedPayload.error?.code === 'AUTHENTICATION_REQUIRED', 'Missing principal must be rejected');
+
+      const adminResponse = await fetch(`${baseUrl}/admin/overview`, {
+        headers: { 'x-actor-id': 'attacker', 'x-actor-role': 'owner', 'x-actor-name': 'spoofed owner' },
+      });
+      assert(adminResponse.status === 401, 'Admin access without a verified principal must be rejected');
+
+      const invalidTokenResponse = await fetch(`${baseUrl}/orders`, {
+        method: 'POST',
+        headers: {
+          authorization: 'Bearer definitely-not-a-real-token',
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify({ customerId: 'victim' }),
+      });
+      const invalidTokenPayload = await invalidTokenResponse.json() as { error?: { code?: string } };
+      assert(invalidTokenResponse.status === 503, 'Auth provider misconfiguration must fail closed');
+      assert(invalidTokenPayload.error?.code === 'AUTH_PROVIDER_NOT_CONFIGURED', 'Auth misconfiguration must be explicit');
+
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => error ? reject(error) : resolve());
+      });
+      if (previousUrl === undefined) delete process.env.SUPABASE_URL;
+      else process.env.SUPABASE_URL = previousUrl;
+      if (previousKey === undefined) delete process.env.SUPABASE_ANON_KEY;
+      else process.env.SUPABASE_ANON_KEY = previousKey;
+    }
   });
 
   // --------------------------------------------------------------------------
