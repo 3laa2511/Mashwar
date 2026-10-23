@@ -312,6 +312,14 @@ router.get('/orders/:id', requireVerifiedPrincipal, (req: Request, res: Response
   if (!order) {
     return sendError(res, 'ORDER_NOT_FOUND', 'عذراً، الطلب المطلوب غير موجود.', 404);
   }
+  const principal = (req as RequestWithPrincipal).auth!;
+  const isOperations = principal.role === 'owner' || principal.role === 'operations_dispatcher' || principal.role === 'support_agent';
+  const isCustomerOwner = principal.role === 'customer' && order.customerId === principal.userId;
+  const captain = Array.from(mockCaptains.values()).find((item) => item.userId === principal.userId);
+  const isAssignedCaptain = principal.role === 'captain' && Boolean(captain) && order.assignedCaptainId === captain!.id;
+  if (!isOperations && !isCustomerOwner && !isAssignedCaptain) {
+    return sendError(res, 'ORDER_NOT_FOUND', 'عذراً، الطلب المطلوب غير موجود.', 404);
+  }
   return sendSuccess(res, order);
 });
 
@@ -322,7 +330,22 @@ router.post('/orders/:id/transitions', requireVerifiedPrincipal, (req: Request, 
       return sendError(res, 'ORDER_NOT_FOUND', 'الطلب غير موجود لإجراء التغيير.', 404);
     }
 
+    const principal = (req as RequestWithPrincipal).auth!;
+    const isOperations = principal.role === 'owner' || principal.role === 'operations_dispatcher' || principal.role === 'support_agent';
+    const isCustomerOwner = principal.role === 'customer' && order.customerId === principal.userId;
+    const captain = Array.from(mockCaptains.values()).find((item) => item.userId === principal.userId);
+    const isAssignedCaptain = principal.role === 'captain' && Boolean(captain) && order.assignedCaptainId === captain!.id;
+    if (!isOperations && !isCustomerOwner && !isAssignedCaptain) {
+      return sendError(res, 'ORDER_NOT_FOUND', 'الطلب غير موجود لإجراء التغيير.', 404);
+    }
+
     const { targetStatus, actorId, actorRole, cashCollectedPiasters, cancellationReason, notes } = req.body;
+    if (principal.role === 'customer' && targetStatus !== 'cancelled') {
+      return sendError(res, 'INSUFFICIENT_PERMISSIONS', 'لا يمكن للعميل تنفيذ هذا التغيير.', 403);
+    }
+    if (principal.role === 'captain' && !isAssignedCaptain) {
+      return sendError(res, 'INSUFFICIENT_PERMISSIONS', 'الكابتن غير معيّن لهذا الطلب.', 403);
+    }
 
     const result = OrderFsm.transition(order, {
       targetStatus: targetStatus as OrderStatus,
@@ -472,12 +495,24 @@ router.post('/captain/orders/:id/cash-collection', requireVerifiedPrincipal, (re
       return sendError(res, 'ORDER_NOT_FOUND', 'الطلب غير موجود لتسجيل النقدية.', 404);
     }
 
-    const captain = mockCaptains.get(captainId) || PersistentStore.getCaptainById(captainId);
-    if (!captain) {
-      return sendError(res, 'CAPTAIN_NOT_FOUND', 'الكابتن غير موجود.', 404);
+    const principal = (req as RequestWithPrincipal).auth!;
+    const captain = Array.from(mockCaptains.values()).find((item) => item.userId === principal.userId);
+    if (principal.role !== 'captain' || !captain || captain.id !== order.assignedCaptainId) {
+      return sendError(res, 'ORDER_NOT_FOUND', 'الطلب غير موجود لتسجيل النقدية.', 404);
     }
-
+    if (order.paymentMethod !== 'cash_on_delivery') {
+      return sendError(res, 'CASH_COLLECTION_NOT_APPLICABLE', 'طريقة الدفع لهذا الطلب ليست نقدية.', 409);
+    }
+    if (order.isPaid || order.cashCollectedPiasters !== undefined) {
+      return sendError(res, 'CASH_ALREADY_RECORDED', 'تم تسجيل تحصيل هذا الطلب مسبقاً.', 409);
+    }
     const amount = Number(amountCollectedPiasters);
+    if (!Number.isSafeInteger(amount) || amount <= 0 || amount !== order.totalFarePiasters) {
+      return sendError(res, 'CASH_AMOUNT_MISMATCH', 'مبلغ التحصيل يجب أن يطابق إجمالي الطلب بالقرش.', 409);
+    }
+    if (order.status !== 'delivered') {
+      return sendError(res, 'ORDER_NOT_DELIVERED', 'لا يمكن تسجيل التحصيل قبل تسليم الطلب.', 409);
+    }
     order.cashCollectedPiasters = amount;
     order.isPaid = true;
     ordersDb.set(order.id, order);
