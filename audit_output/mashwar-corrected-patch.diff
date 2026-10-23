@@ -3615,7 +3615,7 @@ diff --git a/.github/workflows/quality.yml b/.github/workflows/quality.yml
 new file mode 100644
 --- /dev/null
 +++ b/.github/workflows/quality.yml
-@@ -0,0 +1,77 @@
+@@ -0,0 +1,85 @@
 +name: Quality & Security CI
 +
 +on:
@@ -3661,37 +3661,45 @@ new file mode 100644
 +      - name: Checkout repository
 +        uses: actions/checkout@v4
 +
-+      - name: Check Flutter directory presence
++      - name: Check Flutter project presence
 +        id: check_flutter
 +        run: |
-+          if [ -d "flutter_mashwar" ]; then
-+            echo "has_flutter=true" >> "$GITHUB_OUTPUT"
++          if [ -f "flutter_mashwar/pubspec.yaml" ]; then
++            echo "present=true" >> "$GITHUB_OUTPUT"
++            echo "flutter_mashwar project detected."
 +          else
-+            echo "has_flutter=false" >> "$GITHUB_OUTPUT"
++            echo "present=false" >> "$GITHUB_OUTPUT"
++            echo "flutter_mashwar project not found in checkout."
 +          fi
 +
 +      - name: Setup Flutter SDK
-+        if: steps.check_flutter.outputs.has_flutter == 'true'
++        if: steps.check_flutter.outputs.present == 'true'
 +        uses: subosito/flutter-action@v2
 +        with:
-+          flutter-version: '3.22.x'
 +          channel: 'stable'
-+          cache: true
++          cache: false
 +
 +      - name: Install Flutter dependencies
-+        if: steps.check_flutter.outputs.has_flutter == 'true'
-+        working-directory: flutter_mashwar
-+        run: flutter pub get
++        if: steps.check_flutter.outputs.present == 'true'
++        run: |
++          cd flutter_mashwar
++          flutter pub get
 +
 +      - name: Analyze Flutter codebase
-+        if: steps.check_flutter.outputs.has_flutter == 'true'
-+        working-directory: flutter_mashwar
-+        run: flutter analyze
++        if: steps.check_flutter.outputs.present == 'true'
++        run: |
++          cd flutter_mashwar
++          flutter analyze
 +
 +      - name: Run Flutter unit tests
-+        if: steps.check_flutter.outputs.has_flutter == 'true'
-+        working-directory: flutter_mashwar
-+        run: flutter test
++        if: steps.check_flutter.outputs.present == 'true'
++        run: |
++          cd flutter_mashwar
++          flutter test
++
++      - name: Mobile checks status
++        if: steps.check_flutter.outputs.present != 'true'
++        run: echo "Flutter mobile app directory (flutter_mashwar) is not tracked in this checkout. Mobile checks completed as no-op."
 +
 diff --git a/package.json b/package.json
 new file mode 100644

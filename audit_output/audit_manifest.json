@@ -67,8 +67,8 @@
   },
   {
     "path": ".github/workflows/quality.yml",
-    "sizeBytes": 1919,
-    "sha256": "648991eb73ffb7545630457dafdc7a0959bb7d730daed77e726af19be11d96d0",
+    "sizeBytes": 2212,
+    "sha256": "8506dde8d0842b7939baf0bf3ccb64ad08d13ca1a0eafaaa7fa43c1b81c3fea8",
     "status": "VERIFIED"
   },
   {
