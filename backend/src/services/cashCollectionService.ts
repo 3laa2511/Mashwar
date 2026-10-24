@@ -364,6 +364,25 @@ export class CashCollectionService {
     await prevLock;
 
     try {
+      // 3b. Re-check Idempotency Key inside critical section for concurrent identical requests
+      if (this.idempotencyCache.has(effectiveKey)) {
+        const cached = this.idempotencyCache.get(effectiveKey)!;
+        if (
+          cached.orderId !== orderId ||
+          cached.captainId !== captain.id ||
+          cached.amountPiasters !== amountPiasters
+        ) {
+          const err = new Error('مفتاح عدم التكرار (Idempotency Key) مستخدم مسبقاً لطلب أو بمبلغ مختلف.');
+          (err as any).code = 'IDEMPOTENCY_PAYLOAD_MISMATCH';
+          (err as any).statusCode = 409;
+          throw err;
+        }
+        return {
+          ...cached.result,
+          isIdempotentReplay: true,
+        };
+      }
+
       // 4. Read latest state inside critical section
       const order = PersistentStore.getOrderById(orderId);
       if (!order) {
@@ -407,29 +426,12 @@ export class CashCollectionService {
         throw err;
       }
 
-      // 7. Prevent duplicate cash collection if order is already marked paid
+      // 7b. Prevent duplicate cash collection if order is already marked paid with a different idempotency key
       if (order.isPaid && order.cashCollectedPiasters !== undefined && order.cashCollectedPiasters > 0) {
-        const existingResult: CashCollectionResult = {
-          success: true,
-          orderId: order.id,
-          amountCollectedPiasters: order.cashCollectedPiasters,
-          formattedAmountEgp: `${(order.cashCollectedPiasters / 100).toFixed(2)} ج.م`,
-          captainCurrentCashPiasters: captain.cashHoldingPiasters,
-          formattedCaptainCashEgp: `${(captain.cashHoldingPiasters / 100).toFixed(2)} ج.م`,
-          ceilingExceeded: captain.cashHoldingPiasters > captain.maxCashHoldingPiasters,
-          customerConfirmed: true,
-          idempotencyKey: effectiveKey,
-          isIdempotentReplay: true,
-          ledgerEntryId: `ledger_existing_${order.id}`,
-          recordedAt: order.updatedAt,
-        };
-        this.idempotencyCache.set(effectiveKey, {
-          result: existingResult,
-          orderId: order.id,
-          captainId: captain.id,
-          amountPiasters: order.cashCollectedPiasters,
-        });
-        return existingResult;
+        const err = new Error('تم تحصيل قيمة هذا الطلب مسبقاً.');
+        (err as any).code = 'ORDER_ALREADY_PAID';
+        (err as any).statusCode = 409;
+        throw err;
       }
 
       // 8. Amount must strictly match or cover authoritative order fare

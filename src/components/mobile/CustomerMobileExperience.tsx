@@ -65,6 +65,10 @@ export const CustomerMobileExperience: React.FC<CustomerMobileExperienceProps> =
     activeCustomerOrder,
     chatMessages,
     sendChatMessage,
+    customerWalletBalancePiasters,
+    customerWalletBalanceEgp,
+    customerWalletTransactions,
+    topUpCustomerWallet,
     setIsAuthModalOpen,
   } = useMarketplace();
 
@@ -93,6 +97,16 @@ export const CustomerMobileExperience: React.FC<CustomerMobileExperienceProps> =
   // Chat modal state
   const [showChatModal, setShowChatModal] = useState(false);
   const [inputChatText, setInputChatText] = useState('');
+
+  // Wallet filter & top-up feedback state in Profile
+  const [walletFilter, setWalletFilter] = useState<'all' | 'credit' | 'debit'>('all');
+  const [topUpSuccessText, setTopUpSuccessText] = useState<string | null>(null);
+
+  const handleQuickTopUp = (amountEgp: number, channelAr: string) => {
+    topUpCustomerWallet(amountEgp, channelAr);
+    setTopUpSuccessText(`تم شحن +${amountEgp}.00 ج.م في محفظتك بنجاح`);
+    setTimeout(() => setTopUpSuccessText(null), 3000);
+  };
 
   // Filtered stores
   const filteredStores = stores.filter((s) => {
@@ -728,31 +742,223 @@ export const CustomerMobileExperience: React.FC<CustomerMobileExperienceProps> =
         )}
 
         {/* ========================================================
-            TAB 4: PROFILE
+            TAB 4: PROFILE & CUSTOMER WALLET
            ======================================================== */}
         {activeTab === 'profile' && (
-          <div className="flex-1 p-4 overflow-y-auto flex flex-col gap-3">
-            <div className="bg-white p-4 rounded-2xl border border-slate-100 shadow-2xs flex items-center gap-3">
-              <div className="w-14 h-14 rounded-2xl bg-emerald-100 text-emerald-800 flex items-center justify-center font-black text-2xl shadow-2xs">
-                {currentUser.avatar}
+          <div className="flex-1 p-4 overflow-y-auto flex flex-col gap-3.5 pb-8">
+            {/* Customer Identity Card */}
+            <div className="bg-white p-4 rounded-2xl border border-slate-100 shadow-2xs flex items-center justify-between gap-3">
+              <div className="flex items-center gap-3">
+                <div className="w-14 h-14 rounded-2xl bg-emerald-100 text-emerald-800 flex items-center justify-center font-black text-2xl shadow-2xs">
+                  {currentUser.avatar}
+                </div>
+                <div>
+                  <h3 className="font-extrabold text-sm text-slate-900">{currentUser.name}</h3>
+                  <p className="text-xs text-slate-500">{currentUser.phone}</p>
+                  <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200 mt-1 inline-block">
+                    {currentUser.roleBadgeAr}
+                  </span>
+                </div>
               </div>
-              <div>
-                <h3 className="font-extrabold text-sm text-slate-900">{currentUser.name}</h3>
-                <p className="text-xs text-slate-500">{currentUser.phone}</p>
-                <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200 mt-1 inline-block">
-                  {currentUser.roleBadgeAr}
-                </span>
+              <div className="text-left">
+                <span className="text-[10px] font-bold text-slate-400 block">نطاق الحساب</span>
+                <span className="text-xs font-extrabold text-slate-800">الباجور • المنوفية</span>
               </div>
             </div>
 
+            {/* ====================================================
+                WALLET SECTION (محفظة مشوار والرصيد المتاح)
+               ==================================================== */}
+            <div className="bg-gradient-to-br from-emerald-900 via-emerald-800 to-teal-900 rounded-2xl p-4 text-white shadow-md flex flex-col gap-3 relative overflow-hidden">
+              <div className="flex items-start justify-between">
+                <div className="flex items-center gap-2">
+                  <div className="w-9 h-9 rounded-xl bg-white/15 backdrop-blur-xs flex items-center justify-center text-emerald-200">
+                    <Wallet className="w-5 h-5" />
+                  </div>
+                  <div>
+                    <div className="text-xs font-extrabold tracking-tight flex items-center gap-1.5">
+                      <span>محفظة مشوار (Wallet)</span>
+                      <span className="text-[9px] font-bold px-1.5 py-0.5 rounded-md bg-emerald-500/30 text-emerald-100 border border-emerald-400/30">
+                        0% رسوم
+                      </span>
+                    </div>
+                    <p className="text-[10px] text-emerald-200/90">
+                      الرصيد المتاح للطلبات والتوصيل الفوري
+                    </p>
+                  </div>
+                </div>
+                <span className="text-[10px] font-mono text-emerald-200/90 bg-black/20 px-2 py-0.5 rounded-lg">
+                  {customerWalletBalancePiasters.toLocaleString('en-US')} قرش
+                </span>
+              </div>
+
+              {/* Balance Display */}
+              <div className="py-1 flex items-baseline justify-between border-y border-white/10">
+                <div>
+                  <span className="text-[10px] text-emerald-200 block">الرصيد المتاح حالياً</span>
+                  <div className="text-2xl font-black tracking-tight text-white">
+                    {customerWalletBalanceEgp.toFixed(2)}{' '}
+                    <span className="text-xs font-bold text-emerald-200">ج.م</span>
+                  </div>
+                </div>
+                <div className="text-left">
+                  <span className="text-[10px] text-emerald-200 block">حالة المحفظة</span>
+                  <span className="text-[11px] font-extrabold text-emerald-300 flex items-center gap-1 justify-end">
+                    <CheckCircle2 className="w-3.5 h-3.5" />
+                    <span>مفعّلة ومؤمّنة</span>
+                  </span>
+                </div>
+              </div>
+
+              {/* Quick Top-Up Buttons */}
+              <div className="flex flex-col gap-1.5">
+                <span className="text-[10px] font-bold text-emerald-100">
+                  شحن فوري للرصيد (إنستاباي / فودافون كاش):
+                </span>
+                <div className="grid grid-cols-2 gap-2">
+                  <button
+                    type="button"
+                    onClick={() => handleQuickTopUp(50, 'إنستاباي مصر (InstaPay)')}
+                    className="py-2 px-2.5 rounded-xl bg-white/15 hover:bg-white/25 active:scale-98 text-white font-extrabold text-[11px] flex items-center justify-center gap-1 transition-all border border-white/15"
+                  >
+                    <Plus className="w-3.5 h-3.5 text-emerald-300" />
+                    <span>شحن +50 ج.م (إنستاباي)</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleQuickTopUp(100, 'فودافون كاش')}
+                    className="py-2 px-2.5 rounded-xl bg-white text-emerald-950 hover:bg-emerald-50 active:scale-98 font-extrabold text-[11px] flex items-center justify-center gap-1 transition-all shadow-xs"
+                  >
+                    <Plus className="w-3.5 h-3.5 text-emerald-700" />
+                    <span>شحن +100 ج.م (محفظة)</span>
+                  </button>
+                </div>
+              </div>
+
+              {topUpSuccessText && (
+                <div className="px-3 py-1.5 rounded-xl bg-emerald-500/30 border border-emerald-300/40 text-[11px] font-bold text-white flex items-center gap-1.5">
+                  <CheckCircle2 className="w-3.5 h-3.5 text-emerald-200 shrink-0" />
+                  <span>{topUpSuccessText}</span>
+                </div>
+              )}
+            </div>
+
+            {/* ====================================================
+                WALLET TRANSACTION HISTORY (سجل معاملات المحفظة)
+               ==================================================== */}
+            <div className="bg-white rounded-2xl border border-slate-100 shadow-2xs p-3.5 flex flex-col gap-2.5">
+              <div className="flex items-center justify-between">
+                <div>
+                  <h4 className="font-extrabold text-xs text-slate-900">سجل معاملات المحفظة</h4>
+                  <p className="text-[10px] text-slate-500">
+                    عمليات الشحن، التعويضات، وسداد الطلبات ({customerWalletTransactions.length})
+                  </p>
+                </div>
+
+                {/* Filter buttons */}
+                <div className="flex items-center gap-1 bg-slate-100 p-0.5 rounded-lg text-[10px] font-bold">
+                  <button
+                    type="button"
+                    onClick={() => setWalletFilter('all')}
+                    className={`px-2 py-1 rounded-md transition-colors ${
+                      walletFilter === 'all'
+                        ? 'bg-white text-emerald-800 shadow-2xs'
+                        : 'text-slate-500 hover:text-slate-800'
+                    }`}
+                  >
+                    الكل
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setWalletFilter('credit')}
+                    className={`px-2 py-1 rounded-md transition-colors ${
+                      walletFilter === 'credit'
+                        ? 'bg-white text-emerald-800 shadow-2xs'
+                        : 'text-slate-500 hover:text-slate-800'
+                    }`}
+                  >
+                    إيداع
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setWalletFilter('debit')}
+                    className={`px-2 py-1 rounded-md transition-colors ${
+                      walletFilter === 'debit'
+                        ? 'bg-white text-emerald-800 shadow-2xs'
+                        : 'text-slate-500 hover:text-slate-800'
+                    }`}
+                  >
+                    خصم
+                  </button>
+                </div>
+              </div>
+
+              <div className="divide-y divide-slate-100">
+                {customerWalletTransactions
+                  .filter((tx) => (walletFilter === 'all' ? true : tx.type === walletFilter))
+                  .map((tx) => {
+                    const isCredit = tx.type === 'credit';
+                    return (
+                      <div key={tx.id} className="py-2.5 flex items-start justify-between gap-2.5 text-xs">
+                        <div className="flex items-start gap-2.5 min-w-0">
+                          <div
+                            className={`w-8 h-8 rounded-xl shrink-0 flex items-center justify-center font-black text-xs mt-0.5 ${
+                              isCredit
+                                ? 'bg-emerald-50 text-emerald-700 border border-emerald-200/70'
+                                : 'bg-rose-50 text-rose-700 border border-rose-200/70'
+                            }`}
+                          >
+                            {isCredit ? '+' : '−'}
+                          </div>
+                          <div className="min-w-0">
+                            <div className="font-extrabold text-slate-900 truncate">{tx.titleAr}</div>
+                            <p className="text-[10px] text-slate-500 truncate mt-0.5">
+                              {tx.descriptionAr}
+                            </p>
+                            <div className="flex items-center gap-2 mt-1 text-[10px] text-slate-400">
+                              <span>{tx.createdAt}</span>
+                              {tx.orderNumber && (
+                                <span className="font-bold text-slate-600 bg-slate-100 px-1.5 py-0.2 rounded">
+                                  {tx.orderNumber}
+                                </span>
+                              )}
+                              {tx.paymentChannelAr && (
+                                <span className="text-emerald-700 font-semibold">
+                                  • {tx.paymentChannelAr}
+                                </span>
+                              )}
+                            </div>
+                          </div>
+                        </div>
+
+                        <div className="text-left shrink-0">
+                          <div
+                            className={`font-black text-xs ${
+                              isCredit ? 'text-emerald-700' : 'text-rose-700'
+                            }`}
+                          >
+                            {isCredit ? '+' : '−'}
+                            {tx.amountEgp.toFixed(2)} ج.م
+                          </div>
+                          <div className="text-[9px] text-slate-400 mt-0.5">
+                            الرصيد: {(tx.balanceAfterPiasters / 100).toFixed(2)} ج.م
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+              </div>
+            </div>
+
+            {/* Customer Preferences & Account Switcher */}
             <div className="bg-white rounded-2xl border border-slate-100 shadow-2xs divide-y divide-slate-100 text-xs text-slate-700 font-semibold">
               <div className="p-3.5 flex items-center justify-between">
                 <span>العنوان المفضل: شارع الجيش - برج الشروق، الباجور</span>
                 <span className="text-emerald-700 font-bold">الرئيسي</span>
               </div>
               <div className="p-3.5 flex items-center justify-between">
-                <span>طريقة الدفع الافتراضية: نقداً عند الاستلام (كاش)</span>
-                <span className="text-emerald-700 font-bold">تعديل</span>
+                <span>طريقة الدفع الافتراضية: نقداً عند الاستلام / المحفظة</span>
+                <span className="text-emerald-700 font-bold">نشط</span>
               </div>
               <div className="p-3.5 flex items-center justify-between">
                 <span>رقم خدمة العملاء بالباجور</span>

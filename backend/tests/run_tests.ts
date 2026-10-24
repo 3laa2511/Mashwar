@@ -996,6 +996,18 @@ export async function runAllTests(): Promise<{
     assert(updatedCap.subscriptionStatus === 'suspended', 'Captain must be suspended due to cash ceiling breach');
   });
 
+  await runTest('CashCollection', 'Rejects duplicate cash collection on an already-paid order when using a different idempotency key (409 ORDER_ALREADY_PAID)', async () => {
+    const captain = PersistentStore.getCaptainById('cpt_ahmed_fathy')!;
+    await assertThrowsAsync(async () => {
+      await CashCollectionService.recordCashCollection({
+        orderId: 'ord_cash_test_101',
+        captain,
+        amountPiasters: 2500,
+        idempotencyKey: 'idemp_key_cod_101_different_key',
+      });
+    }, 'ORDER_ALREADY_PAID');
+  });
+
   // --------------------------------------------------------------------------
   // SUITE 15: Cross-Tenant Isolation & Anti-Spoofing
   // --------------------------------------------------------------------------
@@ -1052,6 +1064,83 @@ export async function runAllTests(): Promise<{
     const captainIntruderId = 'cpt_intruder_99';
     const canTransition = orderWithCapB.assignedCaptainId === captainIntruderId;
     assert(canTransition === false, 'Intruding captain cannot transition another captain order');
+  });
+
+  await runTest('SecurityIsolation', 'Enforces HTTP 403 cross-tenant isolation on /orders/:id, /orders/:id/history, /orders/:id/cancel, and /orders/:id/transitions', async () => {
+    const app = createServer();
+    const server = app.listen(0);
+    const address = server.address() as { port: number };
+    const baseUrl = `http://127.0.0.1:${address.port}/api/v1`;
+
+    try {
+      const bobOrder: Order = {
+        ...baseOrder,
+        id: 'ord_http_bob_isolation_01',
+        orderNumber: 'MSH-8840',
+        customerId: 'usr_cust_bob',
+        serviceTypeId: 'restaurant_store',
+        storeId: 'merchant_basha',
+        merchantUserId: 'usr_merch_basha',
+        status: 'captain_assigned',
+        assignedCaptainId: 'cpt_ahmed_fathy', // usr_cpt_01
+        totalFarePiasters: 3500,
+        paymentMethod: 'cash_on_delivery',
+        isPaid: false,
+      };
+      PersistentStore.saveOrder(bobOrder);
+
+      const aliceToken = generateTestToken({ userId: 'usr_cust_alice', role: 'customer' });
+      const otherCaptainToken = generateTestToken({ userId: 'usr_cpt_02', role: 'captain' }); // cpt_mahmoud_ibrahim
+      const otherMerchantToken = generateTestToken({ userId: 'usr_merch_amana', role: 'merchant' });
+
+      // 1. Customer Alice cannot GET Bob's order (403)
+      const getOrderAlice = await fetch(`${baseUrl}/orders/${bobOrder.id}`, {
+        headers: { Authorization: `Bearer ${aliceToken}` },
+      });
+      assert(getOrderAlice.status === 403, `Expected 403 for Alice reading Bob order, got ${getOrderAlice.status}`);
+
+      // 2. Customer Alice cannot GET Bob's order history (403)
+      const getHistAlice = await fetch(`${baseUrl}/orders/${bobOrder.id}/history`, {
+        headers: { Authorization: `Bearer ${aliceToken}` },
+      });
+      assert(getHistAlice.status === 403, `Expected 403 for Alice reading Bob history, got ${getHistAlice.status}`);
+
+      // 3. Customer Alice cannot cancel Bob's order (403)
+      const cancelAlice = await fetch(`${baseUrl}/orders/${bobOrder.id}/cancel`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${aliceToken}`,
+        },
+        body: JSON.stringify({ reason: 'محاولة إلغاء غير مصرحة' }),
+      });
+      assert(cancelAlice.status === 403, `Expected 403 for Alice cancelling Bob order, got ${cancelAlice.status}`);
+
+      // 4. Captain B (usr_cpt_02) cannot GET order history of order assigned to Captain A (403)
+      const getHistCapB = await fetch(`${baseUrl}/orders/${bobOrder.id}/history`, {
+        headers: { Authorization: `Bearer ${otherCaptainToken}` },
+      });
+      assert(getHistCapB.status === 403, `Expected 403 for unassigned captain reading history, got ${getHistCapB.status}`);
+
+      // 5. Captain B (usr_cpt_02) cannot transition order assigned to Captain A (403)
+      const transCapB = await fetch(`${baseUrl}/orders/${bobOrder.id}/transitions`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${otherCaptainToken}`,
+        },
+        body: JSON.stringify({ targetStatus: 'at_pickup' }),
+      });
+      assert(transCapB.status === 403, `Expected 403 for unassigned captain transitioning order, got ${transCapB.status}`);
+
+      // 6. Merchant B (usr_merch_amana) cannot GET order belonging to Merchant A (403)
+      const getOrderMerchB = await fetch(`${baseUrl}/orders/${bobOrder.id}`, {
+        headers: { Authorization: `Bearer ${otherMerchantToken}` },
+      });
+      assert(getOrderMerchB.status === 403, `Expected 403 for other merchant reading order, got ${getOrderMerchB.status}`);
+    } finally {
+      server.close();
+    }
   });
   // --------------------------------------------------------------------------
   // SUITE 16: PostgreSQL Transaction Guarantees, Rollback & Concurrency Verification

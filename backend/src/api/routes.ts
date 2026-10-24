@@ -628,6 +628,12 @@ router.get('/orders/:id/history', authenticate, async (req: Request, res: Respon
   if (user.role === 'customer' && order.customerId !== user.id) {
     return sendError(res, 'FORBIDDEN_RESOURCE', 'غير مصرح لك بالاطلاع على سجل طلب لا يخص حسابك.', 403);
   }
+  if (user.role === 'captain') {
+    const captain = await CaptainService.resolveByUserId(user.id);
+    if (!captain || order.assignedCaptainId !== captain.id) {
+      return sendError(res, 'FORBIDDEN_RESOURCE', 'غير مصرح للكابتن بالاطلاع على سجل طلب غير مسند إليه.', 403);
+    }
+  }
   if (
     user.role === 'merchant' &&
     order.customerId !== user.id &&
@@ -656,12 +662,12 @@ router.post('/orders/:id/transitions', authenticate, async (req: Request, res: R
     const user = req.user!;
     const { targetStatus, cashCollectedPiasters, cancellationReason, notes } = req.body;
 
-    // Captain transition ownership check
+    // Captain transition ownership check (must be the assigned captain)
     let resolvedActorId = user.id;
     if (user.role === 'captain') {
       const captain = await CaptainService.requireActiveCaptain(user.id);
-      if (order.assignedCaptainId && order.assignedCaptainId !== captain.id) {
-        return sendError(res, 'UNAUTHORIZED_CAPTAIN_ACTION', 'غير مصرح لك بتحديث حالة طلب مسند لكابتن آخر.', 403);
+      if (!order.assignedCaptainId || order.assignedCaptainId !== captain.id) {
+        return sendError(res, 'UNAUTHORIZED_CAPTAIN_ACTION', 'غير مصرح لك بتحديث حالة طلب غير مسند إليك.', 403);
       }
       resolvedActorId = captain.id;
     }
