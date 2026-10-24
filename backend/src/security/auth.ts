@@ -32,10 +32,31 @@ declare global {
   }
 }
 
-// Secret for local JWT verification in sandbox/test environments
-const SUPABASE_JWT_SECRET = process.env.SUPABASE_JWT_SECRET || 'mashwar_secure_supabase_jwt_secret_el_bagour_2026';
-const SUPABASE_URL = process.env.SUPABASE_URL || '';
-const SUPABASE_ANON_KEY = process.env.SUPABASE_ANON_KEY || '';
+// Default secret strictly restricted to non-production local/test environments
+const DEV_FALLBACK_JWT_SECRET = 'mashwar_secure_supabase_jwt_secret_el_bagour_2026';
+
+/**
+ * Resolves the authoritative JWT verification secret.
+ * Enforces fail-closed behavior in production: throws 500 AUTH_CONFIG_MISSING
+ * if SUPABASE_JWT_SECRET is unset or empty when NODE_ENV === 'production'.
+ */
+export function resolveJwtSecret(): string {
+  const configuredSecret = process.env.SUPABASE_JWT_SECRET?.trim();
+  if (configuredSecret && configuredSecret.length > 0) {
+    return configuredSecret;
+  }
+
+  if (process.env.NODE_ENV === 'production') {
+    const err = new Error(
+      'خطأ إعدادات أمنية حرج: متغير البيئة SUPABASE_JWT_SECRET غير مضبوط في بيئة الإنتاج (Fail-Closed).'
+    );
+    (err as any).code = 'AUTH_CONFIG_MISSING';
+    (err as any).statusCode = 500;
+    throw err;
+  }
+
+  return DEV_FALLBACK_JWT_SECRET;
+}
 
 /**
  * Validates a JWT or HMAC token.
@@ -49,6 +70,8 @@ export function verifyToken(token: string): AuthenticatedUser {
     throw err;
   }
 
+  const jwtSecret = resolveJwtSecret();
+
   // Handle standard 3-part JWT format: header.payload.signature
   const parts = token.split('.');
   if (parts.length === 3) {
@@ -57,7 +80,7 @@ export function verifyToken(token: string): AuthenticatedUser {
     // Verify HMAC-SHA256 signature
     const dataToSign = `${headerB64}.${payloadB64}`;
     const expectedSig = crypto
-      .createHmac('sha256', SUPABASE_JWT_SECRET)
+      .createHmac('sha256', jwtSecret)
       .update(dataToSign)
       .digest('base64url');
 
@@ -150,7 +173,7 @@ export function verifyToken(token: string): AuthenticatedUser {
 }
 
 /**
- * Creates a signed JWT for testing and demo flows
+ * Creates a signed JWT for testing and demo flows (forbidden in production).
  */
 export function generateTestToken(params: {
   userId: string;
@@ -159,6 +182,14 @@ export function generateTestToken(params: {
   fullName?: string;
   expiresInSeconds?: number;
 }): string {
+  if (process.env.NODE_ENV === 'production') {
+    const err = new Error('غير مسموح بتوليد رموز اختبارية في بيئة الإنتاج.');
+    (err as any).code = 'TEST_TOKEN_FORBIDDEN_IN_PRODUCTION';
+    (err as any).statusCode = 403;
+    throw err;
+  }
+
+  const jwtSecret = resolveJwtSecret();
   const header = { alg: 'HS256', typ: 'JWT' };
   const nowSec = Math.floor(Date.now() / 1000);
   const expiresIn = params.expiresInSeconds ?? 3600;
@@ -180,7 +211,7 @@ export function generateTestToken(params: {
   const headerB64 = Buffer.from(JSON.stringify(header)).toString('base64url');
   const payloadB64 = Buffer.from(JSON.stringify(payload)).toString('base64url');
   const signature = crypto
-    .createHmac('sha256', SUPABASE_JWT_SECRET)
+    .createHmac('sha256', jwtSecret)
     .update(`${headerB64}.${payloadB64}`)
     .digest('base64url');
 

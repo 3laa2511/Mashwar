@@ -748,6 +748,31 @@ export async function runAllTests(): Promise<{
     assert(user.phone === '+201012345671', 'Phone must match user metadata');
   });
 
+  await runTest('Auth', 'Fails closed in production when SUPABASE_JWT_SECRET is missing and forbids generateTestToken in production', () => {
+    const sampleToken = generateTestToken({ userId: 'usr_cpt_01', role: 'captain' });
+    const prevNodeEnv = process.env.NODE_ENV;
+    const prevSecret = process.env.SUPABASE_JWT_SECRET;
+
+    try {
+      process.env.NODE_ENV = 'production';
+      delete process.env.SUPABASE_JWT_SECRET;
+
+      assertThrows(() => {
+        verifyToken(sampleToken);
+      }, 'AUTH_CONFIG_MISSING');
+
+      assertThrows(() => {
+        generateTestToken({ userId: 'usr_cpt_01', role: 'captain' });
+      }, 'TEST_TOKEN_FORBIDDEN_IN_PRODUCTION');
+    } finally {
+      if (prevNodeEnv === undefined) delete process.env.NODE_ENV;
+      else process.env.NODE_ENV = prevNodeEnv;
+
+      if (prevSecret === undefined) delete process.env.SUPABASE_JWT_SECRET;
+      else process.env.SUPABASE_JWT_SECRET = prevSecret;
+    }
+  });
+
   // --------------------------------------------------------------------------
   // SUITE 13: Database-Backed Captain Identity Resolution
   // --------------------------------------------------------------------------
@@ -1138,6 +1163,88 @@ export async function runAllTests(): Promise<{
         headers: { Authorization: `Bearer ${otherMerchantToken}` },
       });
       assert(getOrderMerchB.status === 403, `Expected 403 for other merchant reading order, got ${getOrderMerchB.status}`);
+
+      // 7. Unassigned order: Captain cannot bypass /accept and transition an unassigned ready_for_pickup order (403)
+      const unassignedOrder: Order = {
+        ...baseOrder,
+        id: 'ord_http_unassigned_02',
+        orderNumber: 'MSH-8841',
+        customerId: 'usr_cust_bob',
+        status: 'ready_for_pickup',
+        assignedCaptainId: undefined,
+      };
+      PersistentStore.saveOrder(unassignedOrder);
+
+      const transUnassignedCap = await fetch(`${baseUrl}/orders/${unassignedOrder.id}/transitions`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${otherCaptainToken}`,
+        },
+        body: JSON.stringify({ targetStatus: 'at_pickup' }),
+      });
+      assert(
+        transUnassignedCap.status === 403,
+        `Expected 403 for captain transitioning unassigned order without claiming, got ${transUnassignedCap.status}`
+      );
+
+      // 8. HTTP duplicate cash collection: same Idempotency-Key replays (200), different Idempotency-Key on paid order fails with 409 ORDER_ALREADY_PAID
+      const assignedCapToken = generateTestToken({ userId: 'usr_cpt_01', role: 'captain' });
+      const inTransitOrder: Order = {
+        ...baseOrder,
+        id: 'ord_http_cod_dup_03',
+        orderNumber: 'MSH-8842',
+        customerId: 'usr_cust_bob',
+        status: 'in_transit',
+        assignedCaptainId: 'cpt_ahmed_fathy',
+        totalFarePiasters: 3000,
+        paymentMethod: 'cash_on_delivery',
+        isPaid: false,
+      };
+      PersistentStore.saveOrder(inTransitOrder);
+
+      const firstCashRes = await fetch(`${baseUrl}/captain/orders/${inTransitOrder.id}/cash-collection`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${assignedCapToken}`,
+          'Idempotency-Key': 'http_cod_key_alpha',
+        },
+        body: JSON.stringify({ amountCollectedPiasters: 3000, customerConfirmed: true }),
+      });
+      assert(firstCashRes.status === 200, `Expected 200 on first cash collection, got ${firstCashRes.status}`);
+
+      const replayCashRes = await fetch(`${baseUrl}/captain/orders/${inTransitOrder.id}/cash-collection`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${assignedCapToken}`,
+          'Idempotency-Key': 'http_cod_key_alpha',
+        },
+        body: JSON.stringify({ amountCollectedPiasters: 3000, customerConfirmed: true }),
+      });
+      assert(replayCashRes.status === 200, `Expected 200 on idempotent replay, got ${replayCashRes.status}`);
+      const replayJson = await replayCashRes.json();
+      assert(replayJson.data.isIdempotentReplay === true, 'Replay response must set isIdempotentReplay = true');
+
+      const duplicateNewKeyRes = await fetch(`${baseUrl}/captain/orders/${inTransitOrder.id}/cash-collection`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${assignedCapToken}`,
+          'Idempotency-Key': 'http_cod_key_beta_distinct',
+        },
+        body: JSON.stringify({ amountCollectedPiasters: 3000, customerConfirmed: true }),
+      });
+      assert(
+        duplicateNewKeyRes.status === 409,
+        `Expected 409 ORDER_ALREADY_PAID on duplicate collection with distinct key, got ${duplicateNewKeyRes.status}`
+      );
+      const duplicateErrJson = await duplicateNewKeyRes.json();
+      assert(
+        duplicateErrJson.error?.code === 'ORDER_ALREADY_PAID',
+        `Expected error code ORDER_ALREADY_PAID, got ${duplicateErrJson.error?.code}`
+      );
     } finally {
       server.close();
     }

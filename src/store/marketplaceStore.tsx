@@ -104,21 +104,6 @@ export interface ChatMessage {
   time: string;
 }
 
-export interface WalletTransaction {
-  id: string;
-  customerId: string;
-  type: 'credit' | 'debit';
-  category: 'top_up' | 'refund_compensation' | 'promo_bonus' | 'order_payment';
-  titleAr: string;
-  descriptionAr: string;
-  amountPiasters: number; // Integer Egyptian Piasters (1 EGP = 100 Piasters)
-  amountEgp: number;
-  balanceAfterPiasters: number;
-  orderNumber?: string;
-  paymentChannelAr?: string;
-  createdAt: string;
-}
-
 // Pre-configured Demo Accounts
 export const DEMO_PERSONAS: DemoUser[] = [
   {
@@ -433,50 +418,6 @@ const INITIAL_ORDERS: MarketplaceOrder[] = [
   },
 ];
 
-const INITIAL_WALLET_TRANSACTIONS: WalletTransaction[] = [
-  {
-    id: 'wtx_bagour_03',
-    customerId: 'user_cust_01',
-    type: 'credit',
-    category: 'refund_compensation',
-    titleAr: 'رصيد تعويضي - ضمان وقت التوصيل',
-    descriptionAr: 'تعويض تلقائي لتأخر توصيل طلب سابق بمركز الباجور',
-    amountPiasters: 1500, // 15.00 EGP
-    amountEgp: 15,
-    balanceAfterPiasters: 14500, // 145.00 EGP
-    orderNumber: 'MSH-8912',
-    paymentChannelAr: 'محفظة مشوار',
-    createdAt: 'اليوم • 01:15 م',
-  },
-  {
-    id: 'wtx_bagour_02',
-    customerId: 'user_cust_01',
-    type: 'debit',
-    category: 'order_payment',
-    titleAr: 'سداد طلب - صيدلية الأمانة المركزية',
-    descriptionAr: 'خصم مباشر من الرصيد المتاح بالمحفظة',
-    amountPiasters: 7000, // 70.00 EGP
-    amountEgp: 70,
-    balanceAfterPiasters: 13000, // 130.00 EGP
-    orderNumber: 'MSH-9104',
-    paymentChannelAr: 'رصيد المحفظة',
-    createdAt: 'أمس • 08:40 م',
-  },
-  {
-    id: 'wtx_bagour_01',
-    customerId: 'user_cust_01',
-    type: 'credit',
-    category: 'top_up',
-    titleAr: 'شحن رصيد المحفظة عبر إنستاباي',
-    descriptionAr: 'إيداع فوري موثق (0% رسوم شحن)',
-    amountPiasters: 20000, // 200.00 EGP
-    amountEgp: 200,
-    balanceAfterPiasters: 20000, // 200.00 EGP
-    paymentChannelAr: 'InstaPay Egypt',
-    createdAt: 'منذ ٣ أيام • 04:20 م',
-  },
-];
-
 interface MarketplaceContextType {
   // Authentication & Persona state
   currentUser: DemoUser;
@@ -529,12 +470,6 @@ interface MarketplaceContextType {
   chatMessages: ChatMessage[];
   sendChatMessage: (orderId: string, text: string) => void;
 
-  // Customer Wallet (Integer Piasters + EGP)
-  customerWalletBalancePiasters: number;
-  customerWalletBalanceEgp: number;
-  customerWalletTransactions: WalletTransaction[];
-  topUpCustomerWallet: (amountEgp: number, channelAr?: string) => void;
-
   // View Helpers
   activeCustomerOrder: MarketplaceOrder | null;
   activeCaptainOrder: MarketplaceOrder | null;
@@ -568,12 +503,6 @@ export const MarketplaceProvider: React.FC<{ children: ReactNode }> = ({ childre
   const [captainEarningsEgp, setCaptainEarningsEgp] = useState<number>(340);
   const [captainCompletedDeliveries, setCaptainCompletedDeliveries] = useState<number>(7);
   const [captainCashHoldingEgp, setCaptainCashHoldingEgp] = useState<number>(510);
-
-  // Customer Wallet (14,500 Piasters = 145.00 EGP initial balance)
-  const [customerWalletBalancePiasters, setCustomerWalletBalancePiasters] = useState<number>(14500);
-  const [customerWalletTransactions, setCustomerWalletTransactions] = useState<WalletTransaction[]>(
-    INITIAL_WALLET_TRANSACTIONS
-  );
 
   // Chat
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([
@@ -739,60 +668,8 @@ export const MarketplaceProvider: React.FC<{ children: ReactNode }> = ({ childre
     });
 
     setOrders((prev) => [newOrder, ...prev]);
-
-    // Record wallet debit if paid via electronic wallet/instapay and balance is used, or record cashback credit
-    if (params.paymentMethod !== 'cash') {
-      const orderPiasters = Math.round(cartTotalEgp * 100);
-      if (customerWalletBalancePiasters >= orderPiasters) {
-        const nextBalancePiasters = customerWalletBalancePiasters - orderPiasters;
-        setCustomerWalletBalancePiasters(nextBalancePiasters);
-        setCustomerWalletTransactions((prev) => [
-          {
-            id: `wtx_${Date.now()}`,
-            customerId: currentUser.id,
-            type: 'debit',
-            category: 'order_payment',
-            titleAr: `سداد طلب - ${store.nameAr}`,
-            descriptionAr: `خصم إلكتروني للطلب ${orderNum}`,
-            amountPiasters: orderPiasters,
-            amountEgp: cartTotalEgp,
-            balanceAfterPiasters: nextBalancePiasters,
-            orderNumber: orderNum,
-            paymentChannelAr: params.paymentMethod === 'instapay' ? 'إنستاباي / المحفظة' : 'فودافون كاش',
-            createdAt: 'الآن',
-          },
-          ...prev,
-        ]);
-      }
-    }
-
     clearCart();
     return newOrder;
-  };
-
-  // Top up customer wallet in integer piasters
-  const topUpCustomerWallet = (amountEgp: number, channelAr: string = 'إنستاباي مصر (InstaPay)') => {
-    const cleanEgp = Math.floor(Number(amountEgp));
-    if (!Number.isFinite(cleanEgp) || cleanEgp <= 0) return;
-    const addedPiasters = cleanEgp * 100;
-    const nextBalancePiasters = customerWalletBalancePiasters + addedPiasters;
-    setCustomerWalletBalancePiasters(nextBalancePiasters);
-    setCustomerWalletTransactions((prev) => [
-      {
-        id: `wtx_${Date.now()}`,
-        customerId: currentUser.id,
-        type: 'credit',
-        category: 'top_up',
-        titleAr: `شحن رصيد المحفظة (${cleanEgp} ج.م)`,
-        descriptionAr: `إيداع فوري عبر ${channelAr} • بدون عمولة`,
-        amountPiasters: addedPiasters,
-        amountEgp: cleanEgp,
-        balanceAfterPiasters: nextBalancePiasters,
-        paymentChannelAr: channelAr,
-        createdAt: 'الآن',
-      },
-      ...prev,
-    ]);
   };
 
   // Merchant actions
@@ -947,10 +824,6 @@ export const MarketplaceProvider: React.FC<{ children: ReactNode }> = ({ childre
         captainCashHoldingEgp,
         chatMessages,
         sendChatMessage,
-        customerWalletBalancePiasters,
-        customerWalletBalanceEgp: customerWalletBalancePiasters / 100,
-        customerWalletTransactions,
-        topUpCustomerWallet,
         activeCustomerOrder,
         activeCaptainOrder,
         selectedStoreForBrowsing,

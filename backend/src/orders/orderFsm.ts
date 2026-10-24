@@ -110,7 +110,7 @@ export class OrderFsm {
         (err as any).statusCode = 403;
         throw err;
       }
-      if (actorRole === 'captain' && order.assignedCaptainId && order.assignedCaptainId !== actorId) {
+      if (actorRole === 'captain' && (!order.assignedCaptainId || order.assignedCaptainId !== actorId)) {
         const err = new Error('غير مصرح لك بتحديث حالة هذا الطلب (الكابتن غير مطابق للكابتن المسند).');
         (err as any).code = 'UNAUTHORIZED_CAPTAIN_ACTION';
         (err as any).statusCode = 403;
@@ -126,6 +126,12 @@ export class OrderFsm {
       if (actorRole === 'merchant' || actorRole === 'customer') {
         const err = new Error('إتمام التسليم النهائي يتم حصرياً بواسطة الكابتن المسند أو غرفة العمليات.');
         (err as any).code = 'UNAUTHORIZED_DELIVERY_COMPLETION';
+        (err as any).statusCode = 403;
+        throw err;
+      }
+      if (actorRole === 'captain' && (!order.assignedCaptainId || order.assignedCaptainId !== actorId)) {
+        const err = new Error('غير مصرح لك بإتمام تسليم طلب غير مسند إليك.');
+        (err as any).code = 'UNAUTHORIZED_CAPTAIN_ACTION';
         (err as any).statusCode = 403;
         throw err;
       }
