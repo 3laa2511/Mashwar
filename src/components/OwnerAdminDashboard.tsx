@@ -307,6 +307,33 @@ export function OwnerAdminDashboard() {
   const [cancellationReason, setCancellationReason] = useState<string>('');
   const [statusFilter, setStatusFilter] = useState<string>('all');
 
+  const [actionAlert, setActionAlert] = useState<{ type: 'error' | 'success'; message: string } | null>(null);
+  const [liveZonesSummary, setLiveZonesSummary] = useState<{ activeCities: number; activeZones: number }>({
+    activeCities: 3,
+    activeZones: 4,
+  });
+
+  React.useEffect(() => {
+    fetch('/api/v1/zones')
+      .then((r) => r.json())
+      .then((res) => {
+        if (res?.success && res.data) {
+          setLiveZonesSummary({
+            activeCities: res.data.cities?.length || 3,
+            activeZones: res.data.zones?.length || 4,
+          });
+        }
+      })
+      .catch(() => {
+        // Fallback to default seeded count when offline
+      });
+  }, []);
+
+  const showInlineMessage = (type: 'error' | 'success', message: string) => {
+    setActionAlert({ type, message });
+    setTimeout(() => setActionAlert(null), 4500);
+  };
+
   // KPI Calculations
   const activeOrdersCount = orders.filter((o) => o.status !== 'delivered' && o.status !== 'cancelled').length;
   const onlineCaptainsCount = captains.filter((c) => c.isOnline).length;
@@ -320,7 +347,7 @@ export function OwnerAdminDashboard() {
     if (!captain) return;
 
     if (captain.status === 'expired' || captain.status === 'suspended') {
-      alert(`عذراً: الكابتن غير مؤهل لاستلام الطلبات حالياً (${captain.statusAr}).`);
+      showInlineMessage('error', `عذراً: الكابتن غير مؤهل لاستلام الطلبات حالياً (${captain.statusAr}).`);
       return;
     }
 
@@ -337,7 +364,6 @@ export function OwnerAdminDashboard() {
       )
     );
 
-    // Record audit log
     const newLog: AuditLog = {
       id: `aud_${Date.now()}`,
       timestamp: 'الآن',
@@ -348,7 +374,7 @@ export function OwnerAdminDashboard() {
       descriptionAr: `تدخل يدوي من العمليات: تعيين الكابتن ${captain.name} للطلب ${selectedOrderForDispatch.orderNumber}.`,
     };
     setAuditLogs((prev) => [newLog, ...prev]);
-
+    showInlineMessage('success', `تم تعيين الكابتن ${captain.name} للطلب ${selectedOrderForDispatch.orderNumber} بنجاح.`);
     setSelectedOrderForDispatch(null);
   };
 
@@ -374,6 +400,7 @@ export function OwnerAdminDashboard() {
       descriptionAr: `إلغاء إداري للطلب ${cancelOrderModal.orderNumber}. السبب: ${cancellationReason}.`,
     };
     setAuditLogs((prev) => [newLog, ...prev]);
+    showInlineMessage('success', `تم إلغاء الطلب ${cancelOrderModal.orderNumber} وتوثيق السبب في سجل العمليات.`);
 
     setCancelOrderModal(null);
     setCancellationReason('');
@@ -386,7 +413,7 @@ export function OwnerAdminDashboard() {
     const amountPiasters = Math.round(amountEgp * 100);
 
     if (amountPiasters <= 0) {
-      alert('يرجى إدخال مبلغ صحيح للتوريد.');
+      showInlineMessage('error', 'يرجى إدخال مبلغ صحيح للتوريد بالقرش/الجنيه.');
       return;
     }
 
@@ -394,7 +421,6 @@ export function OwnerAdminDashboard() {
       prev.map((c) => {
         if (c.id === selectedCaptainForSettle.id) {
           const newHolding = Math.max(0, c.cashHoldingPiasters - amountPiasters);
-          // Auto recover suspension if under ceiling
           const newStatus =
             c.status === 'suspended' && newHolding < c.cashCeilingPiasters
               ? 'active'
@@ -420,6 +446,7 @@ export function OwnerAdminDashboard() {
       descriptionAr: `توريد وتسوية نقدية بمبلغ ${amountEgp.toFixed(2)} ج.م للكابتن ${selectedCaptainForSettle.name}. تم إيداع المبلغ بخزينة مركز الباجور.`,
     };
     setAuditLogs((prev) => [newLog, ...prev]);
+    showInlineMessage('success', `تم توريد وتسوية ${amountEgp.toFixed(2)} ج.م للكابتن ${selectedCaptainForSettle.name}.`);
 
     setSelectedCaptainForSettle(null);
     setRemitAmountInput('');
@@ -428,7 +455,7 @@ export function OwnerAdminDashboard() {
   // Handle Captain Subscription Renewal
   const handleRenewSubscription = (captainId: string) => {
     if (currentAdmin.role === 'support_agent') {
-      alert('عذراً: خدمة العملاء لا تملك صلاحية تجديد الاشتراكات (مطلوب مالك أو مسؤول عمليات).');
+      showInlineMessage('error', 'عذراً: خدمة العملاء لا تملك صلاحية تجديد الاشتراكات (مطلوب مالك أو مسؤول عمليات).');
       return;
     }
 
@@ -458,12 +485,13 @@ export function OwnerAdminDashboard() {
       descriptionAr: `تجديد الاشتراك الشهري للكابتن ${captain.name} لمدة ٣٠ يوماً (بنسبة ٠٪ عمولة على الرحلات).`,
     };
     setAuditLogs((prev) => [newLog, ...prev]);
+    showInlineMessage('success', `تم تجديد اشتراك الكابتن ${captain.name} لمدة ٣٠ يوماً بنجاح.`);
   };
 
   // Handle Settings Update (Owner Only)
   const handleSaveSettings = () => {
     if (currentAdmin.role !== 'owner') {
-      alert('خطأ في الصلاحيات: فقط مالك المنصة يملك الحق في تعديل تعريفة التسعيرة والسياسات المالية.');
+      showInlineMessage('error', 'خطأ في الصلاحيات: فقط مالك المنصة يملك الحق في تعديل تعريفة التسعيرة والسياسات المالية.');
       return;
     }
 
@@ -489,6 +517,20 @@ export function OwnerAdminDashboard() {
 
   return (
     <div className="flex flex-col gap-6" dir="rtl">
+      {actionAlert && (
+        <div
+          className={`p-3.5 rounded-2xl border text-xs font-bold flex items-center justify-between shadow-lg ${
+            actionAlert.type === 'error'
+              ? 'bg-red-500/15 border-red-500/40 text-red-300'
+              : 'bg-emerald-500/15 border-emerald-500/40 text-emerald-300'
+          }`}
+        >
+          <span>{actionAlert.message}</span>
+          <button onClick={() => setActionAlert(null)} className="text-slate-400 hover:text-white">
+            ✕
+          </button>
+        </div>
+      )}
       {/* Top Operations Header Bar & Persona Switcher */}
       <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 shadow-xl">
         <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 border-b border-slate-800 pb-4">

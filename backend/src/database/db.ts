@@ -13,6 +13,10 @@ const { Pool } = pg;
 let dbInstance: Kysely<Database> | null = null;
 let pgPoolInstance: pg.Pool | null = null;
 
+export function isPostgresConfigured(): boolean {
+  return Boolean(process.env.DATABASE_URL && process.env.DATABASE_URL.trim().length > 0);
+}
+
 export function getDb(): Kysely<Database> | null {
   const connectionString = process.env.DATABASE_URL;
   if (!connectionString) {

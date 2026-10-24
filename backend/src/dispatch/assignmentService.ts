@@ -63,7 +63,8 @@ export class AssignmentService {
       // 3. Read latest committed state inside the critical section
       const currentOrder = typeof orderOrGetter === 'function' ? orderOrGetter() : orderOrGetter;
 
-      if (currentOrder.status !== 'searching_captain' && currentOrder.status !== 'created') {
+      const claimableStatuses = ['searching_captain', 'created', 'ready_for_pickup'];
+      if (!claimableStatuses.includes(currentOrder.status)) {
         const err = new Error(
           `عذراً، الطلب لم يعد متاحاً للإسناد (الحالة الحالية: ${currentOrder.status}).`
         );
@@ -74,10 +75,23 @@ export class AssignmentService {
 
       if (currentOrder.assignedCaptainId) {
         const err = new Error(
-          'عذراً، تم قبول هذا الطلب بالفعل من قبل كابتن آخر في محيط الباجور.'
+          'عذراً، تم قبول هذا الطلب بالفعل من قبل كابتن آخر في محيط المنطقة.'
         );
         (err as any).code = 'ASSIGNMENT_ALREADY_CLAIMED';
         (err as any).statusCode = 409;
+        throw err;
+      }
+
+      if (
+        currentOrder.cityId &&
+        captain.cityId &&
+        currentOrder.cityId !== captain.cityId
+      ) {
+        const err = new Error(
+          'عذراً، هذا الطلب خارج النطاق الجغرافي للمدينة المسجل بها الكابتن.'
+        );
+        (err as any).code = 'CAPTAIN_ZONE_MISMATCH';
+        (err as any).statusCode = 422;
         throw err;
       }
 

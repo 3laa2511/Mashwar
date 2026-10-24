@@ -20,16 +20,23 @@ export interface StateTransitionResult {
   };
 }
 
-// Strict state transition map
+// Strict state transition map supporting both direct delivery and store/restaurant fulfillment
 const ALLOWED_TRANSITIONS: Record<OrderStatus, OrderStatus[]> = {
-  created: ['searching_captain', 'cancelled'],
+  created: ['accepted_by_store', 'searching_captain', 'cancelled'],
+  accepted_by_store: ['preparing', 'ready_for_pickup', 'cancelled'],
+  preparing: ['ready_for_pickup', 'cancelled'],
+  ready_for_pickup: ['searching_captain', 'captain_assigned', 'at_pickup', 'cancelled'],
   searching_captain: ['captain_assigned', 'cancelled'],
-  captain_assigned: ['at_pickup', 'cancelled'],
-  at_pickup: ['in_transit', 'cancelled'],
+  captain_assigned: ['at_pickup', 'picked_up', 'cancelled'],
+  at_pickup: ['picked_up', 'in_transit', 'cancelled'],
+  picked_up: ['in_transit', 'delivered', 'cancelled'],
   in_transit: ['delivered', 'cancelled'],
   delivered: [], // Terminal state
   cancelled: [], // Terminal state
 };
+
+const STORE_STAGE_TARGETS: OrderStatus[] = ['accepted_by_store', 'preparing', 'ready_for_pickup'];
+const CAPTAIN_DELIVERY_TARGETS: OrderStatus[] = ['at_pickup', 'picked_up', 'in_transit'];
 
 export class OrderFsm {
   /**
@@ -67,7 +74,25 @@ export class OrderFsm {
       throw err;
     }
 
-    // Invariant 3: Precondition check for Captain Assignment
+    // Invariant 3: Store preparation stage role & ownership checks
+    if (STORE_STAGE_TARGETS.includes(targetStatus)) {
+      const allowedStoreRoles = ['merchant', 'owner', 'operations_dispatcher', 'operations'];
+      if (!allowedStoreRoles.includes(actorRole)) {
+        const err = new Error('غير مصرح لهذا الحساب بتحديث مراحل تجهيز المتجر.');
+        (err as any).code = 'UNAUTHORIZED_STORE_STAGE_ACTOR';
+        (err as any).statusCode = 403;
+        throw err;
+      }
+
+      if (actorRole === 'merchant' && order.merchantUserId && order.merchantUserId !== actorId) {
+        const err = new Error('غير مصرح للتاجر بتحديث حالة طلب يخص متجراً آخر.');
+        (err as any).code = 'UNAUTHORIZED_MERCHANT_ACTION';
+        (err as any).statusCode = 403;
+        throw err;
+      }
+    }
+
+    // Invariant 4: Precondition check for Captain Assignment
     if (targetStatus === 'captain_assigned') {
       if (!order.assignedCaptainId) {
         const err = new Error('لا يمكن تحويل الطلب إلى "تم إسناد الكابتن" بدون تحديد هوية كابتن معتمد.');
@@ -77,8 +102,14 @@ export class OrderFsm {
       }
     }
 
-    // Invariant 4: Actor authorization check for delivery steps
-    if (['at_pickup', 'in_transit'].includes(targetStatus)) {
+    // Invariant 5: Actor authorization check for captain delivery steps
+    if (CAPTAIN_DELIVERY_TARGETS.includes(targetStatus)) {
+      if (actorRole === 'merchant' || actorRole === 'customer') {
+        const err = new Error('غير مصرح للتاجر أو العميل بتحديث خطوات التوصيل الميدانية الخاصة بالكابتن.');
+        (err as any).code = 'UNAUTHORIZED_CAPTAIN_STAGE_ACTOR';
+        (err as any).statusCode = 403;
+        throw err;
+      }
       if (actorRole === 'captain' && order.assignedCaptainId && order.assignedCaptainId !== actorId) {
         const err = new Error('غير مصرح لك بتحديث حالة هذا الطلب (الكابتن غير مطابق للكابتن المسند).');
         (err as any).code = 'UNAUTHORIZED_CAPTAIN_ACTION';
@@ -87,11 +118,18 @@ export class OrderFsm {
       }
     }
 
-    // Invariant 5: Cash on Delivery verification precondition for 'delivered'
+    // Invariant 6: Cash on Delivery verification precondition for 'delivered'
     let updatedCashCollected = order.cashCollectedPiasters;
     let updatedIsPaid = order.isPaid;
 
     if (targetStatus === 'delivered') {
+      if (actorRole === 'merchant' || actorRole === 'customer') {
+        const err = new Error('إتمام التسليم النهائي يتم حصرياً بواسطة الكابتن المسند أو غرفة العمليات.');
+        (err as any).code = 'UNAUTHORIZED_DELIVERY_COMPLETION';
+        (err as any).statusCode = 403;
+        throw err;
+      }
+
       if (order.paymentMethod === 'cash_on_delivery') {
         const amountCollected = cashCollectedPiasters ?? order.cashCollectedPiasters;
         if (amountCollected === undefined || amountCollected === null) {

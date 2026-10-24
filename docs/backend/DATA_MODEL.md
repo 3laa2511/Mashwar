@@ -1,22 +1,22 @@
 # Mashwar — Relational Database Schema & Data Model Specification
-**Data Platform:** Supabase / PostgreSQL 15+  
-**Target Hub:** El Bagour (الباجور), Menoufia Governorate, Egypt  
-**Monetary Representation:** Integer Minor Units (Egyptian Piasters - قروش)  
-**Status:** Reviewable Specification (Design Phase Only — No Live Database Modified)  
+**Data Platform:** Supabase / PostgreSQL 15+ (Typed Kysely Schema & Migrations `001_security_hardening.ts` + `002_complete_platform_schema.ts`)  
+**Target Hub:** El Bagour (الباجور), Menoufia Governorate, Egypt (Multi-City Expansion across Menoufia: El Bagour, Shebin El-Kom, Menouf, Sadat City)  
+**Monetary Representation:** Integer Minor Units (Egyptian Piasters - قروش: `1 EGP = 100 Piasters`)  
+**Status:** Implemented in `backend/src/database/schema.ts` & Verified via Kysely PostgreSQL DDL Compiler  
 
 ---
 
-## 1. Verified Code vs. Proposed Database Schema
+## 1. Verified Code vs. Implemented Database Schema
 
-| Area | Verified Repository Code (`flutter_mashwar/`) | Proposed Database Design | Implementation Status |
+| Area | Client Prototype (`flutter_mashwar/`) | Authoritative Backend (`backend/src/database/`) | Implementation Status |
 | :--- | :--- | :--- | :--- |
-| **Monetary Units** | `double estimatedFareEGP = 22.0` (IEEE 754 float in EGP) | `BIGINT` in Egyptian Piasters (`2200` = 22.00 EGP). Zero rounding drift. | **Proposed** (Defect identified in client model) |
-| **Primary Keys** | Client strings (e.g. `'MSH-8102'`, `'MSH-${ts % 10000}'`) | Globally unique `UUIDv7` or `UUID` (`gen_random_uuid()`) + human display code. | **Proposed** |
-| **Captain Monetization** | Hardcoded daily earnings screen displaying static 240.00 EGP / 9 trips. | **Captain Subscription Model:** `captain_subscription_plans`, `captain_subscriptions`, `captain_subscription_payments`. | **Proposed** |
-| **Cash Collection** | Simulated label on active order card. | `cash_collections` table recording collection timestamp, collector ID, amount in piasters, and remittance state. | **Proposed** |
-| **Electronic Payments** | Not implemented in Flutter codebase. | `payment_intents`, `payment_transactions`, `webhook_events` with HMAC verification & idempotency keys. | **Proposed** |
-| **Addresses** | Flat strings (`pickupAddress: 'ميدان المحطة'`) | Normalized `customer_addresses` + immutable `order_addresses` snapshots. | **Proposed** |
-| **Passenger Mobility** | Disabled in UI with warning dialog. | Locked by constraint: `service_types.is_enabled = FALSE`. | **Proposed** (Enforcing client invariant) |
+| **Monetary Units** | `double estimatedFareEGP = 22.0` | Integer Egyptian Piasters (`2200` = 22.00 EGP) across all tables, quotes, catalog items, and ledgers. | **Implemented & Tested** |
+| **Multi-Zone Tariffs** | Single city landmarks list. | `cities`, `service_zones`, `zone_tariffs` supporting El Bagour, Shebin El-Kom, Menouf, and inactive expansion zones. | **Implemented & Tested** (`Migration 002`) |
+| **Merchants & Catalog** | Local mock items. | `merchants`, `stores`, `menu_categories`, `menu_items`, `order_items` with strict store ownership RBAC. | **Implemented & Tested** (`Migration 002`) |
+| **Captain Monetization** | Static earnings display. | `captains`, `captain_subscriptions`, `merchant_subscriptions` (0% order commission, flat monthly subscription + 72h grace period). | **Implemented & Tested** (`Migration 001 & 002`) |
+| **Cash Collection** | Simulated UI label. | `cash_collections`, `financial_ledger`, `idempotency_keys` with `SELECT ... FOR UPDATE` row locking and payload mismatch detection. | **Implemented & Tested** (`Migration 001`) |
+| **Support & Complaints** | Not present in mobile prototype. | `complaints`, `complaint_events`, `notifications`, `order_state_history` with full support resolution audit trail. | **Implemented & Tested** (`Migration 002`) |
+| **Passenger Mobility** | Disabled in UI with warning dialog. | Hard-locked at PricingEngine, OrderFsm, and SystemSettings levels (`403 REGULATORY_COMPLIANCE_LOCK`). | **Implemented & Tested** |
 
 ---
 

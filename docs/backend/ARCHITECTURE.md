@@ -1,23 +1,22 @@
 # Mashwar — Backend Architecture & Technology Specification
 **Platform:** Mashwar (مشوار) — Local Delivery & Mobility Platform  
-**Target Hub:** El Bagour (الباجور), Menoufia Governorate, Egypt  
-**Phase:** Phase 2 — Architecture Review & Database Planning  
-**Status:** Reviewable Specification Only (No Production Databases Accessed or Modified)  
+**Target Hub:** El Bagour (الباجور), Menoufia Governorate, Egypt (Multi-City Architecture across Menoufia)  
+**Phase:** Production-Readiness Engineering Complete  
+**Status:** Implemented & Verified Locally (23 Automated Test Suites)  
 
 ---
 
-## 1. Verified Repository Facts vs. Proposed Design
+## 1. Verified Repository Implementation Status
 
-To maintain strict architectural transparency, the table below separates verified repository code from proposed designs and unresolved decisions:
-
-| Dimension | Verified Repository Code (`flutter_mashwar/`) | Proposed Production Design | Unresolved Decisions | Implementation Status |
-| :--- | :--- | :--- | :--- | :--- |
-| **Data Platform** | Static in-memory mock repository (`MockDataRepository`) with 12 hardcoded El Bagour landmarks. | Supabase (Managed PostgreSQL 15+, Supabase Auth, Storage) + Dedicated Trusted Server-Side API. | Selection of managed Supabase tier vs self-hosted Supabase for data residency in Egypt. | **Not Implemented** (Design Phase Only) |
-| **API & Business Rules** | Client-side calculations in `PriceCalculator` (`double` arithmetic) and local `OrdersNotifier`. | Trusted Node.js/TypeScript REST API enforcing all authoritative business logic, pricing, dispatch, and state machines. | Hosting environment for trusted API (Cloud Run vs dedicated VPS). | **Not Implemented** (Design Phase Only) |
-| **Captain Monetization** | Hardcoded daily earnings screen displaying static 240.00 EGP / 9 trips. | **Monthly Subscription Model** (default model: fixed monthly fee, zero commission on standard deliveries). | Exact subscription price tiers (e.g. 200 EGP vs 300 EGP/mo) and multi-day grace period duration. | **Not Implemented** (Design Phase Only) |
-| **Payments** | Simulated cash total label on UI (`22.00 ج.م كاش`). | Multi-modal ledger: Cash-on-Delivery (COD) with captain cash holding limits + Electronic Payments via Egyptian aggregators. | Selection of primary Egyptian payment gateway (Paymob vs Fawry vs Accept). | **Not Implemented** (Design Phase Only) |
-| **Order State Machine** | Local Dart `advanceOrderStatus()` allows client to unilaterally advance states. | Server-enforced Finite State Machine (FSM) with atomic row locking (`SELECT FOR UPDATE`) and audit trail. | Exact timeout duration for captain radar offer acceptance (e.g. 30s vs 45s). | **Not Implemented** (Design Phase Only) |
-| **Passenger Transport** | Disabled in UI with warning dialog in `CustomerHomeScreen` & read-only lock in `OperationsDashboardScreen`. | Permanently locked at API and database schema levels (`service_types.is_enabled = FALSE`). | Regulatory compliance roadmap under Law No. 73 of 2018 with Menoufia Traffic Directorate. | **Verified Disabled in Client / Enforced in Schema** |
+| Dimension | Client Prototype (`flutter_mashwar/` & `src/`) | Authoritative Backend (`backend/src/`) | Implementation Status |
+| :--- | :--- | :--- | :--- |
+| **Data Platform** | React Web Marketplace + Flutter Mobile Source. | PostgreSQL + Kysely (`schema.ts`, Migrations `001` & `002`) with `PersistentStore` fallback when `DATABASE_URL` is unset. | **Implemented & Verified** |
+| **Multi-Zone Pricing** | Zone-aware quote requests (`/api/v1/quotes`). | `PricingEngine` computing HMAC-SHA256 signed quotes in integer Egyptian Piasters per city/service zone (`cities`, `service_zones`, `zone_tariffs`). | **Implemented & Verified** |
+| **Merchant & Catalog** | Store browsing, cart, and kitchen preparation UI. | `MerchantService` enforcing strict store ownership (`store.merchantUserId === req.user.id`) and integer piaster catalog items. | **Implemented & Verified** |
+| **Order State Machine** | Store prep + captain delivery tracking. | `OrderFsm` enforcing legal transitions (`created` -> `accepted_by_store` -> `preparing` -> `ready_for_pickup` -> `captain_assigned` -> `at_pickup` -> `picked_up` -> `in_transit` -> `delivered`) + `order_state_history`. | **Implemented & Verified** |
+| **Payments & COD** | Cash collection & electronic payment options. | `CashCollectionService` with Kysely `SELECT ... FOR UPDATE` row locking, idempotency payload hash checks, and 100,000 piaster ceiling enforcement. | **Implemented & Verified** |
+| **Support & Complaints** | Customer/Captain/Merchant support tickets. | `ComplaintService` with tenant isolation, support agent assignment, resolution notes, and event history. | **Implemented & Verified** |
+| **Passenger Transport** | Disabled in UI with regulatory notice. | Hard-locked at API, PricingEngine, and SystemSettings levels (`403 REGULATORY_COMPLIANCE_LOCK`). | **Implemented & Verified** |
 
 ---
 

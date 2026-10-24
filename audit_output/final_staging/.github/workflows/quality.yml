@@ -1,0 +1,84 @@
+name: Quality & Security CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  backend-and-web:
+    name: Backend & Web (Typecheck, Test, Build)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Bun runtime
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Type check (TypeScript)
+        run: bun run typecheck
+
+      - name: Execute backend security & integration tests
+        run: bun run test
+
+      - name: Build web application
+        run: bun run build
+
+  flutter-app:
+    name: Flutter Mobile Checks
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Check Flutter project presence
+        id: check_flutter
+        run: |
+          if [ -f "flutter_mashwar/pubspec.yaml" ]; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+            echo "flutter_mashwar project detected."
+          else
+            echo "present=false" >> "$GITHUB_OUTPUT"
+            echo "flutter_mashwar project not found in checkout."
+          fi
+
+      - name: Setup Flutter SDK
+        if: steps.check_flutter.outputs.present == 'true'
+        uses: subosito/flutter-action@v2
+        with:
+          channel: 'stable'
+          cache: false
+
+      - name: Install Flutter dependencies
+        if: steps.check_flutter.outputs.present == 'true'
+        run: |
+          cd flutter_mashwar
+          flutter pub get
+
+      - name: Analyze Flutter codebase
+        if: steps.check_flutter.outputs.present == 'true'
+        run: |
+          cd flutter_mashwar
+          flutter analyze
+
+      - name: Run Flutter unit tests
+        if: steps.check_flutter.outputs.present == 'true'
+        run: |
+          cd flutter_mashwar
+          flutter test
+
+      - name: Mobile checks status
+        if: steps.check_flutter.outputs.present != 'true'
+        run: echo "Flutter mobile app directory (flutter_mashwar) is not tracked in this checkout. Mobile checks completed as no-op."

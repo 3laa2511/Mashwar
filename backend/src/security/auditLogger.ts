@@ -8,12 +8,18 @@ import { UserRole } from './rbac.js';
 
 export type AuditActionType =
   | 'PRICING_CONFIG_UPDATED'
+  | 'ZONE_TARIFF_UPDATED'
   | 'SYSTEM_SETTINGS_UPDATED'
   | 'CAPTAIN_CASH_SETTLED'
   | 'CAPTAIN_SUBSCRIPTION_RENEWED'
   | 'CAPTAIN_STATUS_OVERRIDE'
   | 'MANUAL_DISPATCH_ASSIGNMENT'
   | 'ORDER_EMERGENCY_CANCELLED'
+  | 'STORE_STATUS_UPDATED'
+  | 'MENU_ITEM_UPDATED'
+  | 'COMPLAINT_CREATED'
+  | 'COMPLAINT_ASSIGNED'
+  | 'COMPLAINT_RESOLVED'
   | 'SECURITY_VIOLATION_BLOCKED';
 
 export interface AuditLogEntry {
@@ -23,7 +29,7 @@ export interface AuditLogEntry {
   actorRole: UserRole;
   actorName: string;
   actionType: AuditActionType;
-  targetEntity: 'order' | 'captain' | 'pricing' | 'system_settings' | 'security';
+  targetEntity: 'order' | 'captain' | 'pricing' | 'system_settings' | 'security' | 'store' | 'zone' | 'complaint';
   targetId: string;
   descriptionAr: string;
   previousState?: any;

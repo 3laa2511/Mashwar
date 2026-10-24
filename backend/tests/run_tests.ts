@@ -28,6 +28,12 @@ import { Order, CaptainProfile, WebhookEventPayload } from '../src/types/index.j
 import { verifyToken, generateTestToken } from '../src/security/auth.js';
 import { CaptainService } from '../src/services/captainService.js';
 import { CashCollectionService } from '../src/services/cashCollectionService.js';
+import { MerchantService } from '../src/services/merchantService.js';
+import { ComplaintService } from '../src/services/complaintService.js';
+import { verifyOrRunMigrations } from '../src/database/migrator.js';
+import { createRateLimiter, resetAllRateLimiters } from '../src/security/rateLimiter.js';
+import { createServer } from '../src/api/server.js';
+import { resetTestDatabases } from '../src/api/routes.js';
 
 interface TestResult {
   suite: string;
@@ -1173,6 +1179,548 @@ export async function runAllTests(): Promise<{
       console.log('    ℹ [DB STATUS] Live DATABASE_URL detected.');
     }
     assert(true, 'Environment status recorded');
+  });
+
+  // --------------------------------------------------------------------------
+  // SUITE 17: Multi-City & Service Zone Expansion Tariffs (El Bagour, Shebin El-Kom, Menouf, Sadat)
+  // --------------------------------------------------------------------------
+  console.log('\n▶ SUITE 17: Multi-City & Service Zone Expansion Tariffs');
+
+  resetTestDatabases();
+  const pricingEngine = new PricingEngine();
+
+  await runTest('MultiZone', 'Seeds active cities (El Bagour, Shebin El-Kom, Menouf) and filters out inactive expansion cities by default', () => {
+    const activeCities = PersistentStore.getAllCities(false);
+    const allCities = PersistentStore.getAllCities(true);
+    assert(activeCities.length === 3, `Expected 3 active cities, got ${activeCities.length}`);
+    assert(allCities.length === 4, `Expected 4 total cities including inactive Sadat City, got ${allCities.length}`);
+    assert(activeCities.some((c) => c.id === 'city_el_bagour'), 'El Bagour must be active');
+    assert(activeCities.some((c) => c.id === 'city_shebin_el_kom'), 'Shebin El-Kom must be active');
+    assert(activeCities.some((c) => c.id === 'city_menouf'), 'Menouf must be active');
+  });
+
+  await runTest('MultiZone', 'Calculates zone-specific tariff for Shebin El-Kom (18.00 EGP base, 4.50 EGP/km, 2.50 EGP platform fee)', () => {
+    const quote = pricingEngine.generateQuote({
+      serviceTypeId: 'package',
+      distanceKm: 3.5, // 1.5 included + 2.0 extra km * 450 = 900 piasters
+      zoneId: 'zone_shebin_center',
+    });
+    assert(quote.cityId === 'city_shebin_el_kom', 'Must resolve cityId to city_shebin_el_kom');
+    assert(quote.zoneId === 'zone_shebin_center', 'Must resolve zoneId to zone_shebin_center');
+    assert(quote.baseFarePiasters === 1800, 'Shebin base fare must be 1800 piasters');
+    assert(quote.distanceFarePiasters === 900, 'Distance fare for 2 extra km must be 900 piasters');
+    assert(quote.platformFeePiasters === 250, 'Shebin platform fee must be 250 piasters');
+    assert(quote.totalFarePiasters === 2950, 'Total Shebin fare must be 2950 piasters (29.50 EGP)');
+  });
+
+  await runTest('MultiZone', 'Automatically applies rural surcharge for rural village zone (zone_bagour_villages)', () => {
+    const quote = pricingEngine.generateQuote({
+      serviceTypeId: 'package',
+      distanceKm: 1.5,
+      zoneId: 'zone_bagour_villages',
+    });
+    assert(quote.ruralSurchargePiasters === 500, 'Rural zone must automatically include 500 piasters rural surcharge');
+    assert(quote.totalFarePiasters === 2200, 'Total fare for 1.5km rural village must be 2200 piasters');
+  });
+
+  await runTest('MultiZone', 'Rejects quote generation for inactive expansion zone (Sadat City) with 403 ZONE_INACTIVE', () => {
+    assertThrows(() => {
+      pricingEngine.generateQuote({
+        serviceTypeId: 'package',
+        distanceKm: 2.0,
+        zoneId: 'zone_sadat_industrial',
+      });
+    }, 'ZONE_INACTIVE');
+  });
+
+  await runTest('MultiZone', 'Rejects quote generation for unknown zone ID with 404 ZONE_NOT_FOUND', () => {
+    assertThrows(() => {
+      pricingEngine.generateQuote({
+        serviceTypeId: 'package',
+        distanceKm: 2.0,
+        zoneId: 'zone_unknown_999',
+      });
+    }, 'ZONE_NOT_FOUND');
+  });
+
+  // --------------------------------------------------------------------------
+  // SUITE 18: Merchant, Store & Catalog Management with Strict Ownership RBAC
+  // --------------------------------------------------------------------------
+  console.log('\n▶ SUITE 18: Merchant, Store & Catalog Management with Strict Ownership RBAC');
+
+  await runTest('MerchantCatalog', 'Lists active stores by zone and retrieves full catalog in integer piasters', () => {
+    const bagourStores = MerchantService.listStores({ cityId: 'city_el_bagour' });
+    assert(bagourStores.length >= 3, 'El Bagour must have at least 3 seeded stores');
+
+    const catalog = MerchantService.getStoreCatalog('merchant_basha');
+    assert(catalog.store.nameAr.includes('الباشا'), 'Must return Basha store');
+    assert(catalog.items.length >= 3, 'Must return Basha menu items');
+    assert(Number.isInteger(catalog.items[0].pricePiasters), 'Menu item prices must be integer piasters');
+  });
+
+  await runTest('MerchantCatalog', 'Allows store owner (usr_merch_basha) to add a menu item in integer piasters', () => {
+    const item = MerchantService.createMenuItem({
+      storeId: 'merchant_basha',
+      actorId: 'usr_merch_basha',
+      actorRole: 'merchant',
+      actorName: 'الحاج رأفت الباشا',
+      categoryNameAr: 'مشويات الفحم',
+      nameAr: 'طرب ضاني مشوي على الفحم',
+      descriptionAr: 'نصف كيلو طرب ضاني بلدي مع مقبلات',
+      pricePiasters: 22000, // 220.00 EGP
+      unitAr: 'طبق',
+    });
+    assert(item.id.startsWith('prod_merchant_basha_'), 'Created item must have store prefix ID');
+    assert(item.pricePiasters === 22000, 'Price must be 22000 piasters');
+  });
+
+  await runTest('MerchantCatalog', 'Blocks Merchant B (usr_merch_amana) from modifying Merchant A store (merchant_basha) with 403 FORBIDDEN_STORE_OWNERSHIP', () => {
+    assertThrows(() => {
+      MerchantService.updateStoreStatus({
+        storeId: 'merchant_basha',
+        actorId: 'usr_merch_amana',
+        actorRole: 'merchant',
+        actorName: 'د. سحر عبد الحميد',
+        isOpen: false,
+      });
+    }, 'FORBIDDEN_STORE_OWNERSHIP');
+
+    assertThrows(() => {
+      MerchantService.createMenuItem({
+        storeId: 'merchant_basha',
+        actorId: 'usr_merch_amana',
+        actorRole: 'merchant',
+        actorName: 'د. سحر عبد الحميد',
+        categoryNameAr: 'اختراق',
+        nameAr: 'صنف غير مصرح',
+        descriptionAr: 'محاولة تعديل متجر آخر',
+        pricePiasters: 5000,
+      });
+    }, 'FORBIDDEN_STORE_OWNERSHIP');
+  });
+
+  await runTest('MerchantCatalog', 'Rejects non-integer or negative piaster menu item prices with 400 INVALID_PRICE_PIASTERS', () => {
+    assertThrows(() => {
+      MerchantService.createMenuItem({
+        storeId: 'merchant_basha',
+        actorId: 'usr_merch_basha',
+        actorRole: 'merchant',
+        actorName: 'الحاج رأفت الباشا',
+        categoryNameAr: 'مشويات',
+        nameAr: 'صنف بسعر خاطئ',
+        descriptionAr: 'سعر عشري غير مسموح',
+        pricePiasters: 45.75,
+      });
+    }, 'INVALID_PRICE_PIASTERS');
+  });
+
+  // --------------------------------------------------------------------------
+  // SUITE 19: Store-to-Captain End-to-End Order Lifecycle & State History
+  // --------------------------------------------------------------------------
+  console.log('\n▶ SUITE 19: Store-to-Captain End-to-End Order Lifecycle & State History');
+
+  await runTest('StoreLifecycle', 'Executes complete store order lifecycle (created -> accepted_by_store -> preparing -> ready_for_pickup -> captain_assigned -> at_pickup -> picked_up -> in_transit -> delivered)', async () => {
+    let storeOrder: Order = {
+      ...baseOrder,
+      id: 'ord_store_lifecycle_01',
+      orderNumber: 'MSH-7701',
+      customerId: 'usr_cust_01',
+      serviceTypeId: 'restaurant_store',
+      storeId: 'merchant_basha',
+      storeName: 'مطعم ومشاوي الباشا',
+      merchantUserId: 'usr_merch_basha',
+      status: 'created',
+      totalFarePiasters: 21200, // 195 EGP item + 15 EGP base + 2 EGP fee
+      paymentMethod: 'cash_on_delivery',
+      isPaid: false,
+    };
+
+    // 1. Merchant accepts order
+    const step1 = OrderFsm.transition(storeOrder, {
+      targetStatus: 'accepted_by_store',
+      actorId: 'usr_merch_basha',
+      actorRole: 'merchant',
+    });
+    storeOrder = step1.order;
+    assert(storeOrder.status === 'accepted_by_store', 'Must transition to accepted_by_store');
+
+    // 2. Merchant marks preparing
+    const step2 = OrderFsm.transition(storeOrder, {
+      targetStatus: 'preparing',
+      actorId: 'usr_merch_basha',
+      actorRole: 'merchant',
+    });
+    storeOrder = step2.order;
+    assert(storeOrder.status === 'preparing', 'Must transition to preparing');
+
+    // 3. Merchant marks ready_for_pickup
+    const step3 = OrderFsm.transition(storeOrder, {
+      targetStatus: 'ready_for_pickup',
+      actorId: 'usr_merch_basha',
+      actorRole: 'merchant',
+    });
+    storeOrder = step3.order;
+    assert(storeOrder.status === 'ready_for_pickup', 'Must transition to ready_for_pickup');
+
+    // 4. Captain claims ready_for_pickup order via AssignmentService
+    const activeCap = PersistentStore.getCaptainById('cpt_ahmed_fathy')!;
+    const claimRes = await AssignmentService.claimOrder(
+      () => storeOrder,
+      activeCap,
+      (updated) => {
+        storeOrder = updated;
+      }
+    );
+    assert(claimRes.success === true, 'Captain must be able to claim ready_for_pickup order');
+    assert(storeOrder.status === 'captain_assigned', 'Status must become captain_assigned');
+
+    // 5. Captain arrives at store (at_pickup) -> picks up (picked_up) -> in_transit -> delivered
+    storeOrder = OrderFsm.transition(storeOrder, {
+      targetStatus: 'at_pickup',
+      actorId: activeCap.id,
+      actorRole: 'captain',
+    }).order;
+    storeOrder = OrderFsm.transition(storeOrder, {
+      targetStatus: 'picked_up',
+      actorId: activeCap.id,
+      actorRole: 'captain',
+    }).order;
+    storeOrder = OrderFsm.transition(storeOrder, {
+      targetStatus: 'in_transit',
+      actorId: activeCap.id,
+      actorRole: 'captain',
+    }).order;
+    storeOrder = OrderFsm.transition(storeOrder, {
+      targetStatus: 'delivered',
+      actorId: activeCap.id,
+      actorRole: 'captain',
+      cashCollectedPiasters: 21200,
+    }).order;
+
+    assert(storeOrder.status === 'delivered', 'Order must reach delivered state');
+    assert(storeOrder.isPaid === true, 'Order must be marked paid upon COD collection');
+  });
+
+  await runTest('StoreLifecycle', 'Blocks another merchant from transitioning a store order they do not own (403 UNAUTHORIZED_MERCHANT_ACTION)', () => {
+    const storeOrder: Order = {
+      ...baseOrder,
+      id: 'ord_store_other_02',
+      serviceTypeId: 'restaurant_store',
+      storeId: 'merchant_basha',
+      merchantUserId: 'usr_merch_basha',
+      status: 'created',
+    };
+
+    assertThrows(() => {
+      OrderFsm.transition(storeOrder, {
+        targetStatus: 'accepted_by_store',
+        actorId: 'usr_merch_amana', // Different merchant!
+        actorRole: 'merchant',
+      });
+    }, 'UNAUTHORIZED_MERCHANT_ACTION');
+  });
+
+  // --------------------------------------------------------------------------
+  // SUITE 20: Captain Availability, Zone Switching & Eligibility Guard
+  // --------------------------------------------------------------------------
+  console.log('\n▶ SUITE 20: Captain Availability, Zone Switching & Eligibility Guard');
+
+  await runTest('CaptainAvailability', 'Allows active captain to switch active service zone and toggle online status', async () => {
+    const updated = await CaptainService.updateAvailabilityAndZone({
+      userId: 'usr_cpt_01',
+      isOnline: true,
+      activeZoneId: 'zone_shebin_center',
+    });
+    assert(updated.activeZoneId === 'zone_shebin_center', 'Active zone must update to zone_shebin_center');
+    assert(updated.cityId === 'city_shebin_el_kom', 'City ID must sync with zone cityId');
+
+    // Restore back to El Bagour for subsequent tests
+    await CaptainService.updateAvailabilityAndZone({
+      userId: 'usr_cpt_01',
+      isOnline: true,
+      activeZoneId: 'zone_bagour_center',
+    });
+  });
+
+  await runTest('CaptainAvailability', 'Blocks expired captain from switching online with 403 CAPTAIN_INELIGIBLE_FOR_ONLINE', async () => {
+    await assertThrowsAsync(async () => {
+      await CaptainService.updateAvailabilityAndZone({
+        userId: 'usr_cpt_03', // Tarek El Sheikh (expired)
+        isOnline: true,
+      });
+    }, 'CAPTAIN_INELIGIBLE_FOR_ONLINE');
+  });
+
+  // --------------------------------------------------------------------------
+  // SUITE 21: Customer Support & Complaints Workflow
+  // --------------------------------------------------------------------------
+  console.log('\n▶ SUITE 21: Customer Support & Complaints Workflow');
+
+  await runTest('Complaints', 'Creates customer complaint, enforces tenant visibility, and records support agent resolution', () => {
+    const created = ComplaintService.createComplaint({
+      reporterUserId: 'usr_cust_alice',
+      reporterName: 'أمل محمود',
+      reporterPhone: '01099887766',
+      reporterRole: 'customer',
+      orderId: 'ord_bagour_8101',
+      category: 'delayed_delivery',
+      priority: 'high',
+      subjectAr: 'تأخر وصول المندوب ١٥ دقيقة',
+      descriptionAr: 'تأخر الكابتن عن الموعد المحدد بسبب تحويلة طريق بنها.',
+    });
+
+    assert(created.id.startsWith('cmp_'), 'Complaint ID must start with cmp_');
+    assert(created.status === 'open', 'Initial status must be open');
+
+    // Customer Bob cannot see Alice's complaint
+    const bobList = ComplaintService.listComplaints({
+      actorId: 'usr_cust_bob',
+      actorRole: 'customer',
+    });
+    assert(!bobList.some((c) => c.id === created.id), 'Other customer must not see Alice complaint');
+
+    // Support agent sees all complaints, assigns, and resolves
+    const assigned = ComplaintService.assignComplaint({
+      complaintId: created.id,
+      actorId: 'usr_support_01',
+      actorRole: 'support_agent',
+      actorName: 'سارة ممدوح',
+      assignedAgentId: 'usr_support_01',
+      assignedAgentName: 'سارة ممدوح',
+    });
+    assert(assigned.status === 'under_review', 'Status must move to under_review upon assignment');
+
+    const resolved = ComplaintService.updateComplaintResolution({
+      complaintId: created.id,
+      actorId: 'usr_support_01',
+      actorRole: 'support_agent',
+      actorName: 'سارة ممدوح',
+      targetStatus: 'resolved',
+      resolutionNotesAr: 'تم التواصل مع العميلة وتقديم اعتذار ورصيد تعويضي ١٠ ج.م.',
+      refundAmountPiasters: 1000, // 10.00 EGP in integer piasters
+    });
+
+    assert(resolved.status === 'resolved', 'Status must be resolved');
+    assert(resolved.refundAmountPiasters === 1000, 'Refund amount must be 1000 piasters');
+    assert(resolved.events.length === 3, 'Complaint must contain 3 chronological audit events');
+  });
+
+  // --------------------------------------------------------------------------
+  // SUITE 22: PostgreSQL DDL Migration 001 + 002 Compiler & Rate Limiter Enforcement
+  // --------------------------------------------------------------------------
+  console.log('\n▶ SUITE 22: PostgreSQL DDL Migration 001 + 002 Compiler & Rate Limiter Enforcement');
+
+  await runTest('MigrationsDDL', 'Compiles Migration 001 and Migration 002 cleanly via Kysely PostgreSQL QueryCompiler', async () => {
+    const report = await verifyOrRunMigrations(false);
+    assert(
+      report.migrationsExecuted.includes('001_security_hardening') &&
+        report.migrationsExecuted.includes('002_complete_platform_schema'),
+      'Both 001 and 002 migrations must execute'
+    );
+    assert(
+      report.compiledStatementsCount >= 25,
+      `Expected at least 25 compiled PostgreSQL DDL statements (tables + indexes), got ${report.compiledStatementsCount}`
+    );
+  });
+
+  await runTest('RateLimiter', 'Enforces sliding-window request limit and returns 429 RATE_LIMIT_EXCEEDED', () => {
+    const limiter = createRateLimiter({ windowMs: 60_000, maxRequests: 2, scope: 'test_limit' });
+    let statusSent = 200;
+    let bodySent: any = null;
+    const mockReq: any = { ip: '197.38.0.1', user: { id: 'usr_rate_test' } };
+    const mockRes: any = {
+      setHeader: () => {},
+      status(code: number) {
+        statusSent = code;
+        return this;
+      },
+      json(payload: any) {
+        bodySent = payload;
+        return this;
+      },
+    };
+
+    let nextCalled = 0;
+    limiter(mockReq, mockRes, () => {
+      nextCalled++;
+    });
+    limiter(mockReq, mockRes, () => {
+      nextCalled++;
+    });
+    // 3rd request within window must be blocked with 429
+    limiter(mockReq, mockRes, () => {
+      nextCalled++;
+    });
+
+    assert(nextCalled === 2, 'Only first 2 requests must pass');
+    assert(statusSent === 429, '3rd request must return HTTP 429');
+    assert(bodySent?.error?.code === 'RATE_LIMIT_EXCEEDED', 'Error code must be RATE_LIMIT_EXCEEDED');
+    resetAllRateLimiters();
+  });
+
+  // --------------------------------------------------------------------------
+  // SUITE 23: Express REST API End-to-End HTTP Integration
+  // --------------------------------------------------------------------------
+  console.log('\n▶ SUITE 23: Express REST API End-to-End HTTP Integration');
+
+  await runTest('HttpApiIntegration', 'Executes full HTTP flow across /zones, /stores, /quotes, /orders, /merchant, /captain, and /complaints', async () => {
+    resetTestDatabases();
+    const app = createServer();
+    const server = app.listen(0);
+    const address = server.address() as { port: number };
+    const baseUrl = `http://127.0.0.1:${address.port}/api/v1`;
+
+    try {
+      const custToken = generateTestToken({
+        userId: 'usr_cust_http_01',
+        role: 'customer',
+        fullName: 'محمود الشناوي',
+        phone: '01011223344',
+      });
+      const merchToken = generateTestToken({
+        userId: 'usr_merch_basha',
+        role: 'merchant',
+        fullName: 'الحاج رأفت الباشا',
+      });
+      const capToken = generateTestToken({
+        userId: 'usr_cpt_01', // cpt_ahmed_fathy
+        role: 'captain',
+        fullName: 'أحمد فتحي الديب',
+      });
+
+      // 1. GET /zones
+      const zonesRes = await fetch(`${baseUrl}/zones`);
+      assert(zonesRes.status === 200, 'GET /zones must return 200');
+      const zonesJson = await zonesRes.json();
+      assert(zonesJson.data.cities.length === 3, 'Must return 3 active cities');
+
+      // 2. GET /stores/merchant_basha/catalog
+      const catRes = await fetch(`${baseUrl}/stores/merchant_basha/catalog`);
+      assert(catRes.status === 200, 'GET /stores/:id/catalog must return 200');
+      const catJson = await catRes.json();
+      const firstItem = catJson.data.items[0];
+      assert(firstItem.pricePiasters > 0, 'Catalog item must have integer piaster price');
+
+      // 3. POST /quotes with zoneId & itemsSubtotalPiasters
+      const quoteRes = await fetch(`${baseUrl}/quotes`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          serviceTypeId: 'restaurant_store',
+          distanceKm: 1.5,
+          zoneId: 'zone_bagour_center',
+          itemsSubtotalPiasters: firstItem.pricePiasters,
+        }),
+      });
+      assert(quoteRes.status === 201, 'POST /quotes must return 201');
+      const quoteJson = await quoteRes.json();
+      const quote = quoteJson.data;
+
+      // 4. POST /orders (Customer places store order)
+      const orderRes = await fetch(`${baseUrl}/orders`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${custToken}`,
+        },
+        body: JSON.stringify({
+          serviceTypeId: 'restaurant_store',
+          quoteId: quote.quoteId,
+          storeId: 'merchant_basha',
+          items: [{ menuItemId: firstItem.id, quantity: 1 }],
+          pickup: {
+            landmarkName: 'شارع الجمهورية - أمام بنك مصر',
+            detailedAddress: 'مطعم ومشاوي الباشا',
+            contactPhone: '01233445566',
+          },
+          dropoff: {
+            landmarkName: 'شارع الجيش - برج الشروق',
+            detailedAddress: 'الدور الرابع',
+            contactPhone: '01011223344',
+          },
+          itemDescription: firstItem.nameAr,
+          totalFarePiasters: quote.totalFarePiasters,
+          paymentMethod: 'cash_on_delivery',
+          quoteExpiresAt: quote.expiresAt,
+          quoteSignature: quote.signature,
+        }),
+      });
+      assert(orderRes.status === 201, 'POST /orders must return 201');
+      const createdOrder = (await orderRes.json()).data;
+      assert(createdOrder.customerId === 'usr_cust_http_01', 'Order customerId must come from JWT');
+
+      // 5. Merchant transitions order: accepted_by_store -> ready_for_pickup
+      const accRes = await fetch(`${baseUrl}/orders/${createdOrder.id}/transitions`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${merchToken}`,
+        },
+        body: JSON.stringify({ targetStatus: 'accepted_by_store' }),
+      });
+      assert(accRes.status === 200, 'Merchant accept transition must return 200');
+
+      const rdyRes = await fetch(`${baseUrl}/orders/${createdOrder.id}/transitions`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${merchToken}`,
+        },
+        body: JSON.stringify({ targetStatus: 'ready_for_pickup' }),
+      });
+      assert(rdyRes.status === 200, 'Merchant ready_for_pickup transition must return 200');
+
+      // 6. Captain claims order -> transitions to in_transit -> records cash collection
+      const claimRes = await fetch(`${baseUrl}/captain/orders/${createdOrder.id}/accept`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${capToken}` },
+      });
+      assert(claimRes.status === 200, 'Captain accept must return 200');
+
+      await fetch(`${baseUrl}/orders/${createdOrder.id}/transitions`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${capToken}`,
+        },
+        body: JSON.stringify({ targetStatus: 'at_pickup' }),
+      });
+
+      const transitRes = await fetch(`${baseUrl}/orders/${createdOrder.id}/transitions`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${capToken}`,
+        },
+        body: JSON.stringify({ targetStatus: 'in_transit' }),
+      });
+      assert(transitRes.status === 200, 'Captain in_transit transition must return 200');
+
+      const codRes = await fetch(`${baseUrl}/captain/orders/${createdOrder.id}/cash-collection`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${capToken}`,
+          'Idempotency-Key': 'http_e2e_cod_key_01',
+        },
+        body: JSON.stringify({
+          amountCollectedPiasters: quote.totalFarePiasters,
+          customerConfirmed: true,
+        }),
+      });
+      assert(codRes.status === 200, 'Captain cash collection must return 200');
+
+      // 7. Verify order state history
+      const histRes = await fetch(`${baseUrl}/orders/${createdOrder.id}/history`, {
+        headers: { Authorization: `Bearer ${custToken}` },
+      });
+      assert(histRes.status === 200, 'GET /orders/:id/history must return 200');
+      const histJson = await histRes.json();
+      assert(histJson.data.currentStatus === 'delivered', 'Final status must be delivered');
+      assert(histJson.data.history.length >= 5, 'State history must record all transitions');
+    } finally {
+      server.close();
+    }
   });
 
   const total = results.length;

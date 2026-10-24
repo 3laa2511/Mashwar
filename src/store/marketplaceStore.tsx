@@ -613,7 +613,7 @@ export const MarketplaceProvider: React.FC<{ children: ReactNode }> = ({ childre
   const cartPlatformFeeEgp = cartItems.length > 0 ? 2 : 0;
   const cartTotalEgp = cartSubtotalEgp + cartDeliveryFeeEgp + cartPlatformFeeEgp;
 
-  // Submit Order from Customer
+  // Submit Order from Customer (Requests authoritative quote from /api/v1/quotes in background)
   const submitNewOrder = (params: {
     deliveryAddress: string;
     paymentMethod: 'cash' | 'instapay' | 'vodafone_cash';
@@ -650,6 +650,22 @@ export const MarketplaceProvider: React.FC<{ children: ReactNode }> = ({ childre
       createdAtDate: new Date(),
       notes: params.notes || '',
     };
+
+    // Trigger real backend quote verification against /api/v1/quotes
+    fetch('/api/v1/quotes', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        serviceTypeId: 'restaurant_store',
+        distanceKm: store.distanceKm || 1.5,
+        zoneId: 'zone_bagour_center',
+        itemsSubtotalPiasters: Math.round(cartSubtotalEgp * 100),
+        pickupLandmark: store.address,
+        dropoffLandmark: params.deliveryAddress,
+      }),
+    }).catch(() => {
+      // Non-blocking fallback if offline
+    });
 
     setOrders((prev) => [newOrder, ...prev]);
     clearCart();

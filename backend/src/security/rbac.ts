@@ -14,14 +14,18 @@ export type UserRole =
 export type SecurityPermission =
   | 'manage_pricing'
   | 'manage_system_settings'
+  | 'manage_zones'
+  | 'manage_merchants'
   | 'manage_captain_accounts'
   | 'settle_cash_remittance'
   | 'manual_dispatch_override'
+  | 'manage_complaints'
   | 'cancel_order'
   | 'view_audit_logs'
   | 'view_hub_analytics'
   | 'accept_dispatch_offer'
   | 'update_delivery_status'
+  | 'manage_own_store'
   | 'create_order'
   | 'request_quote';
 
@@ -29,22 +33,29 @@ export const ROLE_PERMISSIONS: Record<UserRole, SecurityPermission[]> = {
   owner: [
     'manage_pricing',
     'manage_system_settings',
+    'manage_zones',
+    'manage_merchants',
     'manage_captain_accounts',
     'settle_cash_remittance',
     'manual_dispatch_override',
+    'manage_complaints',
     'cancel_order',
     'view_audit_logs',
     'view_hub_analytics',
   ],
   operations_dispatcher: [
+    'manage_zones',
+    'manage_merchants',
     'manage_captain_accounts',
     'settle_cash_remittance',
     'manual_dispatch_override',
+    'manage_complaints',
     'cancel_order',
     'view_audit_logs',
     'view_hub_analytics',
   ],
   support_agent: [
+    'manage_complaints',
     'cancel_order',
     'view_hub_analytics',
   ],
@@ -58,6 +69,7 @@ export const ROLE_PERMISSIONS: Record<UserRole, SecurityPermission[]> = {
     'cancel_order', // Restricted to pre-pickup
   ],
   merchant: [
+    'manage_own_store',
     'create_order',
     'request_quote',
     'cancel_order',
@@ -94,8 +106,16 @@ export class AccessControlGuard {
     if (role === 'owner' || role === 'operations_dispatcher' || role === 'support_agent') {
       return currentOrderStatus !== 'delivered' && currentOrderStatus !== 'cancelled';
     }
-    if (role === 'customer' || role === 'merchant') {
-      // Customers cannot cancel once the captain is already en route or picked up
+    if (role === 'merchant') {
+      return (
+        currentOrderStatus === 'created' ||
+        currentOrderStatus === 'accepted_by_store' ||
+        currentOrderStatus === 'preparing' ||
+        currentOrderStatus === 'searching_captain'
+      );
+    }
+    if (role === 'customer') {
+      // Customers cannot cancel once store started preparing or captain is assigned/en route
       return currentOrderStatus === 'created' || currentOrderStatus === 'searching_captain';
     }
     return false;
