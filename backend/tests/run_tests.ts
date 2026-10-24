@@ -698,7 +698,7 @@ export async function runAllTests(): Promise<{
     }, 'UNAUTHORIZED_ROLE');
   });
 
-  await runTest('Auth', 'Rejects token with invalid audience', () => {
+  await runTest('Auth', 'Rejects token with invalid audience or untrusted issuer', () => {
     // Generate token with invalid aud
     const header = Buffer.from(JSON.stringify({ alg: 'HS256', typ: 'JWT' })).toString('base64url');
     const payload = Buffer.from(JSON.stringify({
@@ -715,6 +715,39 @@ export async function runAllTests(): Promise<{
     assertThrows(() => {
       verifyToken(badAudToken);
     }, 'INVALID_TOKEN_AUDIENCE');
+
+    // Generate token with untrusted issuer (iss)
+    const badIssPayload = Buffer.from(JSON.stringify({
+      sub: 'usr_cpt_01',
+      iss: 'https://evil-attacker.example.com/auth/v1',
+      aud: 'authenticated',
+      app_metadata: { role: 'captain' },
+      exp: Math.floor(Date.now() / 1000) + 3600,
+    })).toString('base64url');
+    const badIssSig = crypto.createHmac('sha256', 'mashwar_secure_supabase_jwt_secret_el_bagour_2026')
+      .update(`${header}.${badIssPayload}`)
+      .digest('base64url');
+    const badIssToken = `${header}.${badIssPayload}.${badIssSig}`;
+
+    assertThrows(() => {
+      verifyToken(badIssToken);
+    }, 'INVALID_TOKEN_ISSUER');
+
+    // Generate token without exp claim
+    const noExpPayload = Buffer.from(JSON.stringify({
+      sub: 'usr_cpt_01',
+      iss: 'supabase',
+      aud: 'authenticated',
+      app_metadata: { role: 'captain' },
+    })).toString('base64url');
+    const noExpSig = crypto.createHmac('sha256', 'mashwar_secure_supabase_jwt_secret_el_bagour_2026')
+      .update(`${header}.${noExpPayload}`)
+      .digest('base64url');
+    const noExpToken = `${header}.${noExpPayload}.${noExpSig}`;
+
+    assertThrows(() => {
+      verifyToken(noExpToken);
+    }, 'TOKEN_EXPIRED');
   });
 
   await runTest('Auth', 'Rejects token relying on top-level payload.role when app_metadata.role is missing', () => {
@@ -1091,7 +1124,7 @@ export async function runAllTests(): Promise<{
     assert(canTransition === false, 'Intruding captain cannot transition another captain order');
   });
 
-  await runTest('SecurityIsolation', 'Enforces HTTP 403 cross-tenant isolation on /orders/:id, /orders/:id/history, /orders/:id/cancel, and /orders/:id/transitions', async () => {
+  await runTest('SecurityIsolation', 'Enforces HTTP 403 cross-tenant isolation and allows authorized 200 access on /orders/:id, /orders/:id/history, /orders/:id/cancel, and /orders/:id/transitions', async () => {
     const app = createServer();
     const server = app.listen(0);
     const address = server.address() as { port: number };
@@ -1114,23 +1147,24 @@ export async function runAllTests(): Promise<{
       };
       PersistentStore.saveOrder(bobOrder);
 
+      const bobToken = generateTestToken({ userId: 'usr_cust_bob', role: 'customer' });
       const aliceToken = generateTestToken({ userId: 'usr_cust_alice', role: 'customer' });
+      const assignedCapToken = generateTestToken({ userId: 'usr_cpt_01', role: 'captain' }); // cpt_ahmed_fathy
       const otherCaptainToken = generateTestToken({ userId: 'usr_cpt_02', role: 'captain' }); // cpt_mahmoud_ibrahim
+      const bashaMerchantToken = generateTestToken({ userId: 'usr_merch_basha', role: 'merchant' });
       const otherMerchantToken = generateTestToken({ userId: 'usr_merch_amana', role: 'merchant' });
 
-      // 1. Customer Alice cannot GET Bob's order (403)
+      // 1. DENIED (403): Customer Alice cannot GET Bob's order, history, cancel, or transition-cancel
       const getOrderAlice = await fetch(`${baseUrl}/orders/${bobOrder.id}`, {
         headers: { Authorization: `Bearer ${aliceToken}` },
       });
       assert(getOrderAlice.status === 403, `Expected 403 for Alice reading Bob order, got ${getOrderAlice.status}`);
 
-      // 2. Customer Alice cannot GET Bob's order history (403)
       const getHistAlice = await fetch(`${baseUrl}/orders/${bobOrder.id}/history`, {
         headers: { Authorization: `Bearer ${aliceToken}` },
       });
       assert(getHistAlice.status === 403, `Expected 403 for Alice reading Bob history, got ${getHistAlice.status}`);
 
-      // 3. Customer Alice cannot cancel Bob's order (403)
       const cancelAlice = await fetch(`${baseUrl}/orders/${bobOrder.id}/cancel`, {
         method: 'POST',
         headers: {
@@ -1141,13 +1175,43 @@ export async function runAllTests(): Promise<{
       });
       assert(cancelAlice.status === 403, `Expected 403 for Alice cancelling Bob order, got ${cancelAlice.status}`);
 
-      // 4. Captain B (usr_cpt_02) cannot GET order history of order assigned to Captain A (403)
+      const transCancelAlice = await fetch(`${baseUrl}/orders/${bobOrder.id}/transitions`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${aliceToken}`,
+        },
+        body: JSON.stringify({ targetStatus: 'cancelled' }),
+      });
+      assert(transCancelAlice.status === 403, `Expected 403 for Alice cancelling Bob order via /transitions, got ${transCancelAlice.status}`);
+
+      // 2. ALLOWED (200): Owning Customer Bob and Owning Merchant Basha can GET order and history
+      const getOrderBob = await fetch(`${baseUrl}/orders/${bobOrder.id}`, {
+        headers: { Authorization: `Bearer ${bobToken}` },
+      });
+      assert(getOrderBob.status === 200, `Expected 200 for Bob reading own order, got ${getOrderBob.status}`);
+
+      const getHistBob = await fetch(`${baseUrl}/orders/${bobOrder.id}/history`, {
+        headers: { Authorization: `Bearer ${bobToken}` },
+      });
+      assert(getHistBob.status === 200, `Expected 200 for Bob reading own order history, got ${getHistBob.status}`);
+
+      const getHistBasha = await fetch(`${baseUrl}/orders/${bobOrder.id}/history`, {
+        headers: { Authorization: `Bearer ${bashaMerchantToken}` },
+      });
+      assert(getHistBasha.status === 200, `Expected 200 for owning merchant reading order history, got ${getHistBasha.status}`);
+
+      // 3. DENIED (403): Captain B (usr_cpt_02) cannot GET order, GET history, or transition order assigned to Captain A
+      const getOrderCapB = await fetch(`${baseUrl}/orders/${bobOrder.id}`, {
+        headers: { Authorization: `Bearer ${otherCaptainToken}` },
+      });
+      assert(getOrderCapB.status === 403, `Expected 403 for unassigned captain reading assigned order, got ${getOrderCapB.status}`);
+
       const getHistCapB = await fetch(`${baseUrl}/orders/${bobOrder.id}/history`, {
         headers: { Authorization: `Bearer ${otherCaptainToken}` },
       });
       assert(getHistCapB.status === 403, `Expected 403 for unassigned captain reading history, got ${getHistCapB.status}`);
 
-      // 5. Captain B (usr_cpt_02) cannot transition order assigned to Captain A (403)
       const transCapB = await fetch(`${baseUrl}/orders/${bobOrder.id}/transitions`, {
         method: 'POST',
         headers: {
@@ -1158,13 +1222,44 @@ export async function runAllTests(): Promise<{
       });
       assert(transCapB.status === 403, `Expected 403 for unassigned captain transitioning order, got ${transCapB.status}`);
 
-      // 6. Merchant B (usr_merch_amana) cannot GET order belonging to Merchant A (403)
+      // 4. ALLOWED (200): Assigned Captain A (usr_cpt_01) can GET history and transition bobOrder to at_pickup, but CANNOT cancel (403)
+      const getHistCapA = await fetch(`${baseUrl}/orders/${bobOrder.id}/history`, {
+        headers: { Authorization: `Bearer ${assignedCapToken}` },
+      });
+      assert(getHistCapA.status === 200, `Expected 200 for assigned captain reading history, got ${getHistCapA.status}`);
+
+      const cancelByCapA = await fetch(`${baseUrl}/orders/${bobOrder.id}/transitions`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${assignedCapToken}`,
+        },
+        body: JSON.stringify({ targetStatus: 'cancelled' }),
+      });
+      assert(cancelByCapA.status === 403, `Expected 403 for captain attempting to cancel order via /transitions, got ${cancelByCapA.status}`);
+
+      const transCapA = await fetch(`${baseUrl}/orders/${bobOrder.id}/transitions`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${assignedCapToken}`,
+        },
+        body: JSON.stringify({ targetStatus: 'at_pickup' }),
+      });
+      assert(transCapA.status === 200, `Expected 200 for assigned captain transitioning order to at_pickup, got ${transCapA.status}`);
+
+      // 5. DENIED (403): Merchant B (usr_merch_amana) cannot GET order, history, or transition order belonging to Merchant A
       const getOrderMerchB = await fetch(`${baseUrl}/orders/${bobOrder.id}`, {
         headers: { Authorization: `Bearer ${otherMerchantToken}` },
       });
       assert(getOrderMerchB.status === 403, `Expected 403 for other merchant reading order, got ${getOrderMerchB.status}`);
 
-      // 7. Unassigned order: Captain cannot bypass /accept and transition an unassigned ready_for_pickup order (403)
+      const getHistMerchB = await fetch(`${baseUrl}/orders/${bobOrder.id}/history`, {
+        headers: { Authorization: `Bearer ${otherMerchantToken}` },
+      });
+      assert(getHistMerchB.status === 403, `Expected 403 for other merchant reading history, got ${getHistMerchB.status}`);
+
+      // 6. DENIED (403): Unassigned order — Captain cannot read history or bypass /accept to transition an unassigned ready_for_pickup order
       const unassignedOrder: Order = {
         ...baseOrder,
         id: 'ord_http_unassigned_02',
@@ -1174,6 +1269,14 @@ export async function runAllTests(): Promise<{
         assignedCaptainId: undefined,
       };
       PersistentStore.saveOrder(unassignedOrder);
+
+      const getHistUnassignedCap = await fetch(`${baseUrl}/orders/${unassignedOrder.id}/history`, {
+        headers: { Authorization: `Bearer ${otherCaptainToken}` },
+      });
+      assert(
+        getHistUnassignedCap.status === 403,
+        `Expected 403 for captain reading history of unassigned order, got ${getHistUnassignedCap.status}`
+      );
 
       const transUnassignedCap = await fetch(`${baseUrl}/orders/${unassignedOrder.id}/transitions`, {
         method: 'POST',
@@ -1188,8 +1291,7 @@ export async function runAllTests(): Promise<{
         `Expected 403 for captain transitioning unassigned order without claiming, got ${transUnassignedCap.status}`
       );
 
-      // 8. HTTP duplicate cash collection: same Idempotency-Key replays (200), different Idempotency-Key on paid order fails with 409 ORDER_ALREADY_PAID
-      const assignedCapToken = generateTestToken({ userId: 'usr_cpt_01', role: 'captain' });
+      // 7. HTTP duplicate cash collection: same Idempotency-Key replays (200), different Idempotency-Key on paid order fails with 409 ORDER_ALREADY_PAID
       const inTransitOrder: Order = {
         ...baseOrder,
         id: 'ord_http_cod_dup_03',

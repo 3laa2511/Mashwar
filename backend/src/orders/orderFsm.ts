@@ -84,7 +84,7 @@ export class OrderFsm {
         throw err;
       }
 
-      if (actorRole === 'merchant' && order.merchantUserId && order.merchantUserId !== actorId) {
+      if (actorRole === 'merchant' && (!order.merchantUserId || order.merchantUserId !== actorId)) {
         const err = new Error('غير مصرح للتاجر بتحديث حالة طلب يخص متجراً آخر.');
         (err as any).code = 'UNAUTHORIZED_MERCHANT_ACTION';
         (err as any).statusCode = 403;
@@ -99,6 +99,44 @@ export class OrderFsm {
         (err as any).code = 'MISSING_ASSIGNED_CAPTAIN';
         (err as any).statusCode = 422;
         throw err;
+      }
+      if (actorRole === 'captain' && order.assignedCaptainId !== actorId) {
+        const err = new Error('غير مصرح لك بتأكيد إسناد طلب مسند لكابتن آخر.');
+        (err as any).code = 'UNAUTHORIZED_CAPTAIN_ACTION';
+        (err as any).statusCode = 403;
+        throw err;
+      }
+    }
+
+    // Invariant 4b: Cancellation ownership & stage restrictions
+    if (targetStatus === 'cancelled') {
+      if (actorRole === 'captain') {
+        const err = new Error('غير مصرح للكابتن بإلغاء الطلب مباشرة.');
+        (err as any).code = 'UNAUTHORIZED_CAPTAIN_ACTION';
+        (err as any).statusCode = 403;
+        throw err;
+      }
+      if (actorRole === 'customer') {
+        if (order.customerId !== actorId) {
+          const err = new Error('لا يمكنك إلغاء طلب لا يخص حسابك.');
+          (err as any).code = 'FORBIDDEN_RESOURCE';
+          (err as any).statusCode = 403;
+          throw err;
+        }
+        if (currentStatus !== 'created' && currentStatus !== 'searching_captain') {
+          const err = new Error('لا يمكن للعميل إلغاء الطلب بعد بدء تجهيزه أو تحرك الكابتن.');
+          (err as any).code = 'CANCELLATION_NOT_ALLOWED';
+          (err as any).statusCode = 403;
+          throw err;
+        }
+      }
+      if (actorRole === 'merchant') {
+        if (!order.merchantUserId || order.merchantUserId !== actorId) {
+          const err = new Error('لا يمكن للمتجر إلغاء طلب يخص متجراً آخر.');
+          (err as any).code = 'UNAUTHORIZED_MERCHANT_ACTION';
+          (err as any).statusCode = 403;
+          throw err;
+        }
       }
     }
 

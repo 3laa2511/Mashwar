@@ -672,9 +672,24 @@ router.post('/orders/:id/transitions', authenticate, async (req: Request, res: R
       resolvedActorId = captain.id;
     }
 
-    // Customers cannot perform arbitrary status transitions (only cancel via /cancel)
-    if (user.role === 'customer' && targetStatus !== 'cancelled') {
-      return sendError(res, 'FORBIDDEN_ACTION', 'العميل لا يمكنه تغيير مسار الطلب التشغيلي.', 403);
+    // Customer ownership & transition check
+    if (user.role === 'customer') {
+      if (order.customerId !== user.id) {
+        return sendError(res, 'FORBIDDEN_RESOURCE', 'غير مصرح لك بتحديث حالة طلب لا يخص حسابك.', 403);
+      }
+      if (targetStatus !== 'cancelled') {
+        return sendError(res, 'FORBIDDEN_ACTION', 'العميل لا يمكنه تغيير مسار الطلب التشغيلي.', 403);
+      }
+      if (!AccessControlGuard.canCancelOrder('customer', order.status)) {
+        return sendError(res, 'CANCELLATION_NOT_ALLOWED', 'لا يمكن للعميل إلغاء الطلب بعد بدء تجهيزه أو تحرك الكابتن.', 403);
+      }
+    }
+
+    // Merchant ownership check
+    if (user.role === 'merchant') {
+      if (!order.merchantUserId || order.merchantUserId !== user.id) {
+        return sendError(res, 'UNAUTHORIZED_MERCHANT_ACTION', 'غير مصرح للتاجر بتحديث حالة طلب يخص متجراً آخر.', 403);
+      }
     }
 
     const result = OrderFsm.transition(order, {

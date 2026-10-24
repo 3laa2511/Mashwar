@@ -99,23 +99,68 @@ export function verifyToken(token: string): AuthenticatedUser {
     }
 
     try {
+      const headerJson = Buffer.from(headerB64, 'base64url').toString('utf8');
+      const header = JSON.parse(headerJson);
+      if (!header || header.alg !== 'HS256') {
+        const err = new Error('خوارزمية توقيع الرمز الأمني غير مدعومة (يجب أن تكون HS256).');
+        (err as any).code = 'INVALID_TOKEN_ALGORITHM';
+        (err as any).statusCode = 401;
+        throw err;
+      }
+
       const payloadJson = Buffer.from(payloadB64, 'base64url').toString('utf8');
       const payload = JSON.parse(payloadJson);
 
-      // Check token expiration
-      if (payload.exp && Date.now() >= payload.exp * 1000) {
-        const err = new Error('انتهت صلاحية رمز الدخول. يرجى إعادة تسجيل الدخول.');
+      // Check token expiration (required numeric exp claim)
+      if (
+        typeof payload.exp !== 'number' ||
+        !Number.isFinite(payload.exp) ||
+        Date.now() >= payload.exp * 1000
+      ) {
+        const err = new Error('انتهت صلاحية رمز الدخول أو أن حقل الانتهاء مفقود. يرجى إعادة تسجيل الدخول.');
         (err as any).code = 'TOKEN_EXPIRED';
         (err as any).statusCode = 401;
         throw err;
       }
 
-      // Check token audience if provided (standard Supabase JWT aud is 'authenticated')
-      if (payload.aud && payload.aud !== 'authenticated') {
-        const err = new Error('جمهور الرمز الأمني غير صالح.');
-        (err as any).code = 'INVALID_TOKEN_AUDIENCE';
-        (err as any).statusCode = 401;
-        throw err;
+      // Check token audience (standard Supabase JWT aud is 'authenticated')
+      if (payload.aud !== undefined || process.env.NODE_ENV === 'production') {
+        const isValidAud =
+          payload.aud === 'authenticated' ||
+          (Array.isArray(payload.aud) && payload.aud.includes('authenticated'));
+        if (!isValidAud) {
+          const err = new Error('جمهور الرمز الأمني غير صالح.');
+          (err as any).code = 'INVALID_TOKEN_AUDIENCE';
+          (err as any).statusCode = 401;
+          throw err;
+        }
+      }
+
+      // Check token issuer (iss) against configured Supabase issuer or approved dev issuers
+      const configuredIssuer =
+        process.env.SUPABASE_JWT_ISSUER?.trim() ||
+        (process.env.SUPABASE_URL && !process.env.SUPABASE_URL.includes('YOUR_PROJECT_REF')
+          ? `${process.env.SUPABASE_URL.trim().replace(/\/$/, '')}/auth/v1`
+          : undefined);
+
+      if (configuredIssuer) {
+        if (payload.iss !== configuredIssuer) {
+          const err = new Error('مصدر الرمز الأمني (Issuer) غير موثوق أو غير مطابق لإعدادات النظام.');
+          (err as any).code = 'INVALID_TOKEN_ISSUER';
+          (err as any).statusCode = 401;
+          throw err;
+        }
+      } else if (payload.iss !== undefined) {
+        const validDevIssuers = ['supabase', 'mashwar-auth'];
+        const isSupabaseAuthUrl =
+          typeof payload.iss === 'string' &&
+          /^https:\/\/[a-z0-9-]+\.supabase\.co\/auth\/v1$/.test(payload.iss);
+        if (!validDevIssuers.includes(payload.iss) && !isSupabaseAuthUrl) {
+          const err = new Error('مصدر الرمز الأمني (Issuer) غير صالح.');
+          (err as any).code = 'INVALID_TOKEN_ISSUER';
+          (err as any).statusCode = 401;
+          throw err;
+        }
       }
 
       // Check principal ID
@@ -196,6 +241,8 @@ export function generateTestToken(params: {
 
   const payload = {
     sub: params.userId,
+    iss: 'supabase',
+    aud: 'authenticated',
     app_metadata: {
       role: params.role,
       provider: 'phone',
