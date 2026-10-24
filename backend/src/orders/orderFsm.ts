@@ -108,6 +108,28 @@ export class OrderFsm {
       }
     }
 
+    // Invariant 4a: Ownership & role check for searching_captain dispatch broadcast
+    if (targetStatus === 'searching_captain') {
+      if (actorRole === 'captain') {
+        const err = new Error('غير مصرح للكابتن بإعادة بث الطلب للبحث عن كابتن.');
+        (err as any).code = 'UNAUTHORIZED_CAPTAIN_ACTION';
+        (err as any).statusCode = 403;
+        throw err;
+      }
+      if (actorRole === 'customer' && order.customerId !== actorId) {
+        const err = new Error('غير مصرح لك بتحديث حالة طلب لا يخص حسابك.');
+        (err as any).code = 'FORBIDDEN_RESOURCE';
+        (err as any).statusCode = 403;
+        throw err;
+      }
+      if (actorRole === 'merchant' && (!order.merchantUserId || order.merchantUserId !== actorId)) {
+        const err = new Error('غير مصرح للتاجر بتحديث حالة طلب يخص متجراً آخر.');
+        (err as any).code = 'UNAUTHORIZED_MERCHANT_ACTION';
+        (err as any).statusCode = 403;
+        throw err;
+      }
+    }
+
     // Invariant 4b: Cancellation ownership & stage restrictions
     if (targetStatus === 'cancelled') {
       if (actorRole === 'captain') {
@@ -134,6 +156,19 @@ export class OrderFsm {
         if (!order.merchantUserId || order.merchantUserId !== actorId) {
           const err = new Error('لا يمكن للمتجر إلغاء طلب يخص متجراً آخر.');
           (err as any).code = 'UNAUTHORIZED_MERCHANT_ACTION';
+          (err as any).statusCode = 403;
+          throw err;
+        }
+        const allowedMerchantCancelStages: OrderStatus[] = [
+          'created',
+          'accepted_by_store',
+          'preparing',
+          'ready_for_pickup',
+          'searching_captain',
+        ];
+        if (!allowedMerchantCancelStages.includes(currentStatus)) {
+          const err = new Error('لا يمكن للمتجر إلغاء الطلب بعد استلام الكابتن للشحنة.');
+          (err as any).code = 'CANCELLATION_NOT_ALLOWED';
           (err as any).statusCode = 403;
           throw err;
         }

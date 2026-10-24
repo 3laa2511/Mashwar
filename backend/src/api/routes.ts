@@ -54,7 +54,7 @@ PersistentStore.initialize();
 
 // In-memory repositories synchronized with PersistentStore
 const ordersDb = new Map<string, Order>();
-const idempotencyStore = new Map<string, { orderId: string; responseBody: any }>();
+const idempotencyStore = new Map<string, { orderId: string; payloadFingerprint: string; responseBody: any }>();
 const mockCaptains = new Map<string, CaptainProfile>();
 
 function syncWithStore() {
@@ -372,12 +372,8 @@ router.post('/orders', authenticate, orderCreateRateLimiter, (req: Request, res:
       return sendError(res, 'FORBIDDEN_ROLE', 'غير مصرح لهذا الحساب بإنشاء طلبات.', 403);
     }
 
-    const idempotencyKey = req.headers['idempotency-key'] as string;
+    const idempotencyKey = (req.headers['idempotency-key'] || req.headers['x-idempotency-key']) as string | undefined;
     const scopedIdempotencyKey = idempotencyKey ? `${user.id}:${idempotencyKey}` : undefined;
-    if (scopedIdempotencyKey && idempotencyStore.has(scopedIdempotencyKey)) {
-      const cached = idempotencyStore.get(scopedIdempotencyKey)!;
-      return res.status(200).json(cached.responseBody);
-    }
 
     const {
       serviceTypeId,
@@ -395,6 +391,27 @@ router.post('/orders', authenticate, orderCreateRateLimiter, (req: Request, res:
       quoteExpiresAt,
       quoteSignature,
     } = req.body;
+
+    const orderPayloadFingerprint = JSON.stringify({
+      serviceTypeId,
+      quoteId,
+      storeId: storeId || null,
+      totalFarePiasters: Number(totalFarePiasters),
+      paymentMethod,
+    });
+
+    if (scopedIdempotencyKey && idempotencyStore.has(scopedIdempotencyKey)) {
+      const cached = idempotencyStore.get(scopedIdempotencyKey)!;
+      if (cached.payloadFingerprint !== orderPayloadFingerprint) {
+        return sendError(
+          res,
+          'IDEMPOTENCY_PAYLOAD_MISMATCH',
+          'مفتاح عدم التكرار (Idempotency Key) مستخدم مسبقاً لطلب ببيانات أو تسعيرة مختلفة.',
+          409
+        );
+      }
+      return res.status(200).json(cached.responseBody);
+    }
 
     if (!serviceTypeId || !pickup || !dropoff || !itemDescription || !quoteSignature) {
       return sendError(res, 'VALIDATION_ERROR', 'بيانات الطلب غير مكتملة أو توقيع التسعيرة مفقود.', 400);
@@ -527,6 +544,7 @@ router.post('/orders', authenticate, orderCreateRateLimiter, (req: Request, res:
     if (scopedIdempotencyKey) {
       idempotencyStore.set(scopedIdempotencyKey, {
         orderId: newOrder.id,
+        payloadFingerprint: orderPayloadFingerprint,
         responseBody: responsePayload,
       });
     }
@@ -765,7 +783,7 @@ router.post('/orders/:id/cancel', authenticate, (req: Request, res: Response) =>
         );
       }
     } else if (user.role === 'merchant') {
-      if (order.merchantUserId && order.merchantUserId !== user.id && order.customerId !== user.id) {
+      if (!order.merchantUserId || order.merchantUserId !== user.id) {
         return sendError(res, 'FORBIDDEN_RESOURCE', 'لا يمكن للمتجر إلغاء طلب يخص متجراً آخر.', 403);
       }
       if (!AccessControlGuard.canCancelOrder('merchant', order.status)) {
@@ -1109,23 +1127,175 @@ router.post('/admin/complaints/:id/resolve', authenticate, (req: Request, res: R
 // ----------------------------------------------------------------------------
 // 6. Payment Intents & Verified Webhooks
 // ----------------------------------------------------------------------------
+const PAYMENT_INTENT_ALLOWED_ROLES: ReadonlyArray<UserRole> = [
+  'customer',
+  'merchant',
+  'owner',
+  'operations_dispatcher',
+];
+
+const ALLOWED_PAYMENT_PROVIDERS = ['paymob', 'fawry', 'vodafone_cash'] as const;
+
 router.post('/payments/intents', authenticate, (req: Request, res: Response) => {
-  const { orderId, provider = 'paymob' } = req.body;
-  const order = ordersDb.get(orderId) || PersistentStore.getOrderById(orderId);
+  const user = req.user;
+  // 1. Explicit allowlist of roles permitted to create payment intents; deny all unlisted roles by default
+  if (!user || !PAYMENT_INTENT_ALLOWED_ROLES.includes(user.role)) {
+    return sendError(
+      res,
+      'FORBIDDEN_ROLE',
+      'غير مصرح لهذا الدور بإصدار تفويض دفع.',
+      403
+    );
+  }
+
+  if (!req.body || typeof req.body !== 'object' || Array.isArray(req.body)) {
+    return sendError(res, 'INVALID_INPUT', 'بيانات طلب إصدار تفويض الدفع غير صالحة.', 400);
+  }
+
+  const {
+    orderId,
+    provider = 'paymob',
+    amountPiasters,
+    totalFarePiasters,
+    amount,
+    customerId: clientCustomerId,
+    merchantUserId: clientMerchantUserId,
+    storeId: clientStoreId,
+    role: clientSuppliedRole,
+    status: clientSuppliedStatus,
+    isPaid: clientSuppliedIsPaid,
+  } = req.body;
+
+  // 2. Reject any attempt by the client to supply privileged state/role fields
+  if (
+    clientSuppliedRole !== undefined ||
+    clientSuppliedStatus !== undefined ||
+    clientSuppliedIsPaid !== undefined
+  ) {
+    return sendError(
+      res,
+      'UNTRUSTED_CLIENT_STATE_FORBIDDEN',
+      'لا يُسمح للعميل بتمرير حالة الدفع أو حالة الطلب أو الدور الأمني.',
+      422
+    );
+  }
+
+  // 3. Validate orderId identifier format (reject missing or malformed resource IDs)
+  if (
+    typeof orderId !== 'string' ||
+    orderId.trim().length === 0 ||
+    !/^[a-zA-Z0-9_-]{3,128}$/.test(orderId.trim())
+  ) {
+    return sendError(
+      res,
+      'INVALID_ORDER_ID',
+      'معرف الطلب (orderId) مفقود أو بصيغة غير صالحة.',
+      400
+    );
+  }
+
+  // 4. Validate payment provider against explicit allowlist
+  if (
+    typeof provider !== 'string' ||
+    !(ALLOWED_PAYMENT_PROVIDERS as ReadonlyArray<string>).includes(provider)
+  ) {
+    return sendError(
+      res,
+      'INVALID_PAYMENT_PROVIDER',
+      'بوابة الدفع المحددة غير مدعومة.',
+      400
+    );
+  }
+
+  const normalizedOrderId = orderId.trim();
+  const order = ordersDb.get(normalizedOrderId) || PersistentStore.getOrderById(normalizedOrderId);
 
   if (!order) {
     return sendError(res, 'ORDER_NOT_FOUND', 'الطلب غير موجود لإصدار تفويض دفع.', 404);
   }
 
-  const user = req.user!;
-  if (user.role === 'captain') {
-    return sendError(res, 'FORBIDDEN_ROLE', 'غير مصرح للكابتن بإصدار تفويض دفع للعميل.', 403);
+  // 5. Reject client-supplied ownership spoofing
+  if (clientCustomerId !== undefined && clientCustomerId !== order.customerId) {
+    return sendError(res, 'FORBIDDEN_RESOURCE', 'تعارض في ملكية العميل للطلب.', 403);
   }
-  if (user.role === 'customer' && order.customerId !== user.id) {
-    return sendError(res, 'FORBIDDEN_RESOURCE', 'غير مصرح لك بإصدار دفع لطلب عميل آخر.', 403);
+  if (clientMerchantUserId !== undefined && clientMerchantUserId !== order.merchantUserId) {
+    return sendError(res, 'FORBIDDEN_RESOURCE', 'تعارض في ملكية المتجر للطلب.', 403);
   }
-  if (user.role === 'merchant' && order.customerId !== user.id && order.merchantUserId !== user.id) {
-    return sendError(res, 'FORBIDDEN_RESOURCE', 'غير مصرح للمتجر بإصدار دفع لطلب لا يخصه.', 403);
+  if (clientStoreId !== undefined && clientStoreId !== order.storeId) {
+    return sendError(res, 'FORBIDDEN_RESOURCE', 'تعارض في معرف المتجر للطلب.', 403);
+  }
+
+  // 6. Strict Server-Verified Ownership Enforcement
+  if (user.role === 'customer') {
+    if (order.customerId !== user.id) {
+      return sendError(res, 'FORBIDDEN_RESOURCE', 'غير مصرح لك بإصدار دفع لطلب عميل آخر.', 403);
+    }
+  } else if (user.role === 'merchant') {
+    // Verify store ownership against authoritative store record as well as order.merchantUserId
+    const store = order.storeId ? PersistentStore.getStoreById(order.storeId) : undefined;
+    const authoritativeMerchantUserId = store ? store.merchantUserId : order.merchantUserId;
+    if (
+      !authoritativeMerchantUserId ||
+      authoritativeMerchantUserId !== user.id ||
+      (order.merchantUserId && order.merchantUserId !== user.id)
+    ) {
+      return sendError(res, 'FORBIDDEN_RESOURCE', 'غير مصرح للمتجر بإصدار دفع لطلب لا يخص متجره.', 403);
+    }
+  }
+
+  // 7. Enforce valid order & payment states
+  if (order.status === 'cancelled' || order.status === 'delivered') {
+    return sendError(
+      res,
+      'INVALID_ORDER_STATE',
+      `لا يمكن إصدار تفويض دفع لطلب في حالة نهائية (${order.status}).`,
+      409
+    );
+  }
+
+  if (
+    order.isPaid === true ||
+    (typeof order.cashCollectedPiasters === 'number' && order.cashCollectedPiasters > 0)
+  ) {
+    return sendError(
+      res,
+      'ORDER_ALREADY_PAID',
+      'تم سداد قيمة هذا الطلب مسبقاً ولا يمكن إصدار تفويض دفع مكرر.',
+      409
+    );
+  }
+
+  if (!Number.isInteger(order.totalFarePiasters) || order.totalFarePiasters <= 0) {
+    return sendError(
+      res,
+      'INVALID_ORDER_AMOUNT',
+      'إجمالي تسعيرة الطلب بالقرش غير صالح لإصدار تفويض دفع.',
+      422
+    );
+  }
+
+  // 8. Detect and reject client amount manipulation
+  const clientSuppliedAmount =
+    amountPiasters !== undefined
+      ? amountPiasters
+      : totalFarePiasters !== undefined
+        ? totalFarePiasters
+        : amount;
+
+  if (clientSuppliedAmount !== undefined) {
+    if (
+      typeof clientSuppliedAmount !== 'number' ||
+      !Number.isInteger(clientSuppliedAmount) ||
+      clientSuppliedAmount <= 0 ||
+      clientSuppliedAmount !== order.totalFarePiasters
+    ) {
+      return sendError(
+        res,
+        'AMOUNT_MANIPULATION_DETECTED',
+        'المبلغ المرسل من العميل غير صالح أو لا يطابق إجمالي تسعيرة الطلب المعتمدة بالقرش.',
+        422
+      );
+    }
   }
 
   const paymentIntentId = `pi_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;

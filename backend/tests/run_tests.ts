@@ -706,6 +706,7 @@ export async function runAllTests(): Promise<{
     const header = Buffer.from(JSON.stringify({ alg: 'HS256', typ: 'JWT' })).toString('base64url');
     const payload = Buffer.from(JSON.stringify({
       sub: 'usr_cpt_01',
+      iss: 'supabase',
       aud: 'external_client_aud',
       app_metadata: { role: 'captain' },
       exp: Math.floor(Date.now() / 1000) + 3600,
@@ -717,6 +718,20 @@ export async function runAllTests(): Promise<{
 
     assertThrows(() => {
       verifyToken(badAudToken);
+    }, 'INVALID_TOKEN_AUDIENCE');
+
+    // Generate token with missing aud
+    const noAudPayload = Buffer.from(JSON.stringify({
+      sub: 'usr_cpt_01',
+      iss: 'supabase',
+      app_metadata: { role: 'captain' },
+      exp: Math.floor(Date.now() / 1000) + 3600,
+    })).toString('base64url');
+    const noAudSig = crypto.createHmac('sha256', 'mashwar_secure_supabase_jwt_secret_el_bagour_2026')
+      .update(`${header}.${noAudPayload}`)
+      .digest('base64url');
+    assertThrows(() => {
+      verifyToken(`${header}.${noAudPayload}.${noAudSig}`);
     }, 'INVALID_TOKEN_AUDIENCE');
 
     // Generate token with untrusted issuer (iss)
@@ -757,6 +772,8 @@ export async function runAllTests(): Promise<{
     const header = Buffer.from(JSON.stringify({ alg: 'HS256', typ: 'JWT' })).toString('base64url');
     const payload = Buffer.from(JSON.stringify({
       sub: 'usr_hacker_01',
+      iss: 'supabase',
+      aud: 'authenticated',
       role: 'owner', // Top-level role only
       app_metadata: {}, // Empty app_metadata
       exp: Math.floor(Date.now() / 1000) + 3600,
@@ -820,11 +837,13 @@ export async function runAllTests(): Promise<{
     }
   });
 
-  await runTest('Auth', 'Requires configured trusted issuer in production and rejects tokens with missing or mismatched iss', () => {
+  await runTest('Auth', 'Requires configured trusted algorithm, issuer, and audience in production and rejects missing or mismatched claims', () => {
     const prevNodeEnv = process.env.NODE_ENV;
     const prevSecret = process.env.SUPABASE_JWT_SECRET;
     const prevIssuer = process.env.SUPABASE_JWT_ISSUER;
     const prevUrl = process.env.SUPABASE_URL;
+    const prevAlg = process.env.SUPABASE_JWT_ALG;
+    const prevAud = process.env.SUPABASE_JWT_AUDIENCE;
 
     try {
       const prodSecret = 'prod_strong_hmac_secret_el_bagour_2026_verified';
@@ -838,11 +857,19 @@ export async function runAllTests(): Promise<{
         userId: 'usr_cpt_01',
         role: 'captain',
         issuer: trustedIssuer,
+        audience: 'authenticated',
       });
       const mismatchedIssToken = generateTestToken({
         userId: 'usr_cpt_01',
         role: 'captain',
         issuer: 'https://wrong-project.supabase.co/auth/v1',
+        audience: 'authenticated',
+      });
+      const mismatchedAudToken = generateTestToken({
+        userId: 'usr_cpt_01',
+        role: 'captain',
+        issuer: trustedIssuer,
+        audience: 'wrong-aud',
       });
 
       // Construct a token with no iss claim at all
@@ -863,28 +890,48 @@ export async function runAllTests(): Promise<{
 
       // Switch to production
       process.env.NODE_ENV = 'production';
+      delete process.env.SUPABASE_JWT_ALG;
       delete process.env.SUPABASE_JWT_ISSUER;
       delete process.env.SUPABASE_URL;
+      delete process.env.SUPABASE_JWT_AUDIENCE;
 
-      // 1. Missing configured issuer on server in production -> 500 AUTH_CONFIG_MISSING
+      // 1. Missing SUPABASE_JWT_ALG in production -> 500 AUTH_CONFIG_MISSING
       assertThrows(() => {
         verifyToken(validProdToken);
       }, 'AUTH_CONFIG_MISSING');
 
-      // 2. Configure trusted issuer via SUPABASE_URL
+      process.env.SUPABASE_JWT_ALG = 'HS256';
+
+      // 2. Missing configured issuer on server in production -> 500 AUTH_CONFIG_MISSING
+      assertThrows(() => {
+        verifyToken(validProdToken);
+      }, 'AUTH_CONFIG_MISSING');
+
       process.env.SUPABASE_URL = 'https://mashwar-prod-ref.supabase.co';
 
-      // Token with missing iss in production -> 401 INVALID_TOKEN_ISSUER
+      // 3. Missing configured audience (SUPABASE_JWT_AUDIENCE) in production -> 500 AUTH_CONFIG_MISSING
+      assertThrows(() => {
+        verifyToken(validProdToken);
+      }, 'AUTH_CONFIG_MISSING');
+
+      process.env.SUPABASE_JWT_AUDIENCE = 'authenticated';
+
+      // 4. Token with missing iss in production -> 401 INVALID_TOKEN_ISSUER
       assertThrows(() => {
         verifyToken(missingIssToken);
       }, 'INVALID_TOKEN_ISSUER');
 
-      // Token with mismatched iss in production -> 401 INVALID_TOKEN_ISSUER
+      // 5. Token with mismatched iss in production -> 401 INVALID_TOKEN_ISSUER
       assertThrows(() => {
         verifyToken(mismatchedIssToken);
       }, 'INVALID_TOKEN_ISSUER');
 
-      // Token with matching iss in production -> succeeds
+      // 6. Token with mismatched aud in production -> 401 INVALID_TOKEN_AUDIENCE
+      assertThrows(() => {
+        verifyToken(mismatchedAudToken);
+      }, 'INVALID_TOKEN_AUDIENCE');
+
+      // 7. Token with matching alg, secret, iss, and aud in production -> succeeds
       const verified = verifyToken(validProdToken);
       assert(verified.id === 'usr_cpt_01', 'Verified production user ID must match');
       assert(verified.role === 'captain', 'Verified production user role must match');
@@ -900,10 +947,16 @@ export async function runAllTests(): Promise<{
 
       if (prevUrl === undefined) delete process.env.SUPABASE_URL;
       else process.env.SUPABASE_URL = prevUrl;
+
+      if (prevAlg === undefined) delete process.env.SUPABASE_JWT_ALG;
+      else process.env.SUPABASE_JWT_ALG = prevAlg;
+
+      if (prevAud === undefined) delete process.env.SUPABASE_JWT_AUDIENCE;
+      else process.env.SUPABASE_JWT_AUDIENCE = prevAud;
     }
   });
 
-  await runTest('Auth', 'Verifies Supabase asymmetric ES256 (P-256) and RS256 tokens and prevents HS256 algorithm confusion', () => {
+  await runTest('Auth', 'Verifies Supabase asymmetric ES256 (P-256) and RS256 tokens, strict key-to-algorithm mapping, and prevents HS256 algorithm confusion', () => {
     const prevPubPem = process.env.SUPABASE_JWT_PUBLIC_KEY;
     const prevPubJwk = process.env.SUPABASE_JWT_PUBLIC_JWK;
     const prevAlg = process.env.SUPABASE_JWT_ALG;
@@ -917,6 +970,7 @@ export async function runAllTests(): Promise<{
         namedCurve: 'prime256v1',
       });
       const ecPubPem = ecPub.export({ type: 'spki', format: 'pem' }).toString();
+      const ecPrivPem = ecPriv.export({ type: 'pkcs8', format: 'pem' }).toString();
       const ecPubJwk = JSON.stringify(ecPub.export({ format: 'jwk' }));
 
       const esHeaderB64 = Buffer.from(JSON.stringify({ alg: 'ES256', typ: 'JWT' })).toString('base64url');
@@ -951,11 +1005,31 @@ export async function runAllTests(): Promise<{
       assert(esUserPem.id === 'usr_cpt_es256', 'ES256 PEM verification must extract sub');
       assert(esUserPem.role === 'captain', 'ES256 PEM verification must extract role');
 
+      // Reject private key PEM passed in SUPABASE_JWT_PUBLIC_KEY
+      process.env.SUPABASE_JWT_PUBLIC_KEY = ecPrivPem;
+      assertThrows(() => {
+        verifyToken(es256Token);
+      }, 'AUTH_CONFIG_MISSING');
+
+      // Reject non-P-256 curve (e.g. P-384 / secp384r1) for ES256
+      const { publicKey: p384Pub } = crypto.generateKeyPairSync('ec', { namedCurve: 'secp384r1' });
+      process.env.SUPABASE_JWT_PUBLIC_KEY = p384Pub.export({ type: 'spki', format: 'pem' }).toString();
+      assertThrows(() => {
+        verifyToken(es256Token);
+      }, 'AUTH_CONFIG_MISSING');
+
       // Verify ES256 with JWK public key
       delete process.env.SUPABASE_JWT_PUBLIC_KEY;
       process.env.SUPABASE_JWT_PUBLIC_JWK = ecPubJwk;
       const esUserJwk = verifyToken(es256Token);
       assert(esUserJwk.id === 'usr_cpt_es256', 'ES256 JWK verification must extract sub');
+
+      // Reject ambiguous config when BOTH SUPABASE_JWT_PUBLIC_KEY and SUPABASE_JWT_PUBLIC_JWK are set
+      process.env.SUPABASE_JWT_PUBLIC_KEY = ecPubPem;
+      assertThrows(() => {
+        verifyToken(es256Token);
+      }, 'AUTH_CONFIG_MISSING');
+      delete process.env.SUPABASE_JWT_PUBLIC_JWK;
 
       // Forged ES256 signature must fail with INVALID_TOKEN_SIGNATURE
       const forgedEs256Token = `${esHeaderB64}.${claimsB64}.${Buffer.alloc(64, 7).toString('base64url')}`;
@@ -963,7 +1037,8 @@ export async function runAllTests(): Promise<{
         verifyToken(forgedEs256Token);
       }, 'INVALID_TOKEN_SIGNATURE');
 
-      // Prevent algorithm confusion: attacker signs an HS256 token while server has only asymmetric public key configured
+      // Prevent algorithm confusion:
+      // Case A: attacker signs an HS256 token while server has asymmetric public key configured
       const hsHeaderB64 = Buffer.from(JSON.stringify({ alg: 'HS256', typ: 'JWT' })).toString('base64url');
       const confusedSig = crypto
         .createHmac('sha256', ecPubPem)
@@ -973,6 +1048,18 @@ export async function runAllTests(): Promise<{
       assertThrows(() => {
         verifyToken(confusedToken);
       }, 'INVALID_TOKEN_ALGORITHM');
+
+      // Case B: misconfigured server puts PEM public key or JWK into SUPABASE_JWT_SECRET for HS256
+      delete process.env.SUPABASE_JWT_PUBLIC_KEY;
+      process.env.SUPABASE_JWT_SECRET = ecPubPem;
+      assertThrows(() => {
+        verifyToken(confusedToken);
+      }, 'AUTH_CONFIG_MISSING');
+      process.env.SUPABASE_JWT_SECRET = ecPubJwk;
+      assertThrows(() => {
+        verifyToken(confusedToken);
+      }, 'AUTH_CONFIG_MISSING');
+      delete process.env.SUPABASE_JWT_SECRET;
 
       // Reject alg: "none"
       const noneHeaderB64 = Buffer.from(JSON.stringify({ alg: 'none', typ: 'JWT' })).toString('base64url');
@@ -1561,6 +1648,287 @@ export async function runAllTests(): Promise<{
       server.close();
     }
   });
+
+  await runTest('SecurityIsolation', 'Hardens POST /payments/intents against cross-customer, cross-merchant, captain/unlisted roles, malformed IDs, amount manipulation, and invalid states while allowing valid flows', async () => {
+    const app = createServer();
+    const server = app.listen(0);
+    const address = server.address() as { port: number };
+    const baseUrl = `http://127.0.0.1:${address.port}/api/v1`;
+
+    try {
+      const payableOrder: Order = {
+        ...baseOrder,
+        id: 'ord_pay_intent_01',
+        orderNumber: 'MSH-8901',
+        customerId: 'usr_cust_bob',
+        serviceTypeId: 'restaurant_store',
+        storeId: 'merchant_basha',
+        merchantUserId: 'usr_merch_basha',
+        status: 'created',
+        totalFarePiasters: 6500, // 65.00 EGP
+        paymentMethod: 'electronic_wallet',
+        isPaid: false,
+      };
+      PersistentStore.saveOrder(payableOrder);
+
+      const bobToken = generateTestToken({ userId: 'usr_cust_bob', role: 'customer' });
+      const aliceToken = generateTestToken({ userId: 'usr_cust_alice', role: 'customer' });
+      const bashaMerchantToken = generateTestToken({ userId: 'usr_merch_basha', role: 'merchant' });
+      const otherMerchantToken = generateTestToken({ userId: 'usr_merch_amana', role: 'merchant' });
+      const captainToken = generateTestToken({ userId: 'usr_cpt_01', role: 'captain' });
+      const supportToken = generateTestToken({ userId: 'usr_support_01', role: 'support_agent' });
+      const unknownRoleToken = generateTestToken({ userId: 'usr_unknown_99', role: 'billing_bot' as any });
+
+      // 1. Customer paying for another customer's order -> 403 FORBIDDEN_RESOURCE
+      const alicePayRes = await fetch(`${baseUrl}/payments/intents`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${aliceToken}` },
+        body: JSON.stringify({ orderId: payableOrder.id, provider: 'paymob' }),
+      });
+      assert(alicePayRes.status === 403, `Expected 403 for Alice paying Bob order, got ${alicePayRes.status}`);
+      assert((await alicePayRes.json()).error?.code === 'FORBIDDEN_RESOURCE', 'Must return FORBIDDEN_RESOURCE');
+
+      // 2. Merchant accessing another merchant's order -> 403 FORBIDDEN_RESOURCE
+      const otherMerchPayRes = await fetch(`${baseUrl}/payments/intents`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${otherMerchantToken}` },
+        body: JSON.stringify({ orderId: payableOrder.id, provider: 'paymob' }),
+      });
+      assert(otherMerchPayRes.status === 403, `Expected 403 for other merchant, got ${otherMerchPayRes.status}`);
+      assert((await otherMerchPayRes.json()).error?.code === 'FORBIDDEN_RESOURCE', 'Must return FORBIDDEN_RESOURCE');
+
+      // 3. Captain attempting to create a payment intent -> 403 FORBIDDEN_ROLE
+      const capPayRes = await fetch(`${baseUrl}/payments/intents`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${captainToken}` },
+        body: JSON.stringify({ orderId: payableOrder.id, provider: 'paymob' }),
+      });
+      assert(capPayRes.status === 403, `Expected 403 for captain creating payment intent, got ${capPayRes.status}`);
+      assert((await capPayRes.json()).error?.code === 'FORBIDDEN_ROLE', 'Must return FORBIDDEN_ROLE');
+
+      // 4. Unknown or unsupported roles -> 403 (support_agent -> FORBIDDEN_ROLE, unknown role -> UNAUTHORIZED_ROLE)
+      const supportPayRes = await fetch(`${baseUrl}/payments/intents`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${supportToken}` },
+        body: JSON.stringify({ orderId: payableOrder.id, provider: 'paymob' }),
+      });
+      assert(supportPayRes.status === 403, `Expected 403 for support_agent creating payment intent, got ${supportPayRes.status}`);
+      assert((await supportPayRes.json()).error?.code === 'FORBIDDEN_ROLE', 'Must return FORBIDDEN_ROLE');
+
+      const unknownRoleRes = await fetch(`${baseUrl}/payments/intents`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${unknownRoleToken}` },
+        body: JSON.stringify({ orderId: payableOrder.id, provider: 'paymob' }),
+      });
+      assert(unknownRoleRes.status === 403, `Expected 403 for unknown JWT role, got ${unknownRoleRes.status}`);
+      assert((await unknownRoleRes.json()).error?.code === 'UNAUTHORIZED_ROLE', 'Must return UNAUTHORIZED_ROLE');
+
+      // 5. Missing or malformed order/resource identifiers & invalid provider -> 400
+      for (const badId of ['', '   ', '../etc/passwd', 'ord; DROP TABLE orders', 12345, null]) {
+        const badIdRes = await fetch(`${baseUrl}/payments/intents`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${bobToken}` },
+          body: JSON.stringify({ orderId: badId, provider: 'paymob' }),
+        });
+        assert(badIdRes.status === 400, `Expected 400 for malformed orderId (${String(badId)}), got ${badIdRes.status}`);
+        assert((await badIdRes.json()).error?.code === 'INVALID_ORDER_ID', 'Must return INVALID_ORDER_ID');
+      }
+
+      const badProviderRes = await fetch(`${baseUrl}/payments/intents`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${bobToken}` },
+        body: JSON.stringify({ orderId: payableOrder.id, provider: 'untrusted_gateway' }),
+      });
+      assert(badProviderRes.status === 400, `Expected 400 for unsupported provider, got ${badProviderRes.status}`);
+      assert((await badProviderRes.json()).error?.code === 'INVALID_PAYMENT_PROVIDER', 'Must return INVALID_PAYMENT_PROVIDER');
+
+      // 6. Amount manipulation, untrusted client state, and invalid order/payment states
+      for (const tamperedBody of [
+        { orderId: payableOrder.id, amountPiasters: 100 }, // Underpaying 6500 -> 100
+        { orderId: payableOrder.id, amountPiasters: -6500 },
+        { orderId: payableOrder.id, amountPiasters: 65.5 },
+        { orderId: payableOrder.id, totalFarePiasters: 500 },
+      ]) {
+        const manipRes = await fetch(`${baseUrl}/payments/intents`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${bobToken}` },
+          body: JSON.stringify(tamperedBody),
+        });
+        assert(manipRes.status === 422, `Expected 422 on amount manipulation, got ${manipRes.status}`);
+        assert((await manipRes.json()).error?.code === 'AMOUNT_MANIPULATION_DETECTED', 'Must return AMOUNT_MANIPULATION_DETECTED');
+      }
+
+      const stateSpoofRes = await fetch(`${baseUrl}/payments/intents`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${bobToken}` },
+        body: JSON.stringify({ orderId: payableOrder.id, isPaid: true }),
+      });
+      assert(stateSpoofRes.status === 422, `Expected 422 on client state injection, got ${stateSpoofRes.status}`);
+
+      // Cancelled order -> 409 INVALID_ORDER_STATE
+      const cancelledOrder: Order = { ...payableOrder, id: 'ord_pay_cancelled_02', status: 'cancelled' };
+      PersistentStore.saveOrder(cancelledOrder);
+      const cancelPayRes = await fetch(`${baseUrl}/payments/intents`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${bobToken}` },
+        body: JSON.stringify({ orderId: cancelledOrder.id }),
+      });
+      assert(cancelPayRes.status === 409, `Expected 409 for cancelled order payment intent, got ${cancelPayRes.status}`);
+      assert((await cancelPayRes.json()).error?.code === 'INVALID_ORDER_STATE', 'Must return INVALID_ORDER_STATE');
+
+      // Already-paid order -> 409 ORDER_ALREADY_PAID
+      const paidOrder: Order = { ...payableOrder, id: 'ord_pay_already_paid_03', isPaid: true };
+      PersistentStore.saveOrder(paidOrder);
+      const paidPayRes = await fetch(`${baseUrl}/payments/intents`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${bobToken}` },
+        body: JSON.stringify({ orderId: paidOrder.id }),
+      });
+      assert(paidPayRes.status === 409, `Expected 409 for already paid order, got ${paidPayRes.status}`);
+      assert((await paidPayRes.json()).error?.code === 'ORDER_ALREADY_PAID', 'Must return ORDER_ALREADY_PAID');
+
+      // 7. Authorized customer and owning merchant flows continue to work (200 OK)
+      const validBobPayRes = await fetch(`${baseUrl}/payments/intents`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${bobToken}` },
+        body: JSON.stringify({ orderId: payableOrder.id, provider: 'paymob' }),
+      });
+      assert(validBobPayRes.status === 200, `Expected 200 for owning customer Bob, got ${validBobPayRes.status}`);
+      const bobIntent = (await validBobPayRes.json()).data;
+      assert(bobIntent.amountPiasters === 6500, 'Payment intent amountPiasters must equal authoritative order totalFarePiasters (6500)');
+      assert(bobIntent.orderId === payableOrder.id, 'Payment intent orderId must match');
+
+      const validMerchPayRes = await fetch(`${baseUrl}/payments/intents`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${bashaMerchantToken}` },
+        body: JSON.stringify({ orderId: payableOrder.id, provider: 'fawry', amountPiasters: 6500 }),
+      });
+      assert(validMerchPayRes.status === 200, `Expected 200 for owning merchant Basha, got ${validMerchPayRes.status}`);
+      const merchIntent = (await validMerchPayRes.json()).data;
+      assert(merchIntent.amountPiasters === 6500, 'Merchant intent amountPiasters must equal 6500');
+      assert(merchIntent.provider === 'fawry', 'Merchant intent provider must be fawry');
+    } finally {
+      server.close();
+    }
+  });
+
+  await runTest('SecurityIsolation', 'Enforces safe non-leaking 500 AUTH_CONFIG_MISSING HTTP responses, cross-customer POST /orders idempotency isolation, and route/FSM cancellation agreement', async () => {
+    const app = createServer();
+    const server = app.listen(0);
+    const address = server.address() as { port: number };
+    const baseUrl = `http://127.0.0.1:${address.port}/api/v1`;
+
+    try {
+      const bobToken = generateTestToken({ userId: 'usr_cust_bob', role: 'customer' });
+      const aliceToken = generateTestToken({ userId: 'usr_cust_alice', role: 'customer' });
+
+      // 1. Safe non-leaking 500 AUTH_CONFIG_MISSING client error response
+      const prevNodeEnv = process.env.NODE_ENV;
+      const prevSecret = process.env.SUPABASE_JWT_SECRET;
+      try {
+        process.env.NODE_ENV = 'production';
+        delete process.env.SUPABASE_JWT_SECRET;
+        const configErrRes = await fetch(`${baseUrl}/orders`, {
+          headers: { Authorization: `Bearer ${bobToken}` },
+        });
+        assert(configErrRes.status === 500, `Expected 500 on missing production auth config, got ${configErrRes.status}`);
+        const configErrBody = await configErrRes.json();
+        assert(configErrBody.error?.code === 'AUTH_CONFIG_MISSING', 'Must return AUTH_CONFIG_MISSING code');
+        assert(
+          !String(configErrBody.error?.message || '').includes('SUPABASE_JWT_SECRET'),
+          'Client error message must NOT leak internal env var names'
+        );
+      } finally {
+        if (prevNodeEnv === undefined) delete process.env.NODE_ENV;
+        else process.env.NODE_ENV = prevNodeEnv;
+        if (prevSecret === undefined) delete process.env.SUPABASE_JWT_SECRET;
+        else process.env.SUPABASE_JWT_SECRET = prevSecret;
+      }
+
+      // 2. Cross-customer POST /orders idempotency isolation & payload mismatch check
+      const quote1 = pricing.generateQuote({ serviceTypeId: 'package', distanceKm: 1.5 });
+      const quote2 = pricing.generateQuote({ serviceTypeId: 'package', distanceKm: 3.5 });
+
+      const sharedIdemKey = 'shared_order_idem_key_001';
+      const orderPayload1 = {
+        serviceTypeId: 'package',
+        quoteId: quote1.quoteId,
+        pickup: { landmarkName: 'ميدان المحطة', detailedAddress: '1', contactPhone: '01000000001' },
+        dropoff: { landmarkName: 'مجلس المدينة', detailedAddress: '2', contactPhone: '01000000002' },
+        itemDescription: 'طرد بوب',
+        totalFarePiasters: quote1.totalFarePiasters,
+        quoteExpiresAt: quote1.expiresAt,
+        quoteSignature: quote1.signature,
+      };
+
+      const bobOrderRes1 = await fetch(`${baseUrl}/orders`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${bobToken}`,
+          'Idempotency-Key': sharedIdemKey,
+        },
+        body: JSON.stringify(orderPayload1),
+      });
+      assert(bobOrderRes1.status === 201, `Expected 201 on first Bob order, got ${bobOrderRes1.status}`);
+      const bobCreated = (await bobOrderRes1.json()).data;
+
+      // Same customer (Bob) + same key + different payload -> 409 IDEMPOTENCY_PAYLOAD_MISMATCH
+      const bobMismatchRes = await fetch(`${baseUrl}/orders`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${bobToken}`,
+          'Idempotency-Key': sharedIdemKey,
+        },
+        body: JSON.stringify({
+          ...orderPayload1,
+          quoteId: quote2.quoteId,
+          totalFarePiasters: quote2.totalFarePiasters,
+          quoteExpiresAt: quote2.expiresAt,
+          quoteSignature: quote2.signature,
+        }),
+      });
+      assert(bobMismatchRes.status === 409, `Expected 409 on idempotency payload mismatch, got ${bobMismatchRes.status}`);
+      assert((await bobMismatchRes.json()).error?.code === 'IDEMPOTENCY_PAYLOAD_MISMATCH', 'Must return IDEMPOTENCY_PAYLOAD_MISMATCH');
+
+      // Different customer (Alice) + same key -> creates Alice's own distinct order (never leaks Bob's order!)
+      const aliceOrderRes = await fetch(`${baseUrl}/orders`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${aliceToken}`,
+          'Idempotency-Key': sharedIdemKey,
+        },
+        body: JSON.stringify(orderPayload1),
+      });
+      assert(aliceOrderRes.status === 201, `Expected 201 for Alice using same key string in her own scope, got ${aliceOrderRes.status}`);
+      const aliceCreated = (await aliceOrderRes.json()).data;
+      assert(aliceCreated.id !== bobCreated.id, 'Alice order ID must be distinct from Bob order ID');
+      assert(aliceCreated.customerId === 'usr_cust_alice', 'Alice order must belong to Alice');
+
+      // 3. OrderFsm & route agreement: Merchant cannot cancel an order in_transit via OrderFsm.transition or /transitions, and order is not mutated
+      const inTransitStoreOrder: Order = {
+        ...baseOrder,
+        id: 'ord_merch_cancel_guard_01',
+        storeId: 'merchant_basha',
+        merchantUserId: 'usr_merch_basha',
+        assignedCaptainId: 'cpt_ahmed_fathy',
+        status: 'in_transit',
+      };
+      assertThrows(() => {
+        OrderFsm.transition(inTransitStoreOrder, {
+          targetStatus: 'cancelled',
+          actorId: 'usr_merch_basha',
+          actorRole: 'merchant',
+          cancellationReason: 'محاولة إلغاء بعد التحرك',
+        });
+      }, 'CANCELLATION_NOT_ALLOWED');
+      assert(inTransitStoreOrder.status === 'in_transit', 'Failed transition must not mutate order status');
+    } finally {
+      server.close();
+    }
+  });
   // --------------------------------------------------------------------------
   // SUITE 16: PostgreSQL Transaction Guarantees, Rollback & Concurrency Verification
   // --------------------------------------------------------------------------
@@ -1743,14 +2111,115 @@ export async function runAllTests(): Promise<{
     assert(orderAfter?.isPaid === false, 'Order must remain unpaid after rollback');
   });
 
-  await runTest('PostgreSqlTransaction', 'Detects and reports PostgreSQL live connection environment status', () => {
+  await runTest('PostgreSqlTransaction', 'Executes live PostgreSQL SELECT FOR UPDATE concurrency test when DATABASE_URL is configured (or marks pending when absent)', async () => {
     const isLiveDb = Boolean(process.env.DATABASE_URL);
     if (!isLiveDb) {
-      console.log('    ℹ [DB STATUS] DATABASE_URL not set in container environment. In-memory transactional engine verified.');
-    } else {
-      console.log('    ℹ [DB STATUS] Live DATABASE_URL detected.');
+      console.log('    ℹ [DB STATUS: PENDING LIVE POSTGRESQL IN CI] DATABASE_URL not set in container environment. In-memory mutex engine verified; live PostgreSQL concurrency test will execute when DATABASE_URL is provided in CI.');
+      return;
     }
-    assert(true, 'Environment status recorded');
+
+    const { getDb } = await import('../src/database/db.js');
+    const db = getDb();
+    assert(db !== null, 'PostgreSQL connection pool must initialize when DATABASE_URL is set');
+    await verifyOrRunMigrations(true);
+
+    const nowIso = new Date().toISOString();
+    const pgCapId = `cpt_pg_conc_${Date.now()}`;
+    const pgOrdId = `ord_pg_conc_${Date.now()}`;
+
+    await db!
+      .insertInto('captains')
+      .values({
+        id: pgCapId,
+        user_id: `usr_${pgCapId}`,
+        full_name: 'كابتن اختبار بوستجرس',
+        phone: '+201099887766',
+        national_id_masked: '2900101******1',
+        vehicle_type: 'motorcycle',
+        vehicle_plate: '١١١١ م ن',
+        subscription_status: 'active',
+        subscription_plan_code: 'EL_BAGOUR_MONTHLY_STANDARD',
+        current_period_ends_at: new Date(Date.now() + 86400000).toISOString(),
+        grace_period_ends_at: null,
+        cash_holding_piasters: 10000,
+        max_cash_holding_piasters: 100000,
+        rating_average: 5.0,
+        is_online: true,
+        created_at: nowIso,
+        updated_at: nowIso,
+      })
+      .execute();
+
+    await db!
+      .insertInto('orders')
+      .values({
+        id: pgOrdId,
+        order_number: 'MSH-PG01',
+        customer_id: 'usr_cust_pg',
+        customer_name: 'عميل بوستجرس',
+        customer_phone: '+201011223344',
+        service_type_id: 'package',
+        status: 'in_transit',
+        quote_id: 'quote_pg_1',
+        pickup_landmark: baseOrder.pickup.landmarkName,
+        pickup_detailed_address: baseOrder.pickup.detailedAddress,
+        pickup_contact_phone: baseOrder.pickup.contactPhone,
+        dropoff_landmark: baseOrder.dropoff.landmarkName,
+        dropoff_detailed_address: baseOrder.dropoff.detailedAddress,
+        dropoff_contact_phone: baseOrder.dropoff.contactPhone,
+        item_description: 'طرد بوستجرس',
+        special_instructions: null,
+        total_fare_piasters: 3000,
+        payment_method: 'cash_on_delivery',
+        is_paid: false,
+        assigned_captain_id: pgCapId,
+        captain_name: 'كابتن اختبار بوستجرس',
+        captain_phone: '+201099887766',
+        captain_vehicle: 'motorcycle',
+        cash_collected_piasters: null,
+        created_at: nowIso,
+        updated_at: nowIso,
+      })
+      .execute();
+
+    const pgCapProfile: CaptainProfile = {
+      id: pgCapId,
+      userId: `usr_${pgCapId}`,
+      fullName: 'كابتن اختبار بوستجرس',
+      phone: '+201099887766',
+      nationalIdMasked: '2900101******1',
+      vehicleType: 'motorcycle',
+      vehiclePlate: '١١١١ م ن',
+      subscriptionStatus: 'active',
+      subscriptionPlanCode: 'EL_BAGOUR_MONTHLY_STANDARD',
+      currentPeriodEndsAt: new Date(Date.now() + 86400000).toISOString(),
+      cashHoldingPiasters: 10000,
+      maxCashHoldingPiasters: 100000,
+      ratingAverage: 5.0,
+      isOnline: true,
+    };
+
+    // Fire 2 concurrent requests with DISTINCT idempotency keys on the same order against live PostgreSQL
+    const settled = await Promise.allSettled([
+      CashCollectionService.recordCashCollectionPostgres(db!, {
+        orderId: pgOrdId,
+        captain: pgCapProfile,
+        amountPiasters: 3000,
+        idempotencyKey: `pg_key_1_${Date.now()}`,
+      }),
+      CashCollectionService.recordCashCollectionPostgres(db!, {
+        orderId: pgOrdId,
+        captain: pgCapProfile,
+        amountPiasters: 3000,
+        idempotencyKey: `pg_key_2_${Date.now()}`,
+      }),
+    ]);
+
+    const fulfilled = settled.filter((s) => s.status === 'fulfilled');
+    const rejected = settled.filter((s) => s.status === 'rejected') as PromiseRejectedResult[];
+    assert(fulfilled.length === 1, `Expected 1 fulfilled PostgreSQL cash collection, got ${fulfilled.length}`);
+    assert(rejected.length === 1, `Expected 1 rejected PostgreSQL duplicate cash collection, got ${rejected.length}`);
+    assert(rejected[0].reason?.code === 'ORDER_ALREADY_PAID', 'Second concurrent PostgreSQL request must fail with ORDER_ALREADY_PAID');
   });
 
   // --------------------------------------------------------------------------
