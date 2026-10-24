@@ -1,0 +1,1570 @@
+diff --git a/backend/src/api/routes.ts b/backend/src/api/routes.ts
+index 519c5a9..5e905a7 100644
+--- a/backend/src/api/routes.ts
++++ b/backend/src/api/routes.ts
+@@ -366,18 +366,19 @@ router.get('/merchant/orders', authenticate, requireRoles('merchant', 'owner', '
+ // ----------------------------------------------------------------------------
+ router.post('/orders', authenticate, orderCreateRateLimiter, (req: Request, res: Response) => {
+   try {
+-    const idempotencyKey = req.headers['idempotency-key'] as string;
+-    if (idempotencyKey && idempotencyStore.has(idempotencyKey)) {
+-      const cached = idempotencyStore.get(idempotencyKey)!;
+-      return res.status(200).json(cached.responseBody);
+-    }
+-
+     // Role check: Only customer, merchant, or admin can place orders
+     const user = req.user!;
+     if (user.role !== 'customer' && user.role !== 'merchant' && user.role !== 'owner') {
+       return sendError(res, 'FORBIDDEN_ROLE', 'غير مصرح لهذا الحساب بإنشاء طلبات.', 403);
+     }
+ 
++    const idempotencyKey = req.headers['idempotency-key'] as string;
++    const scopedIdempotencyKey = idempotencyKey ? `${user.id}:${idempotencyKey}` : undefined;
++    if (scopedIdempotencyKey && idempotencyStore.has(scopedIdempotencyKey)) {
++      const cached = idempotencyStore.get(scopedIdempotencyKey)!;
++      return res.status(200).json(cached.responseBody);
++    }
++
+     const {
+       serviceTypeId,
+       quoteId,
+@@ -523,8 +524,8 @@ router.post('/orders', authenticate, orderCreateRateLimiter, (req: Request, res:
+       },
+     };
+ 
+-    if (idempotencyKey) {
+-      idempotencyStore.set(idempotencyKey, {
++    if (scopedIdempotencyKey) {
++      idempotencyStore.set(scopedIdempotencyKey, {
+         orderId: newOrder.id,
+         responseBody: responsePayload,
+       });
+@@ -595,9 +596,10 @@ router.get('/orders/:id', authenticate, async (req: Request, res: Response) => {
+ 
+     const isAssigned = order.assignedCaptainId === captain.id;
+     const isBroadcast =
+-      order.status === 'searching_captain' ||
+-      order.status === 'created' ||
+-      order.status === 'ready_for_pickup';
++      !order.assignedCaptainId &&
++      (order.status === 'searching_captain' ||
++        order.status === 'created' ||
++        order.status === 'ready_for_pickup');
+ 
+     if (!isAssigned && !isBroadcast) {
+       return sendError(res, 'FORBIDDEN_RESOURCE', 'غير مصرح لك بالاطلاع على طلب مسند لكابتن آخر.', 403);
+@@ -628,6 +630,12 @@ router.get('/orders/:id/history', authenticate, async (req: Request, res: Respon
+   if (user.role === 'customer' && order.customerId !== user.id) {
+     return sendError(res, 'FORBIDDEN_RESOURCE', 'غير مصرح لك بالاطلاع على سجل طلب لا يخص حسابك.', 403);
+   }
++  if (user.role === 'captain') {
++    const captain = await CaptainService.resolveByUserId(user.id);
++    if (!captain || order.assignedCaptainId !== captain.id) {
++      return sendError(res, 'FORBIDDEN_RESOURCE', 'غير مصرح للكابتن بالاطلاع على سجل طلب غير مسند إليه.', 403);
++    }
++  }
+   if (
+     user.role === 'merchant' &&
+     order.customerId !== user.id &&
+@@ -656,19 +664,34 @@ router.post('/orders/:id/transitions', authenticate, async (req: Request, res: R
+     const user = req.user!;
+     const { targetStatus, cashCollectedPiasters, cancellationReason, notes } = req.body;
+ 
+-    // Captain transition ownership check
++    // Captain transition ownership check (must be the assigned captain)
+     let resolvedActorId = user.id;
+     if (user.role === 'captain') {
+       const captain = await CaptainService.requireActiveCaptain(user.id);
+-      if (order.assignedCaptainId && order.assignedCaptainId !== captain.id) {
+-        return sendError(res, 'UNAUTHORIZED_CAPTAIN_ACTION', 'غير مصرح لك بتحديث حالة طلب مسند لكابتن آخر.', 403);
++      if (!order.assignedCaptainId || order.assignedCaptainId !== captain.id) {
++        return sendError(res, 'UNAUTHORIZED_CAPTAIN_ACTION', 'غير مصرح لك بتحديث حالة طلب غير مسند إليك.', 403);
+       }
+       resolvedActorId = captain.id;
+     }
+ 
+-    // Customers cannot perform arbitrary status transitions (only cancel via /cancel)
+-    if (user.role === 'customer' && targetStatus !== 'cancelled') {
+-      return sendError(res, 'FORBIDDEN_ACTION', 'العميل لا يمكنه تغيير مسار الطلب التشغيلي.', 403);
++    // Customer ownership & transition check
++    if (user.role === 'customer') {
++      if (order.customerId !== user.id) {
++        return sendError(res, 'FORBIDDEN_RESOURCE', 'غير مصرح لك بتحديث حالة طلب لا يخص حسابك.', 403);
++      }
++      if (targetStatus !== 'cancelled') {
++        return sendError(res, 'FORBIDDEN_ACTION', 'العميل لا يمكنه تغيير مسار الطلب التشغيلي.', 403);
++      }
++      if (!AccessControlGuard.canCancelOrder('customer', order.status)) {
++        return sendError(res, 'CANCELLATION_NOT_ALLOWED', 'لا يمكن للعميل إلغاء الطلب بعد بدء تجهيزه أو تحرك الكابتن.', 403);
++      }
++    }
++
++    // Merchant ownership check
++    if (user.role === 'merchant') {
++      if (!order.merchantUserId || order.merchantUserId !== user.id) {
++        return sendError(res, 'UNAUTHORIZED_MERCHANT_ACTION', 'غير مصرح للتاجر بتحديث حالة طلب يخص متجراً آخر.', 403);
++      }
+     }
+ 
+     const result = OrderFsm.transition(order, {
+@@ -1095,9 +1118,15 @@ router.post('/payments/intents', authenticate, (req: Request, res: Response) =>
+   }
+ 
+   const user = req.user!;
++  if (user.role === 'captain') {
++    return sendError(res, 'FORBIDDEN_ROLE', 'غير مصرح للكابتن بإصدار تفويض دفع للعميل.', 403);
++  }
+   if (user.role === 'customer' && order.customerId !== user.id) {
+     return sendError(res, 'FORBIDDEN_RESOURCE', 'غير مصرح لك بإصدار دفع لطلب عميل آخر.', 403);
+   }
++  if (user.role === 'merchant' && order.customerId !== user.id && order.merchantUserId !== user.id) {
++    return sendError(res, 'FORBIDDEN_RESOURCE', 'غير مصرح للمتجر بإصدار دفع لطلب لا يخصه.', 403);
++  }
+ 
+   const paymentIntentId = `pi_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
+   return sendSuccess(res, {
+diff --git a/backend/src/orders/orderFsm.ts b/backend/src/orders/orderFsm.ts
+index 682fca3..7bb5b13 100644
+--- a/backend/src/orders/orderFsm.ts
++++ b/backend/src/orders/orderFsm.ts
+@@ -84,7 +84,7 @@ export class OrderFsm {
+         throw err;
+       }
+ 
+-      if (actorRole === 'merchant' && order.merchantUserId && order.merchantUserId !== actorId) {
++      if (actorRole === 'merchant' && (!order.merchantUserId || order.merchantUserId !== actorId)) {
+         const err = new Error('غير مصرح للتاجر بتحديث حالة طلب يخص متجراً آخر.');
+         (err as any).code = 'UNAUTHORIZED_MERCHANT_ACTION';
+         (err as any).statusCode = 403;
+@@ -100,6 +100,44 @@ export class OrderFsm {
+         (err as any).statusCode = 422;
+         throw err;
+       }
++      if (actorRole === 'captain' && order.assignedCaptainId !== actorId) {
++        const err = new Error('غير مصرح لك بتأكيد إسناد طلب مسند لكابتن آخر.');
++        (err as any).code = 'UNAUTHORIZED_CAPTAIN_ACTION';
++        (err as any).statusCode = 403;
++        throw err;
++      }
++    }
++
++    // Invariant 4b: Cancellation ownership & stage restrictions
++    if (targetStatus === 'cancelled') {
++      if (actorRole === 'captain') {
++        const err = new Error('غير مصرح للكابتن بإلغاء الطلب مباشرة.');
++        (err as any).code = 'UNAUTHORIZED_CAPTAIN_ACTION';
++        (err as any).statusCode = 403;
++        throw err;
++      }
++      if (actorRole === 'customer') {
++        if (order.customerId !== actorId) {
++          const err = new Error('لا يمكنك إلغاء طلب لا يخص حسابك.');
++          (err as any).code = 'FORBIDDEN_RESOURCE';
++          (err as any).statusCode = 403;
++          throw err;
++        }
++        if (currentStatus !== 'created' && currentStatus !== 'searching_captain') {
++          const err = new Error('لا يمكن للعميل إلغاء الطلب بعد بدء تجهيزه أو تحرك الكابتن.');
++          (err as any).code = 'CANCELLATION_NOT_ALLOWED';
++          (err as any).statusCode = 403;
++          throw err;
++        }
++      }
++      if (actorRole === 'merchant') {
++        if (!order.merchantUserId || order.merchantUserId !== actorId) {
++          const err = new Error('لا يمكن للمتجر إلغاء طلب يخص متجراً آخر.');
++          (err as any).code = 'UNAUTHORIZED_MERCHANT_ACTION';
++          (err as any).statusCode = 403;
++          throw err;
++        }
++      }
+     }
+ 
+     // Invariant 5: Actor authorization check for captain delivery steps
+@@ -110,7 +148,7 @@ export class OrderFsm {
+         (err as any).statusCode = 403;
+         throw err;
+       }
+-      if (actorRole === 'captain' && order.assignedCaptainId && order.assignedCaptainId !== actorId) {
++      if (actorRole === 'captain' && (!order.assignedCaptainId || order.assignedCaptainId !== actorId)) {
+         const err = new Error('غير مصرح لك بتحديث حالة هذا الطلب (الكابتن غير مطابق للكابتن المسند).');
+         (err as any).code = 'UNAUTHORIZED_CAPTAIN_ACTION';
+         (err as any).statusCode = 403;
+@@ -129,6 +167,12 @@ export class OrderFsm {
+         (err as any).statusCode = 403;
+         throw err;
+       }
++      if (actorRole === 'captain' && (!order.assignedCaptainId || order.assignedCaptainId !== actorId)) {
++        const err = new Error('غير مصرح لك بإتمام تسليم طلب غير مسند إليك.');
++        (err as any).code = 'UNAUTHORIZED_CAPTAIN_ACTION';
++        (err as any).statusCode = 403;
++        throw err;
++      }
+ 
+       if (order.paymentMethod === 'cash_on_delivery') {
+         const amountCollected = cashCollectedPiasters ?? order.cashCollectedPiasters;
+diff --git a/backend/src/security/auth.ts b/backend/src/security/auth.ts
+index a791d75..85f0f0c 100644
+--- a/backend/src/security/auth.ts
++++ b/backend/src/security/auth.ts
+@@ -32,36 +32,187 @@ declare global {
+   }
+ }
+ 
+-// Secret for local JWT verification in sandbox/test environments
+-const SUPABASE_JWT_SECRET = process.env.SUPABASE_JWT_SECRET || 'mashwar_secure_supabase_jwt_secret_el_bagour_2026';
+-const SUPABASE_URL = process.env.SUPABASE_URL || '';
+-const SUPABASE_ANON_KEY = process.env.SUPABASE_ANON_KEY || '';
++// Isolated test secret permitted ONLY when NODE_ENV === 'test'
++const ISOLATED_TEST_JWT_SECRET = 'mashwar_secure_supabase_jwt_secret_el_bagour_2026';
++
++export type SupportedJwtAlgorithm = 'HS256' | 'ES256' | 'RS256';
++const SUPPORTED_JWT_ALGORITHMS: SupportedJwtAlgorithm[] = ['HS256', 'ES256', 'RS256'];
++
++function isPlaceholderValue(value: string): boolean {
++  const upper = value.toUpperCase();
++  return (
++    upper.startsWith('CHANGE_ME') ||
++    upper.includes('YOUR_PROJECT_REF') ||
++    upper.includes('YOUR_SUPABASE_')
++  );
++}
+ 
+ /**
+- * Validates a JWT or HMAC token.
+- * Sourced strictly from app_metadata.role.
++ * Returns true strictly when running inside an explicitly isolated test environment.
+  */
+-export function verifyToken(token: string): AuthenticatedUser {
+-  if (!token || typeof token !== 'string') {
+-    const err = new Error('رمز المصادقة غير موجود أو غير صالح.');
+-    (err as any).code = 'MISSING_TOKEN';
++export function isIsolatedTestEnvironment(): boolean {
++  return process.env.NODE_ENV === 'test' && process.env.MASHWAR_DISABLE_TEST_FALLBACK !== 'true';
++}
++
++/**
++ * Resolves the authoritative symmetric JWT secret for HS256 verification.
++ * Fails closed (500 AUTH_CONFIG_MISSING) in all environments (production, staging,
++ * development, or unset NODE_ENV) whenever SUPABASE_JWT_SECRET is missing or a placeholder,
++ * except in explicitly isolated test runs (NODE_ENV === 'test').
++ */
++export function resolveJwtSecret(): string {
++  const configuredSecret = process.env.SUPABASE_JWT_SECRET?.trim();
++  if (configuredSecret && configuredSecret.length > 0 && !isPlaceholderValue(configuredSecret)) {
++    return configuredSecret;
++  }
++
++  if (isIsolatedTestEnvironment()) {
++    return ISOLATED_TEST_JWT_SECRET;
++  }
++
++  const err = new Error(
++    'خطأ إعدادات أمنية حرج: متغير البيئة SUPABASE_JWT_SECRET غير مضبوط (Fail-Closed).'
++  );
++  (err as any).code = 'AUTH_CONFIG_MISSING';
++  (err as any).statusCode = 500;
++  throw err;
++}
++
++/**
++ * Resolves the authoritative asymmetric public key (PEM or JWK) for ES256 / RS256 verification.
++ * Fails closed (500 AUTH_CONFIG_MISSING) if the public key is not configured or key type mismatches.
++ */
++export function resolveJwtPublicKey(expectedAlg: 'ES256' | 'RS256'): crypto.KeyObject {
++  const configuredPem = process.env.SUPABASE_JWT_PUBLIC_KEY?.trim();
++  const configuredJwk = process.env.SUPABASE_JWT_PUBLIC_JWK?.trim();
++
++  if (configuredPem && configuredPem.length > 0 && !isPlaceholderValue(configuredPem)) {
++    try {
++      const normalizedPem = configuredPem.replace(/\\n/g, '\n');
++      const pubKey = crypto.createPublicKey(normalizedPem);
++      const expectedKeyType = expectedAlg === 'ES256' ? 'ec' : 'rsa';
++      if (pubKey.asymmetricKeyType !== expectedKeyType) {
++        const err = new Error(
++          `نوع المفتاح العام (${pubKey.asymmetricKeyType}) لا يتطابق مع خوارزمية التوقيع (${expectedAlg}).`
++        );
++        (err as any).code = 'AUTH_CONFIG_MISSING';
++        (err as any).statusCode = 500;
++        throw err;
++      }
++      return pubKey;
++    } catch (e: any) {
++      if (e.code === 'AUTH_CONFIG_MISSING') throw e;
++      const err = new Error('فشل قراءة المفتاح العام SUPABASE_JWT_PUBLIC_KEY للتحقق من التوقيع.');
++      (err as any).code = 'AUTH_CONFIG_MISSING';
++      (err as any).statusCode = 500;
++      throw err;
++    }
++  }
++
++  if (configuredJwk && configuredJwk.length > 0 && !isPlaceholderValue(configuredJwk)) {
++    try {
++      const jwkObj = JSON.parse(configuredJwk);
++      const pubKey = crypto.createPublicKey({ key: jwkObj, format: 'jwk' });
++      const expectedKeyType = expectedAlg === 'ES256' ? 'ec' : 'rsa';
++      if (pubKey.asymmetricKeyType !== expectedKeyType) {
++        const err = new Error(
++          `نوع مفتاح JWK (${pubKey.asymmetricKeyType}) لا يتطابق مع خوارزمية التوقيع (${expectedAlg}).`
++        );
++        (err as any).code = 'AUTH_CONFIG_MISSING';
++        (err as any).statusCode = 500;
++        throw err;
++      }
++      return pubKey;
++    } catch (e: any) {
++      if (e.code === 'AUTH_CONFIG_MISSING') throw e;
++      const err = new Error('فشل قراءة مفتاح SUPABASE_JWT_PUBLIC_JWK للتحقق من التوقيع.');
++      (err as any).code = 'AUTH_CONFIG_MISSING';
++      (err as any).statusCode = 500;
++      throw err;
++    }
++  }
++
++  const err = new Error(
++    `خطأ إعدادات أمنية حرج: المفتاح العام (SUPABASE_JWT_PUBLIC_KEY أو SUPABASE_JWT_PUBLIC_JWK) غير مضبوط للتحقق من خوارزمية ${expectedAlg} (Fail-Closed).`
++  );
++  (err as any).code = 'AUTH_CONFIG_MISSING';
++  (err as any).statusCode = 500;
++  throw err;
++}
++
++/**
++ * Resolves the configured trusted JWT issuer (iss).
++ * In production, a trusted issuer MUST be configured via SUPABASE_JWT_ISSUER or SUPABASE_URL;
++ * if missing in production, fails closed with 500 AUTH_CONFIG_MISSING.
++ */
++export function resolveTrustedIssuer(): string | undefined {
++  const explicitIssuer = process.env.SUPABASE_JWT_ISSUER?.trim();
++  if (explicitIssuer && explicitIssuer.length > 0 && !isPlaceholderValue(explicitIssuer)) {
++    return explicitIssuer;
++  }
++
++  const supabaseUrl = process.env.SUPABASE_URL?.trim();
++  if (supabaseUrl && supabaseUrl.length > 0 && !isPlaceholderValue(supabaseUrl)) {
++    return `${supabaseUrl.replace(/\/$/, '')}/auth/v1`;
++  }
++
++  if (process.env.NODE_ENV === 'production') {
++    const err = new Error(
++      'خطأ إعدادات أمنية حرج: يجب ضبط مصدر الرمز الموثوق (SUPABASE_JWT_ISSUER أو SUPABASE_URL) في بيئة الإنتاج (Fail-Closed).'
++    );
++    (err as any).code = 'AUTH_CONFIG_MISSING';
++    (err as any).statusCode = 500;
++    throw err;
++  }
++
++  return undefined;
++}
++
++/**
++ * Verifies the cryptographic signature of a JWT only AFTER inspecting and validating header.alg.
++ * Supports HS256 (HMAC-SHA256), ES256 (ECDSA P-256 + SHA-256 IEEE P1363), and RS256 (RSA + SHA-256).
++ */
++function verifyJwtSignatureByAlgorithm(
++  alg: SupportedJwtAlgorithm,
++  signingInput: string,
++  signatureB64: string
++): void {
++  // Check explicit algorithm restriction if configured
++  const configuredAlg = process.env.SUPABASE_JWT_ALG?.trim();
++  if (configuredAlg && configuredAlg.length > 0 && alg !== configuredAlg) {
++    const err = new Error(
++      `خوارزمية الرمز (${alg}) غير مطابقة للخوارزمية المعتمدة في الإعدادات (${configuredAlg}).`
++    );
++    (err as any).code = 'INVALID_TOKEN_ALGORITHM';
+     (err as any).statusCode = 401;
+     throw err;
+   }
+ 
+-  // Handle standard 3-part JWT format: header.payload.signature
+-  const parts = token.split('.');
+-  if (parts.length === 3) {
+-    const [headerB64, payloadB64, signatureB64] = parts;
++  // Prevent algorithm confusion: if an asymmetric public key is configured without a symmetric secret,
++  // reject any attempt to downgrade verification to HS256.
++  const hasPublicKeyConfig =
++    Boolean(process.env.SUPABASE_JWT_PUBLIC_KEY?.trim()) ||
++    Boolean(process.env.SUPABASE_JWT_PUBLIC_JWK?.trim());
++  const hasSecretConfig =
++    Boolean(process.env.SUPABASE_JWT_SECRET?.trim()) &&
++    !isPlaceholderValue(process.env.SUPABASE_JWT_SECRET!.trim());
+ 
+-    // Verify HMAC-SHA256 signature
+-    const dataToSign = `${headerB64}.${payloadB64}`;
++  if (alg === 'HS256' && hasPublicKeyConfig && !hasSecretConfig) {
++    const err = new Error(
++      'رفض أمني: لا يُسمح بخوارزمية HS256 عند ضبط مفتاح عام غير متماثل (منع هجوم Algorithm Confusion).'
++    );
++    (err as any).code = 'INVALID_TOKEN_ALGORITHM';
++    (err as any).statusCode = 401;
++    throw err;
++  }
++
++  if (alg === 'HS256') {
++    const jwtSecret = resolveJwtSecret();
+     const expectedSig = crypto
+-      .createHmac('sha256', SUPABASE_JWT_SECRET)
+-      .update(dataToSign)
++      .createHmac('sha256', jwtSecret)
++      .update(signingInput)
+       .digest('base64url');
+ 
+-    // Secure timing-safe comparison
+     const sigBuffer = Buffer.from(signatureB64);
+     const expectedSigBuffer = Buffer.from(expectedSig);
+ 
+@@ -69,88 +220,216 @@ export function verifyToken(token: string): AuthenticatedUser {
+       sigBuffer.length !== expectedSigBuffer.length ||
+       !crypto.timingSafeEqual(sigBuffer, expectedSigBuffer)
+     ) {
+-      const err = new Error('توقيع رمز الدخول غير صالح (تم التلاعب به أو المفتاح غير مطابق).');
++      const err = new Error('توقيع رمز الدخول (HS256) غير صالح.');
+       (err as any).code = 'INVALID_TOKEN_SIGNATURE';
+       (err as any).statusCode = 401;
+       throw err;
+     }
++    return;
++  }
+ 
+-    try {
+-      const payloadJson = Buffer.from(payloadB64, 'base64url').toString('utf8');
+-      const payload = JSON.parse(payloadJson);
+-
+-      // Check token expiration
+-      if (payload.exp && Date.now() >= payload.exp * 1000) {
+-        const err = new Error('انتهت صلاحية رمز الدخول. يرجى إعادة تسجيل الدخول.');
+-        (err as any).code = 'TOKEN_EXPIRED';
+-        (err as any).statusCode = 401;
+-        throw err;
+-      }
++  if (alg === 'ES256') {
++    const publicKey = resolveJwtPublicKey('ES256');
++    const sigBytes = Buffer.from(signatureB64, 'base64url');
++    const isValid = crypto.verify(
++      'sha256',
++      Buffer.from(signingInput, 'utf8'),
++      { key: publicKey, dsaEncoding: 'ieee-p1363' },
++      sigBytes
++    );
++    if (!isValid) {
++      const err = new Error('توقيع رمز الدخول غير المتماثل (ES256) غير صالح.');
++      (err as any).code = 'INVALID_TOKEN_SIGNATURE';
++      (err as any).statusCode = 401;
++      throw err;
++    }
++    return;
++  }
+ 
+-      // Check token audience if provided (standard Supabase JWT aud is 'authenticated')
+-      if (payload.aud && payload.aud !== 'authenticated') {
+-        const err = new Error('جمهور الرمز الأمني غير صالح.');
+-        (err as any).code = 'INVALID_TOKEN_AUDIENCE';
+-        (err as any).statusCode = 401;
+-        throw err;
+-      }
++  if (alg === 'RS256') {
++    const publicKey = resolveJwtPublicKey('RS256');
++    const sigBytes = Buffer.from(signatureB64, 'base64url');
++    const isValid = crypto.verify(
++      'RSA-SHA256',
++      Buffer.from(signingInput, 'utf8'),
++      publicKey,
++      sigBytes
++    );
++    if (!isValid) {
++      const err = new Error('توقيع رمز الدخول غير المتماثل (RS256) غير صالح.');
++      (err as any).code = 'INVALID_TOKEN_SIGNATURE';
++      (err as any).statusCode = 401;
++      throw err;
++    }
++    return;
++  }
++}
+ 
+-      // Check principal ID
+-      const userId = payload.sub || payload.id;
+-      if (!userId) {
+-        const err = new Error('رمز الدخول لا يحتوي على معرف مستخدم معتمد.');
+-        (err as any).code = 'INVALID_TOKEN_PAYLOAD';
+-        (err as any).statusCode = 401;
+-        throw err;
+-      }
++/**
++ * Validates a Supabase JWT token.
++ * 1. Parses and validates the JWT header and signing algorithm FIRST (HS256, ES256, RS256).
++ * 2. Resolves the required verification key/secret and verifies the cryptographic signature (fails closed if missing).
++ * 3. Enforces trusted issuer (required in production), audience, expiration, and app_metadata.role.
++ */
++export function verifyToken(token: string): AuthenticatedUser {
++  if (!token || typeof token !== 'string') {
++    const err = new Error('رمز المصادقة غير موجود أو غير صالح.');
++    (err as any).code = 'MISSING_TOKEN';
++    (err as any).statusCode = 401;
++    throw err;
++  }
+ 
+-      // Role must strictly come from server-managed app_metadata.role (never top-level payload.role or user_metadata)
+-      const appMetadata = payload.app_metadata || {};
+-      const role = appMetadata.role as UserRole;
+-
+-      const validRoles: UserRole[] = [
+-        'owner',
+-        'operations_dispatcher',
+-        'support_agent',
+-        'captain',
+-        'customer',
+-        'merchant',
+-      ];
+-
+-      if (!role || !validRoles.includes(role)) {
+-        const err = new Error('رمز الدخول لا يحتوي على دور أمني موثوق ومعتمد في النظام.');
+-        (err as any).code = 'UNAUTHORIZED_ROLE';
+-        (err as any).statusCode = 403;
+-        throw err;
+-      }
++  // Handle standard 3-part JWT format: header.payload.signature
++  const parts = token.split('.');
++  if (parts.length !== 3 || !parts[0] || !parts[1] || !parts[2]) {
++    const err = new Error('صيغة رمز المصادقة غير مطابقة لمعايير JWT (Bearer Header.Payload.Signature).');
++    (err as any).code = 'MALFORMED_TOKEN';
++    (err as any).statusCode = 401;
++    throw err;
++  }
+ 
+-      return {
+-        id: userId,
+-        role,
+-        phone: payload.phone || payload.user_metadata?.phone,
+-        fullName: payload.user_metadata?.full_name || payload.name,
+-        email: payload.email,
+-        appMetadata,
+-        userMetadata: payload.user_metadata || {},
+-      };
+-    } catch (e: any) {
+-      if (e.statusCode) throw e;
+-      const err = new Error('فشل فك شفرة حمولة الرمز الأمني.');
+-      (err as any).code = 'MALFORMED_TOKEN';
++  const [headerB64, payloadB64, signatureB64] = parts;
++
++  // Step 1: Parse header and verify signing algorithm BEFORE choosing verification implementation
++  let header: Record<string, any>;
++  try {
++    const headerJson = Buffer.from(headerB64, 'base64url').toString('utf8');
++    header = JSON.parse(headerJson);
++  } catch {
++    const err = new Error('فشل فك شفرة ترويسة الرمز الأمني (Header).');
++    (err as any).code = 'MALFORMED_TOKEN';
++    (err as any).statusCode = 401;
++    throw err;
++  }
++
++  if (
++    !header ||
++    typeof header !== 'object' ||
++    typeof header.alg !== 'string' ||
++    !SUPPORTED_JWT_ALGORITHMS.includes(header.alg as SupportedJwtAlgorithm)
++  ) {
++    const err = new Error(
++      `خوارزمية توقيع الرمز الأمني (${header?.alg ?? 'غير محددة'}) غير مدعومة أو مرفوضة.`
++    );
++    (err as any).code = 'INVALID_TOKEN_ALGORITHM';
++    (err as any).statusCode = 401;
++    throw err;
++  }
++
++  const alg = header.alg as SupportedJwtAlgorithm;
++
++  // Step 2: Verify cryptographic signature using the algorithm-specific verifier
++  verifyJwtSignatureByAlgorithm(alg, `${headerB64}.${payloadB64}`, signatureB64);
++
++  // Step 3: Parse and validate payload claims
++  let payload: Record<string, any>;
++  try {
++    const payloadJson = Buffer.from(payloadB64, 'base64url').toString('utf8');
++    payload = JSON.parse(payloadJson);
++  } catch {
++    const err = new Error('فشل فك شفرة حمولة الرمز الأمني.');
++    (err as any).code = 'MALFORMED_TOKEN';
++    (err as any).statusCode = 401;
++    throw err;
++  }
++
++  if (!payload || typeof payload !== 'object') {
++    const err = new Error('حمولة الرمز الأمني غير صالحة.');
++    (err as any).code = 'MALFORMED_TOKEN';
++    (err as any).statusCode = 401;
++    throw err;
++  }
++
++  // Step 4: Check token expiration (required numeric exp claim)
++  if (
++    typeof payload.exp !== 'number' ||
++    !Number.isFinite(payload.exp) ||
++    Date.now() >= payload.exp * 1000
++  ) {
++    const err = new Error('انتهت صلاحية رمز الدخول أو أن حقل الانتهاء مفقود. يرجى إعادة تسجيل الدخول.');
++    (err as any).code = 'TOKEN_EXPIRED';
++    (err as any).statusCode = 401;
++    throw err;
++  }
++
++  // Step 5: Check trusted issuer (required in production; fails closed if unconfigured in production)
++  const configuredIssuer = resolveTrustedIssuer();
++  if (process.env.NODE_ENV === 'production' || configuredIssuer !== undefined) {
++    if (typeof payload.iss !== 'string' || payload.iss.trim().length === 0 || payload.iss !== configuredIssuer) {
++      const err = new Error('مصدر الرمز الأمني (Issuer) مفقود أو غير مطابق للمصدر الموثوق.');
++      (err as any).code = 'INVALID_TOKEN_ISSUER';
++      (err as any).statusCode = 401;
++      throw err;
++    }
++  } else if (payload.iss !== undefined) {
++    const validTestIssuers = ['supabase', 'mashwar-auth'];
++    const isSupabaseAuthUrl =
++      typeof payload.iss === 'string' &&
++      /^https:\/\/[a-z0-9-]+\.supabase\.co\/auth\/v1$/.test(payload.iss);
++    if (!validTestIssuers.includes(payload.iss) && !isSupabaseAuthUrl) {
++      const err = new Error('مصدر الرمز الأمني (Issuer) غير صالح.');
++      (err as any).code = 'INVALID_TOKEN_ISSUER';
+       (err as any).statusCode = 401;
+       throw err;
+     }
+   }
+ 
+-  // Handle format errors
+-  const err = new Error('صيغة رمز المصادقة غير مطابقة لمعايير JWT (Bearer Header.Payload.Signature).');
+-  (err as any).code = 'MALFORMED_TOKEN';
+-  (err as any).statusCode = 401;
+-  throw err;
++  // Step 6: Check token audience (standard Supabase JWT aud is 'authenticated')
++  if (payload.aud !== undefined || process.env.NODE_ENV === 'production') {
++    const isValidAud =
++      payload.aud === 'authenticated' ||
++      (Array.isArray(payload.aud) && payload.aud.includes('authenticated'));
++    if (!isValidAud) {
++      const err = new Error('جمهور الرمز الأمني غير صالح.');
++      (err as any).code = 'INVALID_TOKEN_AUDIENCE';
++      (err as any).statusCode = 401;
++      throw err;
++    }
++  }
++
++  // Step 7: Check principal ID
++  const userId = payload.sub || payload.id;
++  if (!userId || typeof userId !== 'string') {
++    const err = new Error('رمز الدخول لا يحتوي على معرف مستخدم معتمد.');
++    (err as any).code = 'INVALID_TOKEN_PAYLOAD';
++    (err as any).statusCode = 401;
++    throw err;
++  }
++
++  // Step 8: Role must strictly come from server-managed app_metadata.role
++  const appMetadata = payload.app_metadata || {};
++  const role = appMetadata.role as UserRole;
++
++  const validRoles: UserRole[] = [
++    'owner',
++    'operations_dispatcher',
++    'support_agent',
++    'captain',
++    'customer',
++    'merchant',
++  ];
++
++  if (!role || !validRoles.includes(role)) {
++    const err = new Error('رمز الدخول لا يحتوي على دور أمني موثوق ومعتمد في النظام.');
++    (err as any).code = 'UNAUTHORIZED_ROLE';
++    (err as any).statusCode = 403;
++    throw err;
++  }
++
++  return {
++    id: userId,
++    role,
++    phone: payload.phone || payload.user_metadata?.phone,
++    fullName: payload.user_metadata?.full_name || payload.name,
++    email: payload.email,
++    appMetadata,
++    userMetadata: payload.user_metadata || {},
++  };
+ }
+ 
+ /**
+- * Creates a signed JWT for testing and demo flows
++ * Creates a signed JWT strictly for isolated test execution (NODE_ENV === 'test').
++ * Forbidden in production, staging, development, or unset NODE_ENV.
+  */
+ export function generateTestToken(params: {
+   userId: string;
+@@ -158,13 +437,25 @@ export function generateTestToken(params: {
+   phone?: string;
+   fullName?: string;
+   expiresInSeconds?: number;
++  issuer?: string;
++  audience?: string;
+ }): string {
++  if (!isIsolatedTestEnvironment()) {
++    const err = new Error('غير مسموح بتوليد رموز اختبارية خارج بيئة الاختبار المعزولة (NODE_ENV=test).');
++    (err as any).code = 'TEST_TOKEN_FORBIDDEN_IN_PRODUCTION';
++    (err as any).statusCode = 403;
++    throw err;
++  }
++
++  const jwtSecret = resolveJwtSecret();
+   const header = { alg: 'HS256', typ: 'JWT' };
+   const nowSec = Math.floor(Date.now() / 1000);
+   const expiresIn = params.expiresInSeconds ?? 3600;
+ 
+   const payload = {
+     sub: params.userId,
++    iss: params.issuer ?? process.env.SUPABASE_JWT_ISSUER?.trim() ?? 'supabase',
++    aud: params.audience ?? 'authenticated',
+     app_metadata: {
+       role: params.role,
+       provider: 'phone',
+@@ -180,7 +471,7 @@ export function generateTestToken(params: {
+   const headerB64 = Buffer.from(JSON.stringify(header)).toString('base64url');
+   const payloadB64 = Buffer.from(JSON.stringify(payload)).toString('base64url');
+   const signature = crypto
+-    .createHmac('sha256', SUPABASE_JWT_SECRET)
++    .createHmac('sha256', jwtSecret)
+     .update(`${headerB64}.${payloadB64}`)
+     .digest('base64url');
+ 
+diff --git a/backend/src/services/cashCollectionService.ts b/backend/src/services/cashCollectionService.ts
+index dad58ea..38396e1 100644
+--- a/backend/src/services/cashCollectionService.ts
++++ b/backend/src/services/cashCollectionService.ts
+@@ -54,8 +54,9 @@ interface IdempotencyCacheEntry {
+ }
+ 
+ export class CashCollectionService {
+-  // Order mutex lock table simulating PostgreSQL row-level locks for in-memory testing
++  // Order and Captain mutex lock tables simulating PostgreSQL row-level locks for in-memory testing
+   private static orderLocks: Map<string, Promise<void>> = new Map();
++  private static captainLocks: Map<string, Promise<void>> = new Map();
+ 
+   // In-memory idempotency cache synchronized with persistent ledger for in-memory testing
+   private static idempotencyCache: Map<string, IdempotencyCacheEntry> = new Map();
+@@ -98,7 +99,17 @@ export class CashCollectionService {
+ 
+     // 2. Execute within an ACID PostgreSQL transaction with READ COMMITTED isolation
+     return await db.transaction().setIsolationLevel('read committed').execute(async (trx) => {
+-      // 2a. Check database-backed idempotency table first
++      // 2a. Atomic Row-Level Lock on Order FIRST (PostgreSQL: SELECT ... FOR UPDATE)
++      // Acquiring the order row lock before checking cash_collections ensures concurrent
++      // requests for the same order serialize cleanly before evaluating idempotency or is_paid.
++      const order = await trx
++        .selectFrom('orders')
++        .where('id', '=', orderId)
++        .forUpdate()
++        .selectAll()
++        .executeTakeFirst();
++
++      // 2b. Check database-backed idempotency table inside the serialized critical section
+       const existingCollection = await trx
+         .selectFrom('cash_collections')
+         .where('idempotency_key', '=', effectiveKey)
+@@ -118,13 +129,6 @@ export class CashCollectionService {
+           throw err;
+         }
+ 
+-        // Idempotent replay: Fetch order and captain rows to construct authoritative receipt
+-        const orderRow = await trx
+-          .selectFrom('orders')
+-          .where('id', '=', existingCollection.order_id)
+-          .selectAll()
+-          .executeTakeFirst();
+-
+         const captainRow = await trx
+           .selectFrom('captains')
+           .where('id', '=', existingCollection.captain_id)
+@@ -150,14 +154,6 @@ export class CashCollectionService {
+         };
+       }
+ 
+-      // 2b. Atomic Row-Level Lock on Order (PostgreSQL: SELECT ... FOR UPDATE)
+-      const order = await trx
+-        .selectFrom('orders')
+-        .where('id', '=', orderId)
+-        .forUpdate()
+-        .selectAll()
+-        .executeTakeFirst();
+-
+       if (!order) {
+         const err = new Error('الطلب غير موجود لتسجيل التحصيل النقدي.');
+         (err as any).code = 'ORDER_NOT_FOUND';
+@@ -353,17 +349,43 @@ export class CashCollectionService {
+       };
+     }
+ 
+-    // 3. Row-Level Lock Acquisition (Simulates SELECT * FROM orders WHERE id = $1 FOR UPDATE)
+-    const prevLock = this.orderLocks.get(orderId) || Promise.resolve();
+-    let releaseLock!: () => void;
+-    const currentLock = new Promise<void>((resolve) => {
+-      releaseLock = resolve;
++    // 3. Row-Level Lock Acquisition (Simulates SELECT * FROM orders FOR UPDATE and SELECT * FROM captains FOR UPDATE)
++    const prevOrderLock = this.orderLocks.get(orderId) || Promise.resolve();
++    let releaseOrderLock!: () => void;
++    const currentOrderLock = new Promise<void>((resolve) => {
++      releaseOrderLock = resolve;
+     });
++    this.orderLocks.set(orderId, prevOrderLock.then(() => currentOrderLock).catch(() => currentOrderLock));
++    await prevOrderLock;
+ 
+-    this.orderLocks.set(orderId, prevLock.then(() => currentLock).catch(() => currentLock));
+-    await prevLock;
++    const prevCaptainLock = this.captainLocks.get(captain.id) || Promise.resolve();
++    let releaseCaptainLock!: () => void;
++    const currentCaptainLock = new Promise<void>((resolve) => {
++      releaseCaptainLock = resolve;
++    });
++    this.captainLocks.set(captain.id, prevCaptainLock.then(() => currentCaptainLock).catch(() => currentCaptainLock));
++    await prevCaptainLock;
+ 
+     try {
++      // 3b. Re-check Idempotency Key inside critical section for concurrent identical requests
++      if (this.idempotencyCache.has(effectiveKey)) {
++        const cached = this.idempotencyCache.get(effectiveKey)!;
++        if (
++          cached.orderId !== orderId ||
++          cached.captainId !== captain.id ||
++          cached.amountPiasters !== amountPiasters
++        ) {
++          const err = new Error('مفتاح عدم التكرار (Idempotency Key) مستخدم مسبقاً لطلب أو بمبلغ مختلف.');
++          (err as any).code = 'IDEMPOTENCY_PAYLOAD_MISMATCH';
++          (err as any).statusCode = 409;
++          throw err;
++        }
++        return {
++          ...cached.result,
++          isIdempotentReplay: true,
++        };
++      }
++
+       // 4. Read latest state inside critical section
+       const order = PersistentStore.getOrderById(orderId);
+       if (!order) {
+@@ -407,29 +429,12 @@ export class CashCollectionService {
+         throw err;
+       }
+ 
+-      // 7. Prevent duplicate cash collection if order is already marked paid
++      // 7b. Prevent duplicate cash collection if order is already marked paid with a different idempotency key
+       if (order.isPaid && order.cashCollectedPiasters !== undefined && order.cashCollectedPiasters > 0) {
+-        const existingResult: CashCollectionResult = {
+-          success: true,
+-          orderId: order.id,
+-          amountCollectedPiasters: order.cashCollectedPiasters,
+-          formattedAmountEgp: `${(order.cashCollectedPiasters / 100).toFixed(2)} ج.م`,
+-          captainCurrentCashPiasters: captain.cashHoldingPiasters,
+-          formattedCaptainCashEgp: `${(captain.cashHoldingPiasters / 100).toFixed(2)} ج.م`,
+-          ceilingExceeded: captain.cashHoldingPiasters > captain.maxCashHoldingPiasters,
+-          customerConfirmed: true,
+-          idempotencyKey: effectiveKey,
+-          isIdempotentReplay: true,
+-          ledgerEntryId: `ledger_existing_${order.id}`,
+-          recordedAt: order.updatedAt,
+-        };
+-        this.idempotencyCache.set(effectiveKey, {
+-          result: existingResult,
+-          orderId: order.id,
+-          captainId: captain.id,
+-          amountPiasters: order.cashCollectedPiasters,
+-        });
+-        return existingResult;
++        const err = new Error('تم تحصيل قيمة هذا الطلب مسبقاً.');
++        (err as any).code = 'ORDER_ALREADY_PAID';
++        (err as any).statusCode = 409;
++        throw err;
+       }
+ 
+       // 8. Amount must strictly match or cover authoritative order fare
+@@ -457,24 +462,27 @@ export class CashCollectionService {
+ 
+       PersistentStore.saveOrder(updatedOrder);
+ 
+-      // 10. Update Captain Cash Holding & Check 100,000 piasters (1,000 EGP) ceiling
+-      const previousHolding = captain.cashHoldingPiasters;
++      // 10. Read latest Captain state inside lock & update Cash Holding + 100,000 piasters (1,000 EGP) ceiling
++      const storedCaptain = PersistentStore.getCaptainById(captain.id) || captain;
++      const previousHolding = storedCaptain.cashHoldingPiasters;
+       const newHolding = previousHolding + amountPiasters;
++      storedCaptain.cashHoldingPiasters = newHolding;
+       captain.cashHoldingPiasters = newHolding;
+ 
+-      const ceilingExceeded = newHolding > captain.maxCashHoldingPiasters;
+-      if (ceilingExceeded && captain.subscriptionStatus === 'active') {
++      const ceilingExceeded = newHolding > storedCaptain.maxCashHoldingPiasters;
++      if (ceilingExceeded && storedCaptain.subscriptionStatus === 'active') {
++        storedCaptain.subscriptionStatus = 'suspended';
+         captain.subscriptionStatus = 'suspended';
+       }
+ 
+-      PersistentStore.saveCaptain(captain);
++      PersistentStore.saveCaptain(storedCaptain);
+ 
+       // 11. Immutable Ledger Insertion
+       const ledgerEntryId = `ledger_${crypto.randomBytes(8).toString('hex')}`;
+       AuditLogger.record({
+-        actorId: captain.userId,
++        actorId: storedCaptain.userId,
+         actorRole: 'captain',
+-        actorName: captain.fullName,
++        actorName: storedCaptain.fullName,
+         actionType: 'CAPTAIN_CASH_SETTLED',
+         targetEntity: 'order',
+         targetId: order.id,
+@@ -483,7 +491,7 @@ export class CashCollectionService {
+         newState: {
+           cashHoldingPiasters: newHolding,
+           isPaid: true,
+-          subscriptionStatus: captain.subscriptionStatus,
++          subscriptionStatus: storedCaptain.subscriptionStatus,
+           ceilingExceeded,
+         },
+         notes: notes || (ceilingExceeded ? 'تجاوز حد العهدة المسموح به (1,000 ج.م) وتم تعليق الحساب مؤقتاً لحين التوريد' : undefined),
+@@ -512,7 +520,8 @@ export class CashCollectionService {
+       });
+       return result;
+     } finally {
+-      releaseLock();
++      releaseCaptainLock();
++      releaseOrderLock();
+     }
+   }
+ 
+@@ -522,5 +531,6 @@ export class CashCollectionService {
+   public static clearCache(): void {
+     this.idempotencyCache.clear();
+     this.orderLocks.clear();
++    this.captainLocks.clear();
+   }
+ }
+diff --git a/backend/tests/run_tests.ts b/backend/tests/run_tests.ts
+index 6df4480..9b020e8 100644
+--- a/backend/tests/run_tests.ts
++++ b/backend/tests/run_tests.ts
+@@ -106,6 +106,9 @@ export async function runAllTests(): Promise<{
+   failed: number;
+   results: TestResult[];
+ }> {
++  // Explicitly enter isolated test environment so test token helpers are permitted
++  process.env.NODE_ENV = 'test';
++
+   console.log('================================================================');
+   console.log(' MASHWAR — BACKEND INTEGRATION TEST SUITE (EL BAGOUR HUB)');
+   console.log(' Execution Environment: Node.js / TypeScript / Pure Integer Units');
+@@ -698,7 +701,7 @@ export async function runAllTests(): Promise<{
+     }, 'UNAUTHORIZED_ROLE');
+   });
+ 
+-  await runTest('Auth', 'Rejects token with invalid audience', () => {
++  await runTest('Auth', 'Rejects token with invalid audience or untrusted issuer', () => {
+     // Generate token with invalid aud
+     const header = Buffer.from(JSON.stringify({ alg: 'HS256', typ: 'JWT' })).toString('base64url');
+     const payload = Buffer.from(JSON.stringify({
+@@ -715,6 +718,39 @@ export async function runAllTests(): Promise<{
+     assertThrows(() => {
+       verifyToken(badAudToken);
+     }, 'INVALID_TOKEN_AUDIENCE');
++
++    // Generate token with untrusted issuer (iss)
++    const badIssPayload = Buffer.from(JSON.stringify({
++      sub: 'usr_cpt_01',
++      iss: 'https://evil-attacker.example.com/auth/v1',
++      aud: 'authenticated',
++      app_metadata: { role: 'captain' },
++      exp: Math.floor(Date.now() / 1000) + 3600,
++    })).toString('base64url');
++    const badIssSig = crypto.createHmac('sha256', 'mashwar_secure_supabase_jwt_secret_el_bagour_2026')
++      .update(`${header}.${badIssPayload}`)
++      .digest('base64url');
++    const badIssToken = `${header}.${badIssPayload}.${badIssSig}`;
++
++    assertThrows(() => {
++      verifyToken(badIssToken);
++    }, 'INVALID_TOKEN_ISSUER');
++
++    // Generate token without exp claim
++    const noExpPayload = Buffer.from(JSON.stringify({
++      sub: 'usr_cpt_01',
++      iss: 'supabase',
++      aud: 'authenticated',
++      app_metadata: { role: 'captain' },
++    })).toString('base64url');
++    const noExpSig = crypto.createHmac('sha256', 'mashwar_secure_supabase_jwt_secret_el_bagour_2026')
++      .update(`${header}.${noExpPayload}`)
++      .digest('base64url');
++    const noExpToken = `${header}.${noExpPayload}.${noExpSig}`;
++
++    assertThrows(() => {
++      verifyToken(noExpToken);
++    }, 'TOKEN_EXPIRED');
+   });
+ 
+   await runTest('Auth', 'Rejects token relying on top-level payload.role when app_metadata.role is missing', () => {
+@@ -748,6 +784,238 @@ export async function runAllTests(): Promise<{
+     assert(user.phone === '+201012345671', 'Phone must match user metadata');
+   });
+ 
++  await runTest('Auth', 'Fails closed across all non-test environments (production, staging, development, unset) when SUPABASE_JWT_SECRET is missing or placeholder', () => {
++    const sampleToken = generateTestToken({ userId: 'usr_cpt_01', role: 'captain' });
++    const prevNodeEnv = process.env.NODE_ENV;
++    const prevSecret = process.env.SUPABASE_JWT_SECRET;
++
++    try {
++      delete process.env.SUPABASE_JWT_SECRET;
++
++      for (const envName of ['production', 'staging', 'development', undefined]) {
++        if (envName === undefined) delete process.env.NODE_ENV;
++        else process.env.NODE_ENV = envName;
++
++        assertThrows(() => {
++          verifyToken(sampleToken);
++        }, 'AUTH_CONFIG_MISSING');
++
++        assertThrows(() => {
++          generateTestToken({ userId: 'usr_cpt_01', role: 'captain' });
++        }, 'TEST_TOKEN_FORBIDDEN_IN_PRODUCTION');
++      }
++
++      // Placeholder secret from .env.example must also fail closed outside isolated tests
++      process.env.NODE_ENV = 'development';
++      process.env.SUPABASE_JWT_SECRET = 'CHANGE_ME_MIN_32_CHAR_SUPABASE_JWT_SECRET';
++      assertThrows(() => {
++        verifyToken(sampleToken);
++      }, 'AUTH_CONFIG_MISSING');
++    } finally {
++      if (prevNodeEnv === undefined) delete process.env.NODE_ENV;
++      else process.env.NODE_ENV = prevNodeEnv;
++
++      if (prevSecret === undefined) delete process.env.SUPABASE_JWT_SECRET;
++      else process.env.SUPABASE_JWT_SECRET = prevSecret;
++    }
++  });
++
++  await runTest('Auth', 'Requires configured trusted issuer in production and rejects tokens with missing or mismatched iss', () => {
++    const prevNodeEnv = process.env.NODE_ENV;
++    const prevSecret = process.env.SUPABASE_JWT_SECRET;
++    const prevIssuer = process.env.SUPABASE_JWT_ISSUER;
++    const prevUrl = process.env.SUPABASE_URL;
++
++    try {
++      const prodSecret = 'prod_strong_hmac_secret_el_bagour_2026_verified';
++      const trustedIssuer = 'https://mashwar-prod-ref.supabase.co/auth/v1';
++
++      // Sign tokens while in isolated test mode
++      process.env.NODE_ENV = 'test';
++      process.env.SUPABASE_JWT_SECRET = prodSecret;
++
++      const validProdToken = generateTestToken({
++        userId: 'usr_cpt_01',
++        role: 'captain',
++        issuer: trustedIssuer,
++      });
++      const mismatchedIssToken = generateTestToken({
++        userId: 'usr_cpt_01',
++        role: 'captain',
++        issuer: 'https://wrong-project.supabase.co/auth/v1',
++      });
++
++      // Construct a token with no iss claim at all
++      const headerB64 = Buffer.from(JSON.stringify({ alg: 'HS256', typ: 'JWT' })).toString('base64url');
++      const noIssPayloadB64 = Buffer.from(
++        JSON.stringify({
++          sub: 'usr_cpt_01',
++          aud: 'authenticated',
++          app_metadata: { role: 'captain' },
++          exp: Math.floor(Date.now() / 1000) + 3600,
++        })
++      ).toString('base64url');
++      const noIssSig = crypto
++        .createHmac('sha256', prodSecret)
++        .update(`${headerB64}.${noIssPayloadB64}`)
++        .digest('base64url');
++      const missingIssToken = `${headerB64}.${noIssPayloadB64}.${noIssSig}`;
++
++      // Switch to production
++      process.env.NODE_ENV = 'production';
++      delete process.env.SUPABASE_JWT_ISSUER;
++      delete process.env.SUPABASE_URL;
++
++      // 1. Missing configured issuer on server in production -> 500 AUTH_CONFIG_MISSING
++      assertThrows(() => {
++        verifyToken(validProdToken);
++      }, 'AUTH_CONFIG_MISSING');
++
++      // 2. Configure trusted issuer via SUPABASE_URL
++      process.env.SUPABASE_URL = 'https://mashwar-prod-ref.supabase.co';
++
++      // Token with missing iss in production -> 401 INVALID_TOKEN_ISSUER
++      assertThrows(() => {
++        verifyToken(missingIssToken);
++      }, 'INVALID_TOKEN_ISSUER');
++
++      // Token with mismatched iss in production -> 401 INVALID_TOKEN_ISSUER
++      assertThrows(() => {
++        verifyToken(mismatchedIssToken);
++      }, 'INVALID_TOKEN_ISSUER');
++
++      // Token with matching iss in production -> succeeds
++      const verified = verifyToken(validProdToken);
++      assert(verified.id === 'usr_cpt_01', 'Verified production user ID must match');
++      assert(verified.role === 'captain', 'Verified production user role must match');
++    } finally {
++      if (prevNodeEnv === undefined) delete process.env.NODE_ENV;
++      else process.env.NODE_ENV = prevNodeEnv;
++
++      if (prevSecret === undefined) delete process.env.SUPABASE_JWT_SECRET;
++      else process.env.SUPABASE_JWT_SECRET = prevSecret;
++
++      if (prevIssuer === undefined) delete process.env.SUPABASE_JWT_ISSUER;
++      else process.env.SUPABASE_JWT_ISSUER = prevIssuer;
++
++      if (prevUrl === undefined) delete process.env.SUPABASE_URL;
++      else process.env.SUPABASE_URL = prevUrl;
++    }
++  });
++
++  await runTest('Auth', 'Verifies Supabase asymmetric ES256 (P-256) and RS256 tokens and prevents HS256 algorithm confusion', () => {
++    const prevPubPem = process.env.SUPABASE_JWT_PUBLIC_KEY;
++    const prevPubJwk = process.env.SUPABASE_JWT_PUBLIC_JWK;
++    const prevAlg = process.env.SUPABASE_JWT_ALG;
++    const prevSecret = process.env.SUPABASE_JWT_SECRET;
++
++    try {
++      delete process.env.SUPABASE_JWT_SECRET;
++
++      // 1. Generate ECDSA P-256 (prime256v1) key pair for Supabase ES256
++      const { privateKey: ecPriv, publicKey: ecPub } = crypto.generateKeyPairSync('ec', {
++        namedCurve: 'prime256v1',
++      });
++      const ecPubPem = ecPub.export({ type: 'spki', format: 'pem' }).toString();
++      const ecPubJwk = JSON.stringify(ecPub.export({ format: 'jwk' }));
++
++      const esHeaderB64 = Buffer.from(JSON.stringify({ alg: 'ES256', typ: 'JWT' })).toString('base64url');
++      const claimsB64 = Buffer.from(
++        JSON.stringify({
++          sub: 'usr_cpt_es256',
++          iss: 'supabase',
++          aud: 'authenticated',
++          app_metadata: { role: 'captain' },
++          exp: Math.floor(Date.now() / 1000) + 3600,
++        })
++      ).toString('base64url');
++
++      const esSig = crypto
++        .sign('sha256', Buffer.from(`${esHeaderB64}.${claimsB64}`, 'utf8'), {
++          key: ecPriv,
++          dsaEncoding: 'ieee-p1363',
++        })
++        .toString('base64url');
++      const es256Token = `${esHeaderB64}.${claimsB64}.${esSig}`;
++
++      // Missing public key for ES256 must fail closed with AUTH_CONFIG_MISSING
++      delete process.env.SUPABASE_JWT_PUBLIC_KEY;
++      delete process.env.SUPABASE_JWT_PUBLIC_JWK;
++      assertThrows(() => {
++        verifyToken(es256Token);
++      }, 'AUTH_CONFIG_MISSING');
++
++      // Verify ES256 with PEM public key
++      process.env.SUPABASE_JWT_PUBLIC_KEY = ecPubPem;
++      const esUserPem = verifyToken(es256Token);
++      assert(esUserPem.id === 'usr_cpt_es256', 'ES256 PEM verification must extract sub');
++      assert(esUserPem.role === 'captain', 'ES256 PEM verification must extract role');
++
++      // Verify ES256 with JWK public key
++      delete process.env.SUPABASE_JWT_PUBLIC_KEY;
++      process.env.SUPABASE_JWT_PUBLIC_JWK = ecPubJwk;
++      const esUserJwk = verifyToken(es256Token);
++      assert(esUserJwk.id === 'usr_cpt_es256', 'ES256 JWK verification must extract sub');
++
++      // Forged ES256 signature must fail with INVALID_TOKEN_SIGNATURE
++      const forgedEs256Token = `${esHeaderB64}.${claimsB64}.${Buffer.alloc(64, 7).toString('base64url')}`;
++      assertThrows(() => {
++        verifyToken(forgedEs256Token);
++      }, 'INVALID_TOKEN_SIGNATURE');
++
++      // Prevent algorithm confusion: attacker signs an HS256 token while server has only asymmetric public key configured
++      const hsHeaderB64 = Buffer.from(JSON.stringify({ alg: 'HS256', typ: 'JWT' })).toString('base64url');
++      const confusedSig = crypto
++        .createHmac('sha256', ecPubPem)
++        .update(`${hsHeaderB64}.${claimsB64}`)
++        .digest('base64url');
++      const confusedToken = `${hsHeaderB64}.${claimsB64}.${confusedSig}`;
++      assertThrows(() => {
++        verifyToken(confusedToken);
++      }, 'INVALID_TOKEN_ALGORITHM');
++
++      // Reject alg: "none"
++      const noneHeaderB64 = Buffer.from(JSON.stringify({ alg: 'none', typ: 'JWT' })).toString('base64url');
++      assertThrows(() => {
++        verifyToken(`${noneHeaderB64}.${claimsB64}.${esSig}`);
++      }, 'INVALID_TOKEN_ALGORITHM');
++
++      // 2. Generate RSA 2048 key pair for RS256 verification
++      delete process.env.SUPABASE_JWT_PUBLIC_JWK;
++      const { privateKey: rsaPriv, publicKey: rsaPub } = crypto.generateKeyPairSync('rsa', {
++        modulusLength: 2048,
++      });
++      process.env.SUPABASE_JWT_PUBLIC_KEY = rsaPub.export({ type: 'spki', format: 'pem' }).toString();
++
++      const rsHeaderB64 = Buffer.from(JSON.stringify({ alg: 'RS256', typ: 'JWT' })).toString('base64url');
++      const rsSig = crypto
++        .sign('RSA-SHA256', Buffer.from(`${rsHeaderB64}.${claimsB64}`, 'utf8'), rsaPriv)
++        .toString('base64url');
++      const rs256Token = `${rsHeaderB64}.${claimsB64}.${rsSig}`;
++
++      const rsUser = verifyToken(rs256Token);
++      assert(rsUser.id === 'usr_cpt_es256', 'RS256 verification must extract sub');
++
++      // Enforce SUPABASE_JWT_ALG mismatch rejection
++      process.env.SUPABASE_JWT_ALG = 'ES256';
++      assertThrows(() => {
++        verifyToken(rs256Token);
++      }, 'INVALID_TOKEN_ALGORITHM');
++    } finally {
++      if (prevPubPem === undefined) delete process.env.SUPABASE_JWT_PUBLIC_KEY;
++      else process.env.SUPABASE_JWT_PUBLIC_KEY = prevPubPem;
++
++      if (prevPubJwk === undefined) delete process.env.SUPABASE_JWT_PUBLIC_JWK;
++      else process.env.SUPABASE_JWT_PUBLIC_JWK = prevPubJwk;
++
++      if (prevAlg === undefined) delete process.env.SUPABASE_JWT_ALG;
++      else process.env.SUPABASE_JWT_ALG = prevAlg;
++
++      if (prevSecret === undefined) delete process.env.SUPABASE_JWT_SECRET;
++      else process.env.SUPABASE_JWT_SECRET = prevSecret;
++    }
++  });
++
+   // --------------------------------------------------------------------------
+   // SUITE 13: Database-Backed Captain Identity Resolution
+   // --------------------------------------------------------------------------
+@@ -996,6 +1264,18 @@ export async function runAllTests(): Promise<{
+     assert(updatedCap.subscriptionStatus === 'suspended', 'Captain must be suspended due to cash ceiling breach');
+   });
+ 
++  await runTest('CashCollection', 'Rejects duplicate cash collection on an already-paid order when using a different idempotency key (409 ORDER_ALREADY_PAID)', async () => {
++    const captain = PersistentStore.getCaptainById('cpt_ahmed_fathy')!;
++    await assertThrowsAsync(async () => {
++      await CashCollectionService.recordCashCollection({
++        orderId: 'ord_cash_test_101',
++        captain,
++        amountPiasters: 2500,
++        idempotencyKey: 'idemp_key_cod_101_different_key',
++      });
++    }, 'ORDER_ALREADY_PAID');
++  });
++
+   // --------------------------------------------------------------------------
+   // SUITE 15: Cross-Tenant Isolation & Anti-Spoofing
+   // --------------------------------------------------------------------------
+@@ -1053,6 +1333,234 @@ export async function runAllTests(): Promise<{
+     const canTransition = orderWithCapB.assignedCaptainId === captainIntruderId;
+     assert(canTransition === false, 'Intruding captain cannot transition another captain order');
+   });
++
++  await runTest('SecurityIsolation', 'Enforces HTTP 403 cross-tenant isolation and allows authorized 200 access on /orders/:id, /orders/:id/history, /orders/:id/cancel, and /orders/:id/transitions', async () => {
++    const app = createServer();
++    const server = app.listen(0);
++    const address = server.address() as { port: number };
++    const baseUrl = `http://127.0.0.1:${address.port}/api/v1`;
++
++    try {
++      const bobOrder: Order = {
++        ...baseOrder,
++        id: 'ord_http_bob_isolation_01',
++        orderNumber: 'MSH-8840',
++        customerId: 'usr_cust_bob',
++        serviceTypeId: 'restaurant_store',
++        storeId: 'merchant_basha',
++        merchantUserId: 'usr_merch_basha',
++        status: 'captain_assigned',
++        assignedCaptainId: 'cpt_ahmed_fathy', // usr_cpt_01
++        totalFarePiasters: 3500,
++        paymentMethod: 'cash_on_delivery',
++        isPaid: false,
++      };
++      PersistentStore.saveOrder(bobOrder);
++
++      const bobToken = generateTestToken({ userId: 'usr_cust_bob', role: 'customer' });
++      const aliceToken = generateTestToken({ userId: 'usr_cust_alice', role: 'customer' });
++      const assignedCapToken = generateTestToken({ userId: 'usr_cpt_01', role: 'captain' }); // cpt_ahmed_fathy
++      const otherCaptainToken = generateTestToken({ userId: 'usr_cpt_02', role: 'captain' }); // cpt_mahmoud_ibrahim
++      const bashaMerchantToken = generateTestToken({ userId: 'usr_merch_basha', role: 'merchant' });
++      const otherMerchantToken = generateTestToken({ userId: 'usr_merch_amana', role: 'merchant' });
++
++      // 1. DENIED (403): Customer Alice cannot GET Bob's order, history, cancel, or transition-cancel
++      const getOrderAlice = await fetch(`${baseUrl}/orders/${bobOrder.id}`, {
++        headers: { Authorization: `Bearer ${aliceToken}` },
++      });
++      assert(getOrderAlice.status === 403, `Expected 403 for Alice reading Bob order, got ${getOrderAlice.status}`);
++
++      const getHistAlice = await fetch(`${baseUrl}/orders/${bobOrder.id}/history`, {
++        headers: { Authorization: `Bearer ${aliceToken}` },
++      });
++      assert(getHistAlice.status === 403, `Expected 403 for Alice reading Bob history, got ${getHistAlice.status}`);
++
++      const cancelAlice = await fetch(`${baseUrl}/orders/${bobOrder.id}/cancel`, {
++        method: 'POST',
++        headers: {
++          'Content-Type': 'application/json',
++          Authorization: `Bearer ${aliceToken}`,
++        },
++        body: JSON.stringify({ reason: 'محاولة إلغاء غير مصرحة' }),
++      });
++      assert(cancelAlice.status === 403, `Expected 403 for Alice cancelling Bob order, got ${cancelAlice.status}`);
++
++      const transCancelAlice = await fetch(`${baseUrl}/orders/${bobOrder.id}/transitions`, {
++        method: 'POST',
++        headers: {
++          'Content-Type': 'application/json',
++          Authorization: `Bearer ${aliceToken}`,
++        },
++        body: JSON.stringify({ targetStatus: 'cancelled' }),
++      });
++      assert(transCancelAlice.status === 403, `Expected 403 for Alice cancelling Bob order via /transitions, got ${transCancelAlice.status}`);
++
++      // 2. ALLOWED (200): Owning Customer Bob and Owning Merchant Basha can GET order and history
++      const getOrderBob = await fetch(`${baseUrl}/orders/${bobOrder.id}`, {
++        headers: { Authorization: `Bearer ${bobToken}` },
++      });
++      assert(getOrderBob.status === 200, `Expected 200 for Bob reading own order, got ${getOrderBob.status}`);
++
++      const getHistBob = await fetch(`${baseUrl}/orders/${bobOrder.id}/history`, {
++        headers: { Authorization: `Bearer ${bobToken}` },
++      });
++      assert(getHistBob.status === 200, `Expected 200 for Bob reading own order history, got ${getHistBob.status}`);
++
++      const getHistBasha = await fetch(`${baseUrl}/orders/${bobOrder.id}/history`, {
++        headers: { Authorization: `Bearer ${bashaMerchantToken}` },
++      });
++      assert(getHistBasha.status === 200, `Expected 200 for owning merchant reading order history, got ${getHistBasha.status}`);
++
++      // 3. DENIED (403): Captain B (usr_cpt_02) cannot GET order, GET history, or transition order assigned to Captain A
++      const getOrderCapB = await fetch(`${baseUrl}/orders/${bobOrder.id}`, {
++        headers: { Authorization: `Bearer ${otherCaptainToken}` },
++      });
++      assert(getOrderCapB.status === 403, `Expected 403 for unassigned captain reading assigned order, got ${getOrderCapB.status}`);
++
++      const getHistCapB = await fetch(`${baseUrl}/orders/${bobOrder.id}/history`, {
++        headers: { Authorization: `Bearer ${otherCaptainToken}` },
++      });
++      assert(getHistCapB.status === 403, `Expected 403 for unassigned captain reading history, got ${getHistCapB.status}`);
++
++      const transCapB = await fetch(`${baseUrl}/orders/${bobOrder.id}/transitions`, {
++        method: 'POST',
++        headers: {
++          'Content-Type': 'application/json',
++          Authorization: `Bearer ${otherCaptainToken}`,
++        },
++        body: JSON.stringify({ targetStatus: 'at_pickup' }),
++      });
++      assert(transCapB.status === 403, `Expected 403 for unassigned captain transitioning order, got ${transCapB.status}`);
++
++      // 4. ALLOWED (200): Assigned Captain A (usr_cpt_01) can GET history and transition bobOrder to at_pickup, but CANNOT cancel (403)
++      const getHistCapA = await fetch(`${baseUrl}/orders/${bobOrder.id}/history`, {
++        headers: { Authorization: `Bearer ${assignedCapToken}` },
++      });
++      assert(getHistCapA.status === 200, `Expected 200 for assigned captain reading history, got ${getHistCapA.status}`);
++
++      const cancelByCapA = await fetch(`${baseUrl}/orders/${bobOrder.id}/transitions`, {
++        method: 'POST',
++        headers: {
++          'Content-Type': 'application/json',
++          Authorization: `Bearer ${assignedCapToken}`,
++        },
++        body: JSON.stringify({ targetStatus: 'cancelled' }),
++      });
++      assert(cancelByCapA.status === 403, `Expected 403 for captain attempting to cancel order via /transitions, got ${cancelByCapA.status}`);
++
++      const transCapA = await fetch(`${baseUrl}/orders/${bobOrder.id}/transitions`, {
++        method: 'POST',
++        headers: {
++          'Content-Type': 'application/json',
++          Authorization: `Bearer ${assignedCapToken}`,
++        },
++        body: JSON.stringify({ targetStatus: 'at_pickup' }),
++      });
++      assert(transCapA.status === 200, `Expected 200 for assigned captain transitioning order to at_pickup, got ${transCapA.status}`);
++
++      // 5. DENIED (403): Merchant B (usr_merch_amana) cannot GET order, history, or transition order belonging to Merchant A
++      const getOrderMerchB = await fetch(`${baseUrl}/orders/${bobOrder.id}`, {
++        headers: { Authorization: `Bearer ${otherMerchantToken}` },
++      });
++      assert(getOrderMerchB.status === 403, `Expected 403 for other merchant reading order, got ${getOrderMerchB.status}`);
++
++      const getHistMerchB = await fetch(`${baseUrl}/orders/${bobOrder.id}/history`, {
++        headers: { Authorization: `Bearer ${otherMerchantToken}` },
++      });
++      assert(getHistMerchB.status === 403, `Expected 403 for other merchant reading history, got ${getHistMerchB.status}`);
++
++      // 6. DENIED (403): Unassigned order — Captain cannot read history or bypass /accept to transition an unassigned ready_for_pickup order
++      const unassignedOrder: Order = {
++        ...baseOrder,
++        id: 'ord_http_unassigned_02',
++        orderNumber: 'MSH-8841',
++        customerId: 'usr_cust_bob',
++        status: 'ready_for_pickup',
++        assignedCaptainId: undefined,
++      };
++      PersistentStore.saveOrder(unassignedOrder);
++
++      const getHistUnassignedCap = await fetch(`${baseUrl}/orders/${unassignedOrder.id}/history`, {
++        headers: { Authorization: `Bearer ${otherCaptainToken}` },
++      });
++      assert(
++        getHistUnassignedCap.status === 403,
++        `Expected 403 for captain reading history of unassigned order, got ${getHistUnassignedCap.status}`
++      );
++
++      const transUnassignedCap = await fetch(`${baseUrl}/orders/${unassignedOrder.id}/transitions`, {
++        method: 'POST',
++        headers: {
++          'Content-Type': 'application/json',
++          Authorization: `Bearer ${otherCaptainToken}`,
++        },
++        body: JSON.stringify({ targetStatus: 'at_pickup' }),
++      });
++      assert(
++        transUnassignedCap.status === 403,
++        `Expected 403 for captain transitioning unassigned order without claiming, got ${transUnassignedCap.status}`
++      );
++
++      // 7. HTTP duplicate cash collection: same Idempotency-Key replays (200), different Idempotency-Key on paid order fails with 409 ORDER_ALREADY_PAID
++      const inTransitOrder: Order = {
++        ...baseOrder,
++        id: 'ord_http_cod_dup_03',
++        orderNumber: 'MSH-8842',
++        customerId: 'usr_cust_bob',
++        status: 'in_transit',
++        assignedCaptainId: 'cpt_ahmed_fathy',
++        totalFarePiasters: 3000,
++        paymentMethod: 'cash_on_delivery',
++        isPaid: false,
++      };
++      PersistentStore.saveOrder(inTransitOrder);
++
++      const firstCashRes = await fetch(`${baseUrl}/captain/orders/${inTransitOrder.id}/cash-collection`, {
++        method: 'POST',
++        headers: {
++          'Content-Type': 'application/json',
++          Authorization: `Bearer ${assignedCapToken}`,
++          'Idempotency-Key': 'http_cod_key_alpha',
++        },
++        body: JSON.stringify({ amountCollectedPiasters: 3000, customerConfirmed: true }),
++      });
++      assert(firstCashRes.status === 200, `Expected 200 on first cash collection, got ${firstCashRes.status}`);
++
++      const replayCashRes = await fetch(`${baseUrl}/captain/orders/${inTransitOrder.id}/cash-collection`, {
++        method: 'POST',
++        headers: {
++          'Content-Type': 'application/json',
++          Authorization: `Bearer ${assignedCapToken}`,
++          'Idempotency-Key': 'http_cod_key_alpha',
++        },
++        body: JSON.stringify({ amountCollectedPiasters: 3000, customerConfirmed: true }),
++      });
++      assert(replayCashRes.status === 200, `Expected 200 on idempotent replay, got ${replayCashRes.status}`);
++      const replayJson = await replayCashRes.json();
++      assert(replayJson.data.isIdempotentReplay === true, 'Replay response must set isIdempotentReplay = true');
++
++      const duplicateNewKeyRes = await fetch(`${baseUrl}/captain/orders/${inTransitOrder.id}/cash-collection`, {
++        method: 'POST',
++        headers: {
++          'Content-Type': 'application/json',
++          Authorization: `Bearer ${assignedCapToken}`,
++          'Idempotency-Key': 'http_cod_key_beta_distinct',
++        },
++        body: JSON.stringify({ amountCollectedPiasters: 3000, customerConfirmed: true }),
++      });
++      assert(
++        duplicateNewKeyRes.status === 409,
++        `Expected 409 ORDER_ALREADY_PAID on duplicate collection with distinct key, got ${duplicateNewKeyRes.status}`
++      );
++      const duplicateErrJson = await duplicateNewKeyRes.json();
++      assert(
++        duplicateErrJson.error?.code === 'ORDER_ALREADY_PAID',
++        `Expected error code ORDER_ALREADY_PAID, got ${duplicateErrJson.error?.code}`
++      );
++    } finally {
++      server.close();
++    }
++  });
+   // --------------------------------------------------------------------------
+   // SUITE 16: PostgreSQL Transaction Guarantees, Rollback & Concurrency Verification
+   // --------------------------------------------------------------------------
+@@ -1117,6 +1625,70 @@ export async function runAllTests(): Promise<{
+     assert(testCaptain.cashHoldingPiasters === 12500, 'Captain balance must increase by fare exactly once');
+   });
+ 
++  await runTest('PostgreSqlTransaction', 'Serializes concurrent cash collections across two distinct orders for the same captain without lost balance updates (in-memory mutex)', async () => {
++    CashCollectionService.clearCache();
++    const multiCap: CaptainProfile = {
++      id: 'cpt_multi_order_race',
++      userId: 'usr_multi_order_race',
++      fullName: 'كابتن متعدد الطلبات',
++      phone: '+201122334455',
++      nationalIdMasked: '29000000000099',
++      vehicleType: 'motorcycle',
++      vehiclePlate: '٥٥٥٥ م ن',
++      subscriptionStatus: 'active',
++      subscriptionPlanCode: 'STANDARD',
++      currentPeriodEndsAt: new Date(Date.now() + 86400000).toISOString(),
++      cashHoldingPiasters: 20000,
++      maxCashHoldingPiasters: 100000,
++      ratingAverage: 4.9,
++      isOnline: true,
++    };
++    PersistentStore.saveCaptain(multiCap);
++
++    const orderA: Order = {
++      ...baseOrder,
++      id: 'ord_multi_race_A',
++      totalFarePiasters: 3000,
++      assignedCaptainId: multiCap.id,
++      status: 'in_transit',
++      paymentMethod: 'cash_on_delivery',
++      isPaid: false,
++    };
++    const orderB: Order = {
++      ...baseOrder,
++      id: 'ord_multi_race_B',
++      totalFarePiasters: 4500,
++      assignedCaptainId: multiCap.id,
++      status: 'in_transit',
++      paymentMethod: 'cash_on_delivery',
++      isPaid: false,
++    };
++    PersistentStore.saveOrder(orderA);
++    PersistentStore.saveOrder(orderB);
++
++    // Pass detached clones of multiCap to verify that the service reads the latest committed balance from PersistentStore inside the captain lock
++    await Promise.all([
++      CashCollectionService.recordCashCollection({
++        orderId: orderA.id,
++        captain: { ...multiCap },
++        amountPiasters: 3000,
++        idempotencyKey: 'multi_key_A',
++      }),
++      CashCollectionService.recordCashCollection({
++        orderId: orderB.id,
++        captain: { ...multiCap },
++        amountPiasters: 4500,
++        idempotencyKey: 'multi_key_B',
++      }),
++    ]);
++
++    const finalCaptain = PersistentStore.getCaptainById(multiCap.id)!;
++    assert(
++      finalCaptain.cashHoldingPiasters === 27500,
++      `Expected cumulative captain balance 27500 (20000 + 3000 + 4500), got ${finalCaptain.cashHoldingPiasters}`
++    );
++  });
++
+   await runTest('PostgreSqlTransaction', 'Ensures rollback on validation failure leaves captain balance and ledger untouched', async () => {
+     CashCollectionService.clearCache();
+     const testOrderId = 'ord_rollback_01';

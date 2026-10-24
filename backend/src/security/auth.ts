@@ -32,35 +32,244 @@ declare global {
   }
 }
 
-// Default secret strictly restricted to non-production local/test environments
-const DEV_FALLBACK_JWT_SECRET = 'mashwar_secure_supabase_jwt_secret_el_bagour_2026';
+// Isolated test secret permitted ONLY when NODE_ENV === 'test'
+const ISOLATED_TEST_JWT_SECRET = 'mashwar_secure_supabase_jwt_secret_el_bagour_2026';
+
+export type SupportedJwtAlgorithm = 'HS256' | 'ES256' | 'RS256';
+const SUPPORTED_JWT_ALGORITHMS: SupportedJwtAlgorithm[] = ['HS256', 'ES256', 'RS256'];
+
+function isPlaceholderValue(value: string): boolean {
+  const upper = value.toUpperCase();
+  return (
+    upper.startsWith('CHANGE_ME') ||
+    upper.includes('YOUR_PROJECT_REF') ||
+    upper.includes('YOUR_SUPABASE_')
+  );
+}
 
 /**
- * Resolves the authoritative JWT verification secret.
- * Enforces fail-closed behavior in production: throws 500 AUTH_CONFIG_MISSING
- * if SUPABASE_JWT_SECRET is unset or empty when NODE_ENV === 'production'.
+ * Returns true strictly when running inside an explicitly isolated test environment.
+ */
+export function isIsolatedTestEnvironment(): boolean {
+  return process.env.NODE_ENV === 'test' && process.env.MASHWAR_DISABLE_TEST_FALLBACK !== 'true';
+}
+
+/**
+ * Resolves the authoritative symmetric JWT secret for HS256 verification.
+ * Fails closed (500 AUTH_CONFIG_MISSING) in all environments (production, staging,
+ * development, or unset NODE_ENV) whenever SUPABASE_JWT_SECRET is missing or a placeholder,
+ * except in explicitly isolated test runs (NODE_ENV === 'test').
  */
 export function resolveJwtSecret(): string {
   const configuredSecret = process.env.SUPABASE_JWT_SECRET?.trim();
-  if (configuredSecret && configuredSecret.length > 0) {
+  if (configuredSecret && configuredSecret.length > 0 && !isPlaceholderValue(configuredSecret)) {
     return configuredSecret;
+  }
+
+  if (isIsolatedTestEnvironment()) {
+    return ISOLATED_TEST_JWT_SECRET;
+  }
+
+  const err = new Error(
+    'خطأ إعدادات أمنية حرج: متغير البيئة SUPABASE_JWT_SECRET غير مضبوط (Fail-Closed).'
+  );
+  (err as any).code = 'AUTH_CONFIG_MISSING';
+  (err as any).statusCode = 500;
+  throw err;
+}
+
+/**
+ * Resolves the authoritative asymmetric public key (PEM or JWK) for ES256 / RS256 verification.
+ * Fails closed (500 AUTH_CONFIG_MISSING) if the public key is not configured or key type mismatches.
+ */
+export function resolveJwtPublicKey(expectedAlg: 'ES256' | 'RS256'): crypto.KeyObject {
+  const configuredPem = process.env.SUPABASE_JWT_PUBLIC_KEY?.trim();
+  const configuredJwk = process.env.SUPABASE_JWT_PUBLIC_JWK?.trim();
+
+  if (configuredPem && configuredPem.length > 0 && !isPlaceholderValue(configuredPem)) {
+    try {
+      const normalizedPem = configuredPem.replace(/\\n/g, '\n');
+      const pubKey = crypto.createPublicKey(normalizedPem);
+      const expectedKeyType = expectedAlg === 'ES256' ? 'ec' : 'rsa';
+      if (pubKey.asymmetricKeyType !== expectedKeyType) {
+        const err = new Error(
+          `نوع المفتاح العام (${pubKey.asymmetricKeyType}) لا يتطابق مع خوارزمية التوقيع (${expectedAlg}).`
+        );
+        (err as any).code = 'AUTH_CONFIG_MISSING';
+        (err as any).statusCode = 500;
+        throw err;
+      }
+      return pubKey;
+    } catch (e: any) {
+      if (e.code === 'AUTH_CONFIG_MISSING') throw e;
+      const err = new Error('فشل قراءة المفتاح العام SUPABASE_JWT_PUBLIC_KEY للتحقق من التوقيع.');
+      (err as any).code = 'AUTH_CONFIG_MISSING';
+      (err as any).statusCode = 500;
+      throw err;
+    }
+  }
+
+  if (configuredJwk && configuredJwk.length > 0 && !isPlaceholderValue(configuredJwk)) {
+    try {
+      const jwkObj = JSON.parse(configuredJwk);
+      const pubKey = crypto.createPublicKey({ key: jwkObj, format: 'jwk' });
+      const expectedKeyType = expectedAlg === 'ES256' ? 'ec' : 'rsa';
+      if (pubKey.asymmetricKeyType !== expectedKeyType) {
+        const err = new Error(
+          `نوع مفتاح JWK (${pubKey.asymmetricKeyType}) لا يتطابق مع خوارزمية التوقيع (${expectedAlg}).`
+        );
+        (err as any).code = 'AUTH_CONFIG_MISSING';
+        (err as any).statusCode = 500;
+        throw err;
+      }
+      return pubKey;
+    } catch (e: any) {
+      if (e.code === 'AUTH_CONFIG_MISSING') throw e;
+      const err = new Error('فشل قراءة مفتاح SUPABASE_JWT_PUBLIC_JWK للتحقق من التوقيع.');
+      (err as any).code = 'AUTH_CONFIG_MISSING';
+      (err as any).statusCode = 500;
+      throw err;
+    }
+  }
+
+  const err = new Error(
+    `خطأ إعدادات أمنية حرج: المفتاح العام (SUPABASE_JWT_PUBLIC_KEY أو SUPABASE_JWT_PUBLIC_JWK) غير مضبوط للتحقق من خوارزمية ${expectedAlg} (Fail-Closed).`
+  );
+  (err as any).code = 'AUTH_CONFIG_MISSING';
+  (err as any).statusCode = 500;
+  throw err;
+}
+
+/**
+ * Resolves the configured trusted JWT issuer (iss).
+ * In production, a trusted issuer MUST be configured via SUPABASE_JWT_ISSUER or SUPABASE_URL;
+ * if missing in production, fails closed with 500 AUTH_CONFIG_MISSING.
+ */
+export function resolveTrustedIssuer(): string | undefined {
+  const explicitIssuer = process.env.SUPABASE_JWT_ISSUER?.trim();
+  if (explicitIssuer && explicitIssuer.length > 0 && !isPlaceholderValue(explicitIssuer)) {
+    return explicitIssuer;
+  }
+
+  const supabaseUrl = process.env.SUPABASE_URL?.trim();
+  if (supabaseUrl && supabaseUrl.length > 0 && !isPlaceholderValue(supabaseUrl)) {
+    return `${supabaseUrl.replace(/\/$/, '')}/auth/v1`;
   }
 
   if (process.env.NODE_ENV === 'production') {
     const err = new Error(
-      'خطأ إعدادات أمنية حرج: متغير البيئة SUPABASE_JWT_SECRET غير مضبوط في بيئة الإنتاج (Fail-Closed).'
+      'خطأ إعدادات أمنية حرج: يجب ضبط مصدر الرمز الموثوق (SUPABASE_JWT_ISSUER أو SUPABASE_URL) في بيئة الإنتاج (Fail-Closed).'
     );
     (err as any).code = 'AUTH_CONFIG_MISSING';
     (err as any).statusCode = 500;
     throw err;
   }
 
-  return DEV_FALLBACK_JWT_SECRET;
+  return undefined;
 }
 
 /**
- * Validates a JWT or HMAC token.
- * Sourced strictly from app_metadata.role.
+ * Verifies the cryptographic signature of a JWT only AFTER inspecting and validating header.alg.
+ * Supports HS256 (HMAC-SHA256), ES256 (ECDSA P-256 + SHA-256 IEEE P1363), and RS256 (RSA + SHA-256).
+ */
+function verifyJwtSignatureByAlgorithm(
+  alg: SupportedJwtAlgorithm,
+  signingInput: string,
+  signatureB64: string
+): void {
+  // Check explicit algorithm restriction if configured
+  const configuredAlg = process.env.SUPABASE_JWT_ALG?.trim();
+  if (configuredAlg && configuredAlg.length > 0 && alg !== configuredAlg) {
+    const err = new Error(
+      `خوارزمية الرمز (${alg}) غير مطابقة للخوارزمية المعتمدة في الإعدادات (${configuredAlg}).`
+    );
+    (err as any).code = 'INVALID_TOKEN_ALGORITHM';
+    (err as any).statusCode = 401;
+    throw err;
+  }
+
+  // Prevent algorithm confusion: if an asymmetric public key is configured without a symmetric secret,
+  // reject any attempt to downgrade verification to HS256.
+  const hasPublicKeyConfig =
+    Boolean(process.env.SUPABASE_JWT_PUBLIC_KEY?.trim()) ||
+    Boolean(process.env.SUPABASE_JWT_PUBLIC_JWK?.trim());
+  const hasSecretConfig =
+    Boolean(process.env.SUPABASE_JWT_SECRET?.trim()) &&
+    !isPlaceholderValue(process.env.SUPABASE_JWT_SECRET!.trim());
+
+  if (alg === 'HS256' && hasPublicKeyConfig && !hasSecretConfig) {
+    const err = new Error(
+      'رفض أمني: لا يُسمح بخوارزمية HS256 عند ضبط مفتاح عام غير متماثل (منع هجوم Algorithm Confusion).'
+    );
+    (err as any).code = 'INVALID_TOKEN_ALGORITHM';
+    (err as any).statusCode = 401;
+    throw err;
+  }
+
+  if (alg === 'HS256') {
+    const jwtSecret = resolveJwtSecret();
+    const expectedSig = crypto
+      .createHmac('sha256', jwtSecret)
+      .update(signingInput)
+      .digest('base64url');
+
+    const sigBuffer = Buffer.from(signatureB64);
+    const expectedSigBuffer = Buffer.from(expectedSig);
+
+    if (
+      sigBuffer.length !== expectedSigBuffer.length ||
+      !crypto.timingSafeEqual(sigBuffer, expectedSigBuffer)
+    ) {
+      const err = new Error('توقيع رمز الدخول (HS256) غير صالح.');
+      (err as any).code = 'INVALID_TOKEN_SIGNATURE';
+      (err as any).statusCode = 401;
+      throw err;
+    }
+    return;
+  }
+
+  if (alg === 'ES256') {
+    const publicKey = resolveJwtPublicKey('ES256');
+    const sigBytes = Buffer.from(signatureB64, 'base64url');
+    const isValid = crypto.verify(
+      'sha256',
+      Buffer.from(signingInput, 'utf8'),
+      { key: publicKey, dsaEncoding: 'ieee-p1363' },
+      sigBytes
+    );
+    if (!isValid) {
+      const err = new Error('توقيع رمز الدخول غير المتماثل (ES256) غير صالح.');
+      (err as any).code = 'INVALID_TOKEN_SIGNATURE';
+      (err as any).statusCode = 401;
+      throw err;
+    }
+    return;
+  }
+
+  if (alg === 'RS256') {
+    const publicKey = resolveJwtPublicKey('RS256');
+    const sigBytes = Buffer.from(signatureB64, 'base64url');
+    const isValid = crypto.verify(
+      'RSA-SHA256',
+      Buffer.from(signingInput, 'utf8'),
+      publicKey,
+      sigBytes
+    );
+    if (!isValid) {
+      const err = new Error('توقيع رمز الدخول غير المتماثل (RS256) غير صالح.');
+      (err as any).code = 'INVALID_TOKEN_SIGNATURE';
+      (err as any).statusCode = 401;
+      throw err;
+    }
+    return;
+  }
+}
+
+/**
+ * Validates a Supabase JWT token.
+ * 1. Parses and validates the JWT header and signing algorithm FIRST (HS256, ES256, RS256).
+ * 2. Resolves the required verification key/secret and verifies the cryptographic signature (fails closed if missing).
+ * 3. Enforces trusted issuer (required in production), audience, expiration, and app_metadata.role.
  */
 export function verifyToken(token: string): AuthenticatedUser {
   if (!token || typeof token !== 'string') {
@@ -70,155 +279,157 @@ export function verifyToken(token: string): AuthenticatedUser {
     throw err;
   }
 
-  const jwtSecret = resolveJwtSecret();
-
   // Handle standard 3-part JWT format: header.payload.signature
   const parts = token.split('.');
-  if (parts.length === 3) {
-    const [headerB64, payloadB64, signatureB64] = parts;
+  if (parts.length !== 3 || !parts[0] || !parts[1] || !parts[2]) {
+    const err = new Error('صيغة رمز المصادقة غير مطابقة لمعايير JWT (Bearer Header.Payload.Signature).');
+    (err as any).code = 'MALFORMED_TOKEN';
+    (err as any).statusCode = 401;
+    throw err;
+  }
 
-    // Verify HMAC-SHA256 signature
-    const dataToSign = `${headerB64}.${payloadB64}`;
-    const expectedSig = crypto
-      .createHmac('sha256', jwtSecret)
-      .update(dataToSign)
-      .digest('base64url');
+  const [headerB64, payloadB64, signatureB64] = parts;
 
-    // Secure timing-safe comparison
-    const sigBuffer = Buffer.from(signatureB64);
-    const expectedSigBuffer = Buffer.from(expectedSig);
+  // Step 1: Parse header and verify signing algorithm BEFORE choosing verification implementation
+  let header: Record<string, any>;
+  try {
+    const headerJson = Buffer.from(headerB64, 'base64url').toString('utf8');
+    header = JSON.parse(headerJson);
+  } catch {
+    const err = new Error('فشل فك شفرة ترويسة الرمز الأمني (Header).');
+    (err as any).code = 'MALFORMED_TOKEN';
+    (err as any).statusCode = 401;
+    throw err;
+  }
 
-    if (
-      sigBuffer.length !== expectedSigBuffer.length ||
-      !crypto.timingSafeEqual(sigBuffer, expectedSigBuffer)
-    ) {
-      const err = new Error('توقيع رمز الدخول غير صالح (تم التلاعب به أو المفتاح غير مطابق).');
-      (err as any).code = 'INVALID_TOKEN_SIGNATURE';
+  if (
+    !header ||
+    typeof header !== 'object' ||
+    typeof header.alg !== 'string' ||
+    !SUPPORTED_JWT_ALGORITHMS.includes(header.alg as SupportedJwtAlgorithm)
+  ) {
+    const err = new Error(
+      `خوارزمية توقيع الرمز الأمني (${header?.alg ?? 'غير محددة'}) غير مدعومة أو مرفوضة.`
+    );
+    (err as any).code = 'INVALID_TOKEN_ALGORITHM';
+    (err as any).statusCode = 401;
+    throw err;
+  }
+
+  const alg = header.alg as SupportedJwtAlgorithm;
+
+  // Step 2: Verify cryptographic signature using the algorithm-specific verifier
+  verifyJwtSignatureByAlgorithm(alg, `${headerB64}.${payloadB64}`, signatureB64);
+
+  // Step 3: Parse and validate payload claims
+  let payload: Record<string, any>;
+  try {
+    const payloadJson = Buffer.from(payloadB64, 'base64url').toString('utf8');
+    payload = JSON.parse(payloadJson);
+  } catch {
+    const err = new Error('فشل فك شفرة حمولة الرمز الأمني.');
+    (err as any).code = 'MALFORMED_TOKEN';
+    (err as any).statusCode = 401;
+    throw err;
+  }
+
+  if (!payload || typeof payload !== 'object') {
+    const err = new Error('حمولة الرمز الأمني غير صالحة.');
+    (err as any).code = 'MALFORMED_TOKEN';
+    (err as any).statusCode = 401;
+    throw err;
+  }
+
+  // Step 4: Check token expiration (required numeric exp claim)
+  if (
+    typeof payload.exp !== 'number' ||
+    !Number.isFinite(payload.exp) ||
+    Date.now() >= payload.exp * 1000
+  ) {
+    const err = new Error('انتهت صلاحية رمز الدخول أو أن حقل الانتهاء مفقود. يرجى إعادة تسجيل الدخول.');
+    (err as any).code = 'TOKEN_EXPIRED';
+    (err as any).statusCode = 401;
+    throw err;
+  }
+
+  // Step 5: Check trusted issuer (required in production; fails closed if unconfigured in production)
+  const configuredIssuer = resolveTrustedIssuer();
+  if (process.env.NODE_ENV === 'production' || configuredIssuer !== undefined) {
+    if (typeof payload.iss !== 'string' || payload.iss.trim().length === 0 || payload.iss !== configuredIssuer) {
+      const err = new Error('مصدر الرمز الأمني (Issuer) مفقود أو غير مطابق للمصدر الموثوق.');
+      (err as any).code = 'INVALID_TOKEN_ISSUER';
       (err as any).statusCode = 401;
       throw err;
     }
-
-    try {
-      const headerJson = Buffer.from(headerB64, 'base64url').toString('utf8');
-      const header = JSON.parse(headerJson);
-      if (!header || header.alg !== 'HS256') {
-        const err = new Error('خوارزمية توقيع الرمز الأمني غير مدعومة (يجب أن تكون HS256).');
-        (err as any).code = 'INVALID_TOKEN_ALGORITHM';
-        (err as any).statusCode = 401;
-        throw err;
-      }
-
-      const payloadJson = Buffer.from(payloadB64, 'base64url').toString('utf8');
-      const payload = JSON.parse(payloadJson);
-
-      // Check token expiration (required numeric exp claim)
-      if (
-        typeof payload.exp !== 'number' ||
-        !Number.isFinite(payload.exp) ||
-        Date.now() >= payload.exp * 1000
-      ) {
-        const err = new Error('انتهت صلاحية رمز الدخول أو أن حقل الانتهاء مفقود. يرجى إعادة تسجيل الدخول.');
-        (err as any).code = 'TOKEN_EXPIRED';
-        (err as any).statusCode = 401;
-        throw err;
-      }
-
-      // Check token audience (standard Supabase JWT aud is 'authenticated')
-      if (payload.aud !== undefined || process.env.NODE_ENV === 'production') {
-        const isValidAud =
-          payload.aud === 'authenticated' ||
-          (Array.isArray(payload.aud) && payload.aud.includes('authenticated'));
-        if (!isValidAud) {
-          const err = new Error('جمهور الرمز الأمني غير صالح.');
-          (err as any).code = 'INVALID_TOKEN_AUDIENCE';
-          (err as any).statusCode = 401;
-          throw err;
-        }
-      }
-
-      // Check token issuer (iss) against configured Supabase issuer or approved dev issuers
-      const configuredIssuer =
-        process.env.SUPABASE_JWT_ISSUER?.trim() ||
-        (process.env.SUPABASE_URL && !process.env.SUPABASE_URL.includes('YOUR_PROJECT_REF')
-          ? `${process.env.SUPABASE_URL.trim().replace(/\/$/, '')}/auth/v1`
-          : undefined);
-
-      if (configuredIssuer) {
-        if (payload.iss !== configuredIssuer) {
-          const err = new Error('مصدر الرمز الأمني (Issuer) غير موثوق أو غير مطابق لإعدادات النظام.');
-          (err as any).code = 'INVALID_TOKEN_ISSUER';
-          (err as any).statusCode = 401;
-          throw err;
-        }
-      } else if (payload.iss !== undefined) {
-        const validDevIssuers = ['supabase', 'mashwar-auth'];
-        const isSupabaseAuthUrl =
-          typeof payload.iss === 'string' &&
-          /^https:\/\/[a-z0-9-]+\.supabase\.co\/auth\/v1$/.test(payload.iss);
-        if (!validDevIssuers.includes(payload.iss) && !isSupabaseAuthUrl) {
-          const err = new Error('مصدر الرمز الأمني (Issuer) غير صالح.');
-          (err as any).code = 'INVALID_TOKEN_ISSUER';
-          (err as any).statusCode = 401;
-          throw err;
-        }
-      }
-
-      // Check principal ID
-      const userId = payload.sub || payload.id;
-      if (!userId) {
-        const err = new Error('رمز الدخول لا يحتوي على معرف مستخدم معتمد.');
-        (err as any).code = 'INVALID_TOKEN_PAYLOAD';
-        (err as any).statusCode = 401;
-        throw err;
-      }
-
-      // Role must strictly come from server-managed app_metadata.role (never top-level payload.role or user_metadata)
-      const appMetadata = payload.app_metadata || {};
-      const role = appMetadata.role as UserRole;
-
-      const validRoles: UserRole[] = [
-        'owner',
-        'operations_dispatcher',
-        'support_agent',
-        'captain',
-        'customer',
-        'merchant',
-      ];
-
-      if (!role || !validRoles.includes(role)) {
-        const err = new Error('رمز الدخول لا يحتوي على دور أمني موثوق ومعتمد في النظام.');
-        (err as any).code = 'UNAUTHORIZED_ROLE';
-        (err as any).statusCode = 403;
-        throw err;
-      }
-
-      return {
-        id: userId,
-        role,
-        phone: payload.phone || payload.user_metadata?.phone,
-        fullName: payload.user_metadata?.full_name || payload.name,
-        email: payload.email,
-        appMetadata,
-        userMetadata: payload.user_metadata || {},
-      };
-    } catch (e: any) {
-      if (e.statusCode) throw e;
-      const err = new Error('فشل فك شفرة حمولة الرمز الأمني.');
-      (err as any).code = 'MALFORMED_TOKEN';
+  } else if (payload.iss !== undefined) {
+    const validTestIssuers = ['supabase', 'mashwar-auth'];
+    const isSupabaseAuthUrl =
+      typeof payload.iss === 'string' &&
+      /^https:\/\/[a-z0-9-]+\.supabase\.co\/auth\/v1$/.test(payload.iss);
+    if (!validTestIssuers.includes(payload.iss) && !isSupabaseAuthUrl) {
+      const err = new Error('مصدر الرمز الأمني (Issuer) غير صالح.');
+      (err as any).code = 'INVALID_TOKEN_ISSUER';
       (err as any).statusCode = 401;
       throw err;
     }
   }
 
-  // Handle format errors
-  const err = new Error('صيغة رمز المصادقة غير مطابقة لمعايير JWT (Bearer Header.Payload.Signature).');
-  (err as any).code = 'MALFORMED_TOKEN';
-  (err as any).statusCode = 401;
-  throw err;
+  // Step 6: Check token audience (standard Supabase JWT aud is 'authenticated')
+  if (payload.aud !== undefined || process.env.NODE_ENV === 'production') {
+    const isValidAud =
+      payload.aud === 'authenticated' ||
+      (Array.isArray(payload.aud) && payload.aud.includes('authenticated'));
+    if (!isValidAud) {
+      const err = new Error('جمهور الرمز الأمني غير صالح.');
+      (err as any).code = 'INVALID_TOKEN_AUDIENCE';
+      (err as any).statusCode = 401;
+      throw err;
+    }
+  }
+
+  // Step 7: Check principal ID
+  const userId = payload.sub || payload.id;
+  if (!userId || typeof userId !== 'string') {
+    const err = new Error('رمز الدخول لا يحتوي على معرف مستخدم معتمد.');
+    (err as any).code = 'INVALID_TOKEN_PAYLOAD';
+    (err as any).statusCode = 401;
+    throw err;
+  }
+
+  // Step 8: Role must strictly come from server-managed app_metadata.role
+  const appMetadata = payload.app_metadata || {};
+  const role = appMetadata.role as UserRole;
+
+  const validRoles: UserRole[] = [
+    'owner',
+    'operations_dispatcher',
+    'support_agent',
+    'captain',
+    'customer',
+    'merchant',
+  ];
+
+  if (!role || !validRoles.includes(role)) {
+    const err = new Error('رمز الدخول لا يحتوي على دور أمني موثوق ومعتمد في النظام.');
+    (err as any).code = 'UNAUTHORIZED_ROLE';
+    (err as any).statusCode = 403;
+    throw err;
+  }
+
+  return {
+    id: userId,
+    role,
+    phone: payload.phone || payload.user_metadata?.phone,
+    fullName: payload.user_metadata?.full_name || payload.name,
+    email: payload.email,
+    appMetadata,
+    userMetadata: payload.user_metadata || {},
+  };
 }
 
 /**
- * Creates a signed JWT for testing and demo flows (forbidden in production).
+ * Creates a signed JWT strictly for isolated test execution (NODE_ENV === 'test').
+ * Forbidden in production, staging, development, or unset NODE_ENV.
  */
 export function generateTestToken(params: {
   userId: string;
@@ -226,9 +437,11 @@ export function generateTestToken(params: {
   phone?: string;
   fullName?: string;
   expiresInSeconds?: number;
+  issuer?: string;
+  audience?: string;
 }): string {
-  if (process.env.NODE_ENV === 'production') {
-    const err = new Error('غير مسموح بتوليد رموز اختبارية في بيئة الإنتاج.');
+  if (!isIsolatedTestEnvironment()) {
+    const err = new Error('غير مسموح بتوليد رموز اختبارية خارج بيئة الاختبار المعزولة (NODE_ENV=test).');
     (err as any).code = 'TEST_TOKEN_FORBIDDEN_IN_PRODUCTION';
     (err as any).statusCode = 403;
     throw err;
@@ -241,8 +454,8 @@ export function generateTestToken(params: {
 
   const payload = {
     sub: params.userId,
-    iss: 'supabase',
-    aud: 'authenticated',
+    iss: params.issuer ?? process.env.SUPABASE_JWT_ISSUER?.trim() ?? 'supabase',
+    aud: params.audience ?? 'authenticated',
     app_metadata: {
       role: params.role,
       provider: 'phone',

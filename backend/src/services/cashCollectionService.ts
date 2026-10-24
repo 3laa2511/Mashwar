@@ -54,8 +54,9 @@ interface IdempotencyCacheEntry {
 }
 
 export class CashCollectionService {
-  // Order mutex lock table simulating PostgreSQL row-level locks for in-memory testing
+  // Order and Captain mutex lock tables simulating PostgreSQL row-level locks for in-memory testing
   private static orderLocks: Map<string, Promise<void>> = new Map();
+  private static captainLocks: Map<string, Promise<void>> = new Map();
 
   // In-memory idempotency cache synchronized with persistent ledger for in-memory testing
   private static idempotencyCache: Map<string, IdempotencyCacheEntry> = new Map();
@@ -98,7 +99,17 @@ export class CashCollectionService {
 
     // 2. Execute within an ACID PostgreSQL transaction with READ COMMITTED isolation
     return await db.transaction().setIsolationLevel('read committed').execute(async (trx) => {
-      // 2a. Check database-backed idempotency table first
+      // 2a. Atomic Row-Level Lock on Order FIRST (PostgreSQL: SELECT ... FOR UPDATE)
+      // Acquiring the order row lock before checking cash_collections ensures concurrent
+      // requests for the same order serialize cleanly before evaluating idempotency or is_paid.
+      const order = await trx
+        .selectFrom('orders')
+        .where('id', '=', orderId)
+        .forUpdate()
+        .selectAll()
+        .executeTakeFirst();
+
+      // 2b. Check database-backed idempotency table inside the serialized critical section
       const existingCollection = await trx
         .selectFrom('cash_collections')
         .where('idempotency_key', '=', effectiveKey)
@@ -117,13 +128,6 @@ export class CashCollectionService {
           (err as any).statusCode = 409;
           throw err;
         }
-
-        // Idempotent replay: Fetch order and captain rows to construct authoritative receipt
-        const orderRow = await trx
-          .selectFrom('orders')
-          .where('id', '=', existingCollection.order_id)
-          .selectAll()
-          .executeTakeFirst();
 
         const captainRow = await trx
           .selectFrom('captains')
@@ -149,14 +153,6 @@ export class CashCollectionService {
           recordedAt: existingCollection.created_at,
         };
       }
-
-      // 2b. Atomic Row-Level Lock on Order (PostgreSQL: SELECT ... FOR UPDATE)
-      const order = await trx
-        .selectFrom('orders')
-        .where('id', '=', orderId)
-        .forUpdate()
-        .selectAll()
-        .executeTakeFirst();
 
       if (!order) {
         const err = new Error('الطلب غير موجود لتسجيل التحصيل النقدي.');
@@ -353,15 +349,22 @@ export class CashCollectionService {
       };
     }
 
-    // 3. Row-Level Lock Acquisition (Simulates SELECT * FROM orders WHERE id = $1 FOR UPDATE)
-    const prevLock = this.orderLocks.get(orderId) || Promise.resolve();
-    let releaseLock!: () => void;
-    const currentLock = new Promise<void>((resolve) => {
-      releaseLock = resolve;
+    // 3. Row-Level Lock Acquisition (Simulates SELECT * FROM orders FOR UPDATE and SELECT * FROM captains FOR UPDATE)
+    const prevOrderLock = this.orderLocks.get(orderId) || Promise.resolve();
+    let releaseOrderLock!: () => void;
+    const currentOrderLock = new Promise<void>((resolve) => {
+      releaseOrderLock = resolve;
     });
+    this.orderLocks.set(orderId, prevOrderLock.then(() => currentOrderLock).catch(() => currentOrderLock));
+    await prevOrderLock;
 
-    this.orderLocks.set(orderId, prevLock.then(() => currentLock).catch(() => currentLock));
-    await prevLock;
+    const prevCaptainLock = this.captainLocks.get(captain.id) || Promise.resolve();
+    let releaseCaptainLock!: () => void;
+    const currentCaptainLock = new Promise<void>((resolve) => {
+      releaseCaptainLock = resolve;
+    });
+    this.captainLocks.set(captain.id, prevCaptainLock.then(() => currentCaptainLock).catch(() => currentCaptainLock));
+    await prevCaptainLock;
 
     try {
       // 3b. Re-check Idempotency Key inside critical section for concurrent identical requests
@@ -459,24 +462,27 @@ export class CashCollectionService {
 
       PersistentStore.saveOrder(updatedOrder);
 
-      // 10. Update Captain Cash Holding & Check 100,000 piasters (1,000 EGP) ceiling
-      const previousHolding = captain.cashHoldingPiasters;
+      // 10. Read latest Captain state inside lock & update Cash Holding + 100,000 piasters (1,000 EGP) ceiling
+      const storedCaptain = PersistentStore.getCaptainById(captain.id) || captain;
+      const previousHolding = storedCaptain.cashHoldingPiasters;
       const newHolding = previousHolding + amountPiasters;
+      storedCaptain.cashHoldingPiasters = newHolding;
       captain.cashHoldingPiasters = newHolding;
 
-      const ceilingExceeded = newHolding > captain.maxCashHoldingPiasters;
-      if (ceilingExceeded && captain.subscriptionStatus === 'active') {
+      const ceilingExceeded = newHolding > storedCaptain.maxCashHoldingPiasters;
+      if (ceilingExceeded && storedCaptain.subscriptionStatus === 'active') {
+        storedCaptain.subscriptionStatus = 'suspended';
         captain.subscriptionStatus = 'suspended';
       }
 
-      PersistentStore.saveCaptain(captain);
+      PersistentStore.saveCaptain(storedCaptain);
 
       // 11. Immutable Ledger Insertion
       const ledgerEntryId = `ledger_${crypto.randomBytes(8).toString('hex')}`;
       AuditLogger.record({
-        actorId: captain.userId,
+        actorId: storedCaptain.userId,
         actorRole: 'captain',
-        actorName: captain.fullName,
+        actorName: storedCaptain.fullName,
         actionType: 'CAPTAIN_CASH_SETTLED',
         targetEntity: 'order',
         targetId: order.id,
@@ -485,7 +491,7 @@ export class CashCollectionService {
         newState: {
           cashHoldingPiasters: newHolding,
           isPaid: true,
-          subscriptionStatus: captain.subscriptionStatus,
+          subscriptionStatus: storedCaptain.subscriptionStatus,
           ceilingExceeded,
         },
         notes: notes || (ceilingExceeded ? 'تجاوز حد العهدة المسموح به (1,000 ج.م) وتم تعليق الحساب مؤقتاً لحين التوريد' : undefined),
@@ -514,7 +520,8 @@ export class CashCollectionService {
       });
       return result;
     } finally {
-      releaseLock();
+      releaseCaptainLock();
+      releaseOrderLock();
     }
   }
 
@@ -524,5 +531,6 @@ export class CashCollectionService {
   public static clearCache(): void {
     this.idempotencyCache.clear();
     this.orderLocks.clear();
+    this.captainLocks.clear();
   }
 }

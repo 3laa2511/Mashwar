@@ -106,6 +106,9 @@ export async function runAllTests(): Promise<{
   failed: number;
   results: TestResult[];
 }> {
+  // Explicitly enter isolated test environment so test token helpers are permitted
+  process.env.NODE_ENV = 'test';
+
   console.log('================================================================');
   console.log(' MASHWAR — BACKEND INTEGRATION TEST SUITE (EL BAGOUR HUB)');
   console.log(' Execution Environment: Node.js / TypeScript / Pure Integer Units');
@@ -781,25 +784,232 @@ export async function runAllTests(): Promise<{
     assert(user.phone === '+201012345671', 'Phone must match user metadata');
   });
 
-  await runTest('Auth', 'Fails closed in production when SUPABASE_JWT_SECRET is missing and forbids generateTestToken in production', () => {
+  await runTest('Auth', 'Fails closed across all non-test environments (production, staging, development, unset) when SUPABASE_JWT_SECRET is missing or placeholder', () => {
     const sampleToken = generateTestToken({ userId: 'usr_cpt_01', role: 'captain' });
     const prevNodeEnv = process.env.NODE_ENV;
     const prevSecret = process.env.SUPABASE_JWT_SECRET;
 
     try {
-      process.env.NODE_ENV = 'production';
       delete process.env.SUPABASE_JWT_SECRET;
 
+      for (const envName of ['production', 'staging', 'development', undefined]) {
+        if (envName === undefined) delete process.env.NODE_ENV;
+        else process.env.NODE_ENV = envName;
+
+        assertThrows(() => {
+          verifyToken(sampleToken);
+        }, 'AUTH_CONFIG_MISSING');
+
+        assertThrows(() => {
+          generateTestToken({ userId: 'usr_cpt_01', role: 'captain' });
+        }, 'TEST_TOKEN_FORBIDDEN_IN_PRODUCTION');
+      }
+
+      // Placeholder secret from .env.example must also fail closed outside isolated tests
+      process.env.NODE_ENV = 'development';
+      process.env.SUPABASE_JWT_SECRET = 'CHANGE_ME_MIN_32_CHAR_SUPABASE_JWT_SECRET';
       assertThrows(() => {
         verifyToken(sampleToken);
       }, 'AUTH_CONFIG_MISSING');
-
-      assertThrows(() => {
-        generateTestToken({ userId: 'usr_cpt_01', role: 'captain' });
-      }, 'TEST_TOKEN_FORBIDDEN_IN_PRODUCTION');
     } finally {
       if (prevNodeEnv === undefined) delete process.env.NODE_ENV;
       else process.env.NODE_ENV = prevNodeEnv;
+
+      if (prevSecret === undefined) delete process.env.SUPABASE_JWT_SECRET;
+      else process.env.SUPABASE_JWT_SECRET = prevSecret;
+    }
+  });
+
+  await runTest('Auth', 'Requires configured trusted issuer in production and rejects tokens with missing or mismatched iss', () => {
+    const prevNodeEnv = process.env.NODE_ENV;
+    const prevSecret = process.env.SUPABASE_JWT_SECRET;
+    const prevIssuer = process.env.SUPABASE_JWT_ISSUER;
+    const prevUrl = process.env.SUPABASE_URL;
+
+    try {
+      const prodSecret = 'prod_strong_hmac_secret_el_bagour_2026_verified';
+      const trustedIssuer = 'https://mashwar-prod-ref.supabase.co/auth/v1';
+
+      // Sign tokens while in isolated test mode
+      process.env.NODE_ENV = 'test';
+      process.env.SUPABASE_JWT_SECRET = prodSecret;
+
+      const validProdToken = generateTestToken({
+        userId: 'usr_cpt_01',
+        role: 'captain',
+        issuer: trustedIssuer,
+      });
+      const mismatchedIssToken = generateTestToken({
+        userId: 'usr_cpt_01',
+        role: 'captain',
+        issuer: 'https://wrong-project.supabase.co/auth/v1',
+      });
+
+      // Construct a token with no iss claim at all
+      const headerB64 = Buffer.from(JSON.stringify({ alg: 'HS256', typ: 'JWT' })).toString('base64url');
+      const noIssPayloadB64 = Buffer.from(
+        JSON.stringify({
+          sub: 'usr_cpt_01',
+          aud: 'authenticated',
+          app_metadata: { role: 'captain' },
+          exp: Math.floor(Date.now() / 1000) + 3600,
+        })
+      ).toString('base64url');
+      const noIssSig = crypto
+        .createHmac('sha256', prodSecret)
+        .update(`${headerB64}.${noIssPayloadB64}`)
+        .digest('base64url');
+      const missingIssToken = `${headerB64}.${noIssPayloadB64}.${noIssSig}`;
+
+      // Switch to production
+      process.env.NODE_ENV = 'production';
+      delete process.env.SUPABASE_JWT_ISSUER;
+      delete process.env.SUPABASE_URL;
+
+      // 1. Missing configured issuer on server in production -> 500 AUTH_CONFIG_MISSING
+      assertThrows(() => {
+        verifyToken(validProdToken);
+      }, 'AUTH_CONFIG_MISSING');
+
+      // 2. Configure trusted issuer via SUPABASE_URL
+      process.env.SUPABASE_URL = 'https://mashwar-prod-ref.supabase.co';
+
+      // Token with missing iss in production -> 401 INVALID_TOKEN_ISSUER
+      assertThrows(() => {
+        verifyToken(missingIssToken);
+      }, 'INVALID_TOKEN_ISSUER');
+
+      // Token with mismatched iss in production -> 401 INVALID_TOKEN_ISSUER
+      assertThrows(() => {
+        verifyToken(mismatchedIssToken);
+      }, 'INVALID_TOKEN_ISSUER');
+
+      // Token with matching iss in production -> succeeds
+      const verified = verifyToken(validProdToken);
+      assert(verified.id === 'usr_cpt_01', 'Verified production user ID must match');
+      assert(verified.role === 'captain', 'Verified production user role must match');
+    } finally {
+      if (prevNodeEnv === undefined) delete process.env.NODE_ENV;
+      else process.env.NODE_ENV = prevNodeEnv;
+
+      if (prevSecret === undefined) delete process.env.SUPABASE_JWT_SECRET;
+      else process.env.SUPABASE_JWT_SECRET = prevSecret;
+
+      if (prevIssuer === undefined) delete process.env.SUPABASE_JWT_ISSUER;
+      else process.env.SUPABASE_JWT_ISSUER = prevIssuer;
+
+      if (prevUrl === undefined) delete process.env.SUPABASE_URL;
+      else process.env.SUPABASE_URL = prevUrl;
+    }
+  });
+
+  await runTest('Auth', 'Verifies Supabase asymmetric ES256 (P-256) and RS256 tokens and prevents HS256 algorithm confusion', () => {
+    const prevPubPem = process.env.SUPABASE_JWT_PUBLIC_KEY;
+    const prevPubJwk = process.env.SUPABASE_JWT_PUBLIC_JWK;
+    const prevAlg = process.env.SUPABASE_JWT_ALG;
+    const prevSecret = process.env.SUPABASE_JWT_SECRET;
+
+    try {
+      delete process.env.SUPABASE_JWT_SECRET;
+
+      // 1. Generate ECDSA P-256 (prime256v1) key pair for Supabase ES256
+      const { privateKey: ecPriv, publicKey: ecPub } = crypto.generateKeyPairSync('ec', {
+        namedCurve: 'prime256v1',
+      });
+      const ecPubPem = ecPub.export({ type: 'spki', format: 'pem' }).toString();
+      const ecPubJwk = JSON.stringify(ecPub.export({ format: 'jwk' }));
+
+      const esHeaderB64 = Buffer.from(JSON.stringify({ alg: 'ES256', typ: 'JWT' })).toString('base64url');
+      const claimsB64 = Buffer.from(
+        JSON.stringify({
+          sub: 'usr_cpt_es256',
+          iss: 'supabase',
+          aud: 'authenticated',
+          app_metadata: { role: 'captain' },
+          exp: Math.floor(Date.now() / 1000) + 3600,
+        })
+      ).toString('base64url');
+
+      const esSig = crypto
+        .sign('sha256', Buffer.from(`${esHeaderB64}.${claimsB64}`, 'utf8'), {
+          key: ecPriv,
+          dsaEncoding: 'ieee-p1363',
+        })
+        .toString('base64url');
+      const es256Token = `${esHeaderB64}.${claimsB64}.${esSig}`;
+
+      // Missing public key for ES256 must fail closed with AUTH_CONFIG_MISSING
+      delete process.env.SUPABASE_JWT_PUBLIC_KEY;
+      delete process.env.SUPABASE_JWT_PUBLIC_JWK;
+      assertThrows(() => {
+        verifyToken(es256Token);
+      }, 'AUTH_CONFIG_MISSING');
+
+      // Verify ES256 with PEM public key
+      process.env.SUPABASE_JWT_PUBLIC_KEY = ecPubPem;
+      const esUserPem = verifyToken(es256Token);
+      assert(esUserPem.id === 'usr_cpt_es256', 'ES256 PEM verification must extract sub');
+      assert(esUserPem.role === 'captain', 'ES256 PEM verification must extract role');
+
+      // Verify ES256 with JWK public key
+      delete process.env.SUPABASE_JWT_PUBLIC_KEY;
+      process.env.SUPABASE_JWT_PUBLIC_JWK = ecPubJwk;
+      const esUserJwk = verifyToken(es256Token);
+      assert(esUserJwk.id === 'usr_cpt_es256', 'ES256 JWK verification must extract sub');
+
+      // Forged ES256 signature must fail with INVALID_TOKEN_SIGNATURE
+      const forgedEs256Token = `${esHeaderB64}.${claimsB64}.${Buffer.alloc(64, 7).toString('base64url')}`;
+      assertThrows(() => {
+        verifyToken(forgedEs256Token);
+      }, 'INVALID_TOKEN_SIGNATURE');
+
+      // Prevent algorithm confusion: attacker signs an HS256 token while server has only asymmetric public key configured
+      const hsHeaderB64 = Buffer.from(JSON.stringify({ alg: 'HS256', typ: 'JWT' })).toString('base64url');
+      const confusedSig = crypto
+        .createHmac('sha256', ecPubPem)
+        .update(`${hsHeaderB64}.${claimsB64}`)
+        .digest('base64url');
+      const confusedToken = `${hsHeaderB64}.${claimsB64}.${confusedSig}`;
+      assertThrows(() => {
+        verifyToken(confusedToken);
+      }, 'INVALID_TOKEN_ALGORITHM');
+
+      // Reject alg: "none"
+      const noneHeaderB64 = Buffer.from(JSON.stringify({ alg: 'none', typ: 'JWT' })).toString('base64url');
+      assertThrows(() => {
+        verifyToken(`${noneHeaderB64}.${claimsB64}.${esSig}`);
+      }, 'INVALID_TOKEN_ALGORITHM');
+
+      // 2. Generate RSA 2048 key pair for RS256 verification
+      delete process.env.SUPABASE_JWT_PUBLIC_JWK;
+      const { privateKey: rsaPriv, publicKey: rsaPub } = crypto.generateKeyPairSync('rsa', {
+        modulusLength: 2048,
+      });
+      process.env.SUPABASE_JWT_PUBLIC_KEY = rsaPub.export({ type: 'spki', format: 'pem' }).toString();
+
+      const rsHeaderB64 = Buffer.from(JSON.stringify({ alg: 'RS256', typ: 'JWT' })).toString('base64url');
+      const rsSig = crypto
+        .sign('RSA-SHA256', Buffer.from(`${rsHeaderB64}.${claimsB64}`, 'utf8'), rsaPriv)
+        .toString('base64url');
+      const rs256Token = `${rsHeaderB64}.${claimsB64}.${rsSig}`;
+
+      const rsUser = verifyToken(rs256Token);
+      assert(rsUser.id === 'usr_cpt_es256', 'RS256 verification must extract sub');
+
+      // Enforce SUPABASE_JWT_ALG mismatch rejection
+      process.env.SUPABASE_JWT_ALG = 'ES256';
+      assertThrows(() => {
+        verifyToken(rs256Token);
+      }, 'INVALID_TOKEN_ALGORITHM');
+    } finally {
+      if (prevPubPem === undefined) delete process.env.SUPABASE_JWT_PUBLIC_KEY;
+      else process.env.SUPABASE_JWT_PUBLIC_KEY = prevPubPem;
+
+      if (prevPubJwk === undefined) delete process.env.SUPABASE_JWT_PUBLIC_JWK;
+      else process.env.SUPABASE_JWT_PUBLIC_JWK = prevPubJwk;
+
+      if (prevAlg === undefined) delete process.env.SUPABASE_JWT_ALG;
+      else process.env.SUPABASE_JWT_ALG = prevAlg;
 
       if (prevSecret === undefined) delete process.env.SUPABASE_JWT_SECRET;
       else process.env.SUPABASE_JWT_SECRET = prevSecret;
@@ -1413,6 +1623,70 @@ export async function runAllTests(): Promise<{
     assert(initialCollects.length === 1, 'Exactly one initial cash collection must execute');
     assert(replays.length === 4, 'Remaining concurrent requests must resolve as idempotent replays');
     assert(testCaptain.cashHoldingPiasters === 12500, 'Captain balance must increase by fare exactly once');
+  });
+
+  await runTest('PostgreSqlTransaction', 'Serializes concurrent cash collections across two distinct orders for the same captain without lost balance updates (in-memory mutex)', async () => {
+    CashCollectionService.clearCache();
+    const multiCap: CaptainProfile = {
+      id: 'cpt_multi_order_race',
+      userId: 'usr_multi_order_race',
+      fullName: 'كابتن متعدد الطلبات',
+      phone: '+201122334455',
+      nationalIdMasked: '29000000000099',
+      vehicleType: 'motorcycle',
+      vehiclePlate: '٥٥٥٥ م ن',
+      subscriptionStatus: 'active',
+      subscriptionPlanCode: 'STANDARD',
+      currentPeriodEndsAt: new Date(Date.now() + 86400000).toISOString(),
+      cashHoldingPiasters: 20000,
+      maxCashHoldingPiasters: 100000,
+      ratingAverage: 4.9,
+      isOnline: true,
+    };
+    PersistentStore.saveCaptain(multiCap);
+
+    const orderA: Order = {
+      ...baseOrder,
+      id: 'ord_multi_race_A',
+      totalFarePiasters: 3000,
+      assignedCaptainId: multiCap.id,
+      status: 'in_transit',
+      paymentMethod: 'cash_on_delivery',
+      isPaid: false,
+    };
+    const orderB: Order = {
+      ...baseOrder,
+      id: 'ord_multi_race_B',
+      totalFarePiasters: 4500,
+      assignedCaptainId: multiCap.id,
+      status: 'in_transit',
+      paymentMethod: 'cash_on_delivery',
+      isPaid: false,
+    };
+    PersistentStore.saveOrder(orderA);
+    PersistentStore.saveOrder(orderB);
+
+    // Pass detached clones of multiCap to verify that the service reads the latest committed balance from PersistentStore inside the captain lock
+    await Promise.all([
+      CashCollectionService.recordCashCollection({
+        orderId: orderA.id,
+        captain: { ...multiCap },
+        amountPiasters: 3000,
+        idempotencyKey: 'multi_key_A',
+      }),
+      CashCollectionService.recordCashCollection({
+        orderId: orderB.id,
+        captain: { ...multiCap },
+        amountPiasters: 4500,
+        idempotencyKey: 'multi_key_B',
+      }),
+    ]);
+
+    const finalCaptain = PersistentStore.getCaptainById(multiCap.id)!;
+    assert(
+      finalCaptain.cashHoldingPiasters === 27500,
+      `Expected cumulative captain balance 27500 (20000 + 3000 + 4500), got ${finalCaptain.cashHoldingPiasters}`
+    );
   });
 
   await runTest('PostgreSqlTransaction', 'Ensures rollback on validation failure leaves captain balance and ledger untouched', async () => {

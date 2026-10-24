@@ -366,16 +366,17 @@ router.get('/merchant/orders', authenticate, requireRoles('merchant', 'owner', '
 // ----------------------------------------------------------------------------
 router.post('/orders', authenticate, orderCreateRateLimiter, (req: Request, res: Response) => {
   try {
-    const idempotencyKey = req.headers['idempotency-key'] as string;
-    if (idempotencyKey && idempotencyStore.has(idempotencyKey)) {
-      const cached = idempotencyStore.get(idempotencyKey)!;
-      return res.status(200).json(cached.responseBody);
-    }
-
     // Role check: Only customer, merchant, or admin can place orders
     const user = req.user!;
     if (user.role !== 'customer' && user.role !== 'merchant' && user.role !== 'owner') {
       return sendError(res, 'FORBIDDEN_ROLE', 'غير مصرح لهذا الحساب بإنشاء طلبات.', 403);
+    }
+
+    const idempotencyKey = req.headers['idempotency-key'] as string;
+    const scopedIdempotencyKey = idempotencyKey ? `${user.id}:${idempotencyKey}` : undefined;
+    if (scopedIdempotencyKey && idempotencyStore.has(scopedIdempotencyKey)) {
+      const cached = idempotencyStore.get(scopedIdempotencyKey)!;
+      return res.status(200).json(cached.responseBody);
     }
 
     const {
@@ -523,8 +524,8 @@ router.post('/orders', authenticate, orderCreateRateLimiter, (req: Request, res:
       },
     };
 
-    if (idempotencyKey) {
-      idempotencyStore.set(idempotencyKey, {
+    if (scopedIdempotencyKey) {
+      idempotencyStore.set(scopedIdempotencyKey, {
         orderId: newOrder.id,
         responseBody: responsePayload,
       });
@@ -595,9 +596,10 @@ router.get('/orders/:id', authenticate, async (req: Request, res: Response) => {
 
     const isAssigned = order.assignedCaptainId === captain.id;
     const isBroadcast =
-      order.status === 'searching_captain' ||
-      order.status === 'created' ||
-      order.status === 'ready_for_pickup';
+      !order.assignedCaptainId &&
+      (order.status === 'searching_captain' ||
+        order.status === 'created' ||
+        order.status === 'ready_for_pickup');
 
     if (!isAssigned && !isBroadcast) {
       return sendError(res, 'FORBIDDEN_RESOURCE', 'غير مصرح لك بالاطلاع على طلب مسند لكابتن آخر.', 403);
@@ -1116,8 +1118,14 @@ router.post('/payments/intents', authenticate, (req: Request, res: Response) => 
   }
 
   const user = req.user!;
+  if (user.role === 'captain') {
+    return sendError(res, 'FORBIDDEN_ROLE', 'غير مصرح للكابتن بإصدار تفويض دفع للعميل.', 403);
+  }
   if (user.role === 'customer' && order.customerId !== user.id) {
     return sendError(res, 'FORBIDDEN_RESOURCE', 'غير مصرح لك بإصدار دفع لطلب عميل آخر.', 403);
+  }
+  if (user.role === 'merchant' && order.customerId !== user.id && order.merchantUserId !== user.id) {
+    return sendError(res, 'FORBIDDEN_RESOURCE', 'غير مصرح للمتجر بإصدار دفع لطلب لا يخصه.', 403);
   }
 
   const paymentIntentId = `pi_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
