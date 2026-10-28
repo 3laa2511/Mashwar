@@ -267,7 +267,6 @@ class HttpOrderRepository implements IOrderRepository {
       case OrderStatus.cancelled:
         return 'cancelled';
       case OrderStatus.created:
-      default:
         return 'created';
     }
   }
