@@ -73,3 +73,20 @@ Use real PostgreSQL in CI (service container) for persistence and transaction te
 ## 7. Exit criteria
 
 Phase 2 is not complete until persistent data survives restarts, sensitive mutations are transactional and idempotent, commercial policies are enforced server-side, real PostgreSQL integration tests pass, and CI evidence is attached to the pull request. A successful TypeScript build or in-memory test suite alone does not satisfy these criteria.
+
+
+## 8. Additional migration and connection safety gates
+
+Repository inspection of `backend/src/database/migrator.ts` and `backend/src/database/db.ts` identified two items that must be resolved before any live migration is considered:
+
+- **Migration execution tracking:** `verifyOrRunMigrations(true)` iterates over every entry in `MIGRATIONS` and calls each `up` function when a database is configured. The inspected path does not itself show a durable applied-migration registry or skip logic. Before live use, add a migration ledger with a unique migration name, transactionally record successful application, and refuse to silently rerun an already-applied migration. Confirm whether each migration is safe for transactional execution; fail closed on partial/unknown state. Never run this against production as part of ordinary CI.
+- **TLS certificate verification:** `getDb()` sets `rejectUnauthorized: false` for production or connection strings containing `supabase`. This disables certificate-chain/hostname verification in Node's TLS client. Replace this with certificate verification by default and an explicit, documented CA configuration for providers that require it. Do not solve certificate errors by globally disabling verification.
+
+Required tests before approval:
+1. Applying migrations to a disposable PostgreSQL database records each migration exactly once.
+2. Running the migrator a second time performs no duplicate DDL/data effects and reports migrations as already applied.
+3. A failed migration is not recorded as successful; retry behavior is deterministic and safe.
+4. CI migration tests use a disposable service database and cannot receive production credentials.
+5. TLS configuration verifies server certificates by default; any custom CA must be explicitly configured and tested.
+
+These are repository-code findings, not evidence that a live database has been inspected or migrated. Do not create migration 003 until the registry behavior, existing migration idempotency, and actual schema state are reconciled.
