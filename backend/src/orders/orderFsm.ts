@@ -64,6 +64,19 @@ export class OrderFsm {
       throw err;
     }
 
+    // Invariant 1b: Validate existing acceptance timestamp integrity if present
+    if (
+      order.acceptedAt !== undefined &&
+      (typeof order.acceptedAt !== 'string' ||
+        order.acceptedAt.trim().length === 0 ||
+        Number.isNaN(Date.parse(order.acceptedAt)))
+    ) {
+      const err = new Error('طابع وقت القبول المسجل بالطلب غير صالح (يجب أن يكون بصيغة ISO-8601 صحيحة).');
+      (err as any).code = 'INVALID_ORDER_TIMESTAMP';
+      (err as any).statusCode = 422;
+      throw err;
+    }
+
     // Invariant 2: Check legal transition in FSM graph
     if (!this.canTransition(currentStatus, targetStatus)) {
       const err = new Error(
@@ -94,7 +107,7 @@ export class OrderFsm {
 
     // Invariant 4: Precondition check for Captain Assignment
     if (targetStatus === 'captain_assigned') {
-      if (!order.assignedCaptainId) {
+      if (typeof order.assignedCaptainId !== 'string' || order.assignedCaptainId.trim().length === 0) {
         const err = new Error('لا يمكن تحويل الطلب إلى "تم إسناد الكابتن" بدون تحديد هوية كابتن معتمد.');
         (err as any).code = 'MISSING_ASSIGNED_CAPTAIN';
         (err as any).statusCode = 422;

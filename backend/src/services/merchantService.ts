@@ -7,7 +7,7 @@
 import { Store, MenuCategory, MenuItem } from '../types/index.js';
 import { PersistentStore } from '../store/persistentStore.js';
 import { AuditLogger } from '../security/auditLogger.js';
-import { UserRole } from '../security/rbac.js';
+import { AccessControlGuard, UserRole } from '../security/rbac.js';
 
 export class MerchantService {
   /**
@@ -44,12 +44,52 @@ export class MerchantService {
   }
 
   /**
-   * Verifies that the authenticated actor is either the owner of the store or an authorized admin.
+   * Verifies that the authenticated actor is either:
+   * 1) An authorized administrative role ('owner' or 'operations_dispatcher') holding 'manage_merchants'
+   *    AND acting within the active company/tenant city & zone scope; OR
+   * 2) The owning 'merchant' (`store.merchantUserId === actorId`).
    */
-  public static assertStoreOwnership(store: Store, actorId: string, actorRole: UserRole): void {
+  public static assertStoreOwnership(
+    store: Store,
+    actorId: string,
+    actorRole: UserRole,
+    actorCityScopeId?: string
+  ): void {
+    if (!actorId || typeof actorId !== 'string' || actorId.trim() === '') {
+      const err = new Error('هوية المستخدم غير موثقة لإدارة المتجر.');
+      (err as any).code = 'UNAUTHENTICATED_STORE_ACTOR';
+      (err as any).statusCode = 401;
+      throw err;
+    }
+
     if (actorRole === 'owner' || actorRole === 'operations_dispatcher') {
+      // Enforce RBAC permission 'manage_merchants'
+      AccessControlGuard.checkPermission(actorRole, 'manage_merchants');
+
+      // Enforce company/tenant scope: store must belong to an active company city and active service zone
+      const activeCompanyCities = PersistentStore.getAllCities();
+      const storeCity = activeCompanyCities.find((c) => c.id === store.cityId && c.isActive);
+      const storeZone = PersistentStore.getZoneById(store.zoneId);
+
+      if (!storeCity || !storeZone || !storeZone.isActive) {
+        const err = new Error('المتجر يقع خارج النطاق الجغرافي والتشغيلي المعتمد للشركة.');
+        (err as any).code = 'FORBIDDEN_TENANT_SCOPE';
+        (err as any).statusCode = 403;
+        throw err;
+      }
+
+      if (actorCityScopeId && actorCityScopeId.trim() !== '' && actorCityScopeId !== store.cityId) {
+        const err = new Error(
+          `غير مصرح بإدارة متجر في مدينة (${store.cityId}) خارج نطاق صلاحيات المدينة المحدد (${actorCityScopeId}).`
+        );
+        (err as any).code = 'FORBIDDEN_TENANT_SCOPE';
+        (err as any).statusCode = 403;
+        throw err;
+      }
+
       return;
     }
+
     if (actorRole !== 'merchant' || store.merchantUserId !== actorId) {
       const err = new Error('غير مصرح لك بتعديل بيانات أو قائمة منتجات متجر لا تملكه.');
       (err as any).code = 'FORBIDDEN_STORE_OWNERSHIP';
@@ -66,6 +106,7 @@ export class MerchantService {
     actorId: string;
     actorRole: UserRole;
     actorName: string;
+    actorCityScopeId?: string;
     isOpen?: boolean;
     prepTimeMinutes?: number;
     minOrderPiasters?: number;
@@ -78,7 +119,7 @@ export class MerchantService {
       throw err;
     }
 
-    this.assertStoreOwnership(store, params.actorId, params.actorRole);
+    this.assertStoreOwnership(store, params.actorId, params.actorRole, params.actorCityScopeId);
 
     if (
       params.minOrderPiasters !== undefined &&
@@ -86,6 +127,16 @@ export class MerchantService {
     ) {
       const err = new Error('الحد الأدنى للطلب بالقرش يجب أن يكون عدداً صحيحاً غير سالب.');
       (err as any).code = 'INVALID_MIN_ORDER_PIASTERS';
+      (err as any).statusCode = 400;
+      throw err;
+    }
+
+    if (
+      params.prepTimeMinutes !== undefined &&
+      (!Number.isInteger(params.prepTimeMinutes) || params.prepTimeMinutes < 1 || params.prepTimeMinutes > 240)
+    ) {
+      const err = new Error('وقت التحضير بالدقائق يجب أن يكون عدداً صحيحاً بين 1 و 240 دقيقة.');
+      (err as any).code = 'INVALID_PREP_TIME_MINUTES';
       (err as any).statusCode = 400;
       throw err;
     }
@@ -126,6 +177,7 @@ export class MerchantService {
     actorId: string;
     actorRole: UserRole;
     actorName: string;
+    actorCityScopeId?: string;
     categoryId?: string;
     categoryNameAr: string;
     nameAr: string;
@@ -142,7 +194,7 @@ export class MerchantService {
       throw err;
     }
 
-    this.assertStoreOwnership(store, params.actorId, params.actorRole);
+    this.assertStoreOwnership(store, params.actorId, params.actorRole, params.actorCityScopeId);
 
     if (!params.nameAr || params.nameAr.trim().length < 2) {
       const err = new Error('اسم الصنف مطلوب ويجب ألا يقل عن حرفين.');
@@ -198,6 +250,7 @@ export class MerchantService {
     actorId: string;
     actorRole: UserRole;
     actorName: string;
+    actorCityScopeId?: string;
     nameAr?: string;
     descriptionAr?: string;
     pricePiasters?: number;
@@ -211,7 +264,7 @@ export class MerchantService {
       throw err;
     }
 
-    this.assertStoreOwnership(store, params.actorId, params.actorRole);
+    this.assertStoreOwnership(store, params.actorId, params.actorRole, params.actorCityScopeId);
 
     const existingItem = PersistentStore.getMenuItemById(params.itemId);
     if (!existingItem || existingItem.storeId !== store.id) {

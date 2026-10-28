@@ -79,7 +79,19 @@ interface OrderItem {
   customerPhone: string;
   serviceType: 'package' | 'restaurant_store' | 'errand';
   serviceTypeAr: string;
-  status: 'searching_captain' | 'captain_assigned' | 'in_transit' | 'delivered' | 'cancelled';
+  status:
+    | 'created'
+    | 'accepted_by_store'
+    | 'merchant_accepted'
+    | 'preparing'
+    | 'ready_for_pickup'
+    | 'searching_captain'
+    | 'captain_assigned'
+    | 'at_pickup'
+    | 'picked_up'
+    | 'in_transit'
+    | 'delivered'
+    | 'cancelled';
   pickup: string;
   dropoff: string;
   isRural: boolean;
@@ -117,7 +129,7 @@ interface AuditLog {
   descriptionAr: string;
 }
 
-import { useMarketplace } from '../store/marketplaceStore';
+import { useMarketplace, convertEgpInputToPiasters } from '../store/marketplaceStore';
 
 export function OwnerAdminDashboard() {
   const {
@@ -147,19 +159,8 @@ export function OwnerAdminDashboard() {
     adminUpdateSettings(next, currentAdmin.name, currentAdmin.role);
   };
 
-  // Derive unified OrderItem[] directly from the live marketplaceOrders store
+  // Derive unified OrderItem[] directly from the live marketplaceOrders store preserving canonical FSM statuses
   const orders: OrderItem[] = marketplaceOrders.map((o) => {
-    const mappedStatus: OrderItem['status'] =
-      o.status === 'delivered'
-        ? 'delivered'
-        : o.status === 'cancelled'
-        ? 'cancelled'
-        : o.status === 'in_transit' || o.status === 'picked_up' || o.status === 'at_pickup'
-        ? 'in_transit'
-        : o.status === 'captain_assigned'
-        ? 'captain_assigned'
-        : 'searching_captain';
-
     return {
       id: o.id,
       orderNumber: o.orderNumber.replace(/^#/, ''),
@@ -172,11 +173,11 @@ export function OwnerAdminDashboard() {
           : o.serviceType === 'package'
           ? 'توصيل مستندات وطرود'
           : `طلب متجر (${o.storeName})`,
-      status: mappedStatus,
+      status: o.status,
       pickup: o.storeAddress,
       dropoff: o.deliveryAddress,
       isRural: o.deliveryAddress.includes('قرية') || o.storeAddress.includes('قرية'),
-      totalFarePiasters: o.totalEgp * 100,
+      totalFarePiasters: Math.round(o.totalEgp * 100),
       codCollected: o.status === 'delivered',
       assignedCaptainId: o.assignedCaptainId,
       assignedCaptainName: o.assignedCaptainName,
@@ -189,6 +190,7 @@ export function OwnerAdminDashboard() {
   const [selectedOrderForDispatch, setSelectedOrderForDispatch] = useState<OrderItem | null>(null);
   const [selectedCaptainForSettle, setSelectedCaptainForSettle] = useState<CaptainItem | null>(null);
   const [remitAmountInput, setRemitAmountInput] = useState<string>('');
+  const [settlementRefInput, setSettlementRefInput] = useState<string>('');
   const [cancelOrderModal, setCancelOrderModal] = useState<OrderItem | null>(null);
   const [cancellationReason, setCancellationReason] = useState<string>('');
   const [statusFilter, setStatusFilter] = useState<string>('all');
@@ -229,46 +231,100 @@ export function OwnerAdminDashboard() {
   // Handle Manual Dispatch
   const handleAssignCaptain = (captainId: string) => {
     if (!selectedOrderForDispatch) return;
-    const captain = captains.find((c) => c.id === captainId);
-    if (!captain) return;
-
-    if (captain.status === 'expired' || captain.status === 'suspended') {
-      showInlineMessage('error', `عذراً: الكابتن غير مؤهل لاستلام الطلبات حالياً (${captain.statusAr}).`);
+    if (currentAdmin.role === 'support_agent') {
+      showInlineMessage('error', 'عذراً: دور خدمة العملاء لا يملك صلاحية التوجيه الإداري (manual_dispatch_override).');
       return;
     }
 
-    adminAssignCaptain(selectedOrderForDispatch.id, captainId, currentAdmin.name, currentAdmin.role);
-    showInlineMessage('success', `تم تعيين الكابتن ${captain.name} للطلب ${selectedOrderForDispatch.orderNumber} بنجاح وتحديث شاشة العميل والكابتن فوراً.`);
+    const result = adminAssignCaptain(
+      selectedOrderForDispatch.id,
+      captainId,
+      currentAdmin.name,
+      currentAdmin.role
+    );
+
+    if (!result.success) {
+      showInlineMessage('error', result.message);
+      return;
+    }
+
+    showInlineMessage('success', result.message);
     setSelectedOrderForDispatch(null);
   };
 
   // Handle Emergency Cancellation
   const handleEmergencyCancel = () => {
-    if (!cancelOrderModal || !cancellationReason.trim()) return;
+    if (!cancelOrderModal || cancellationReason.trim().length < 3) {
+      showInlineMessage('error', 'يرجى إدخال سبب واضح للإلغاء الإداري (٣ أحرف على الأقل).');
+      return;
+    }
 
-    adminEmergencyCancelOrder(cancelOrderModal.id, cancellationReason, currentAdmin.name, currentAdmin.role);
+    const result = adminEmergencyCancelOrder(
+      cancelOrderModal.id,
+      cancellationReason.trim(),
+      currentAdmin.name,
+      currentAdmin.role
+    );
+    if (!result.success) {
+      showInlineMessage('error', result.message);
+      return;
+    }
+
     showInlineMessage('success', `تم إلغاء الطلب ${cancelOrderModal.orderNumber} وتوثيق السبب في سجل العمليات الموحد.`);
-
     setCancelOrderModal(null);
     setCancellationReason('');
   };
 
-  // Handle Cash Remittance Settlement
+  // Handle Cash Remittance Settlement (Strict EGP -> Integer Piasters Boundary Conversion)
   const handleSettleCash = () => {
     if (!selectedCaptainForSettle) return;
-    const amountEgp = parseFloat(remitAmountInput) || selectedCaptainForSettle.cashHoldingPiasters / 100;
-    const amountPiasters = Math.round(amountEgp * 100);
-
-    if (amountPiasters <= 0) {
-      showInlineMessage('error', 'يرجى إدخال مبلغ صحيح للتوريد بالقرش/الجنيه.');
+    if (currentAdmin.role === 'support_agent') {
+      showInlineMessage('error', 'عذراً: دور خدمة العملاء لا يملك صلاحية تسوية العهد النقدية (settle_cash_remittance).');
       return;
     }
 
-    adminSettleCaptainCash(selectedCaptainForSettle.id, amountEgp, currentAdmin.name, currentAdmin.role);
-    showInlineMessage('success', `تم توريد وتسوية ${amountEgp.toFixed(2)} ج.م للكابتن ${selectedCaptainForSettle.name}.`);
+    const conversion = convertEgpInputToPiasters(remitAmountInput);
+    if (!conversion.valid) {
+      showInlineMessage('error', conversion.errorAr || 'مبلغ التوريد غير صالح.');
+      return;
+    }
+
+    const { amountPiasters } = conversion;
+    if (amountPiasters > selectedCaptainForSettle.cashHoldingPiasters) {
+      showInlineMessage(
+        'error',
+        `رفض التسوية: المبلغ المدخل (${amountPiasters} قرش / ${(amountPiasters / 100).toFixed(2)} ج.م) يتجاوز العهدة المسجلة للكابتن (${selectedCaptainForSettle.cashHoldingPiasters} قرش / ${(selectedCaptainForSettle.cashHoldingPiasters / 100).toFixed(2)} ج.م).`
+      );
+      return;
+    }
+
+    const trimmedRef = settlementRefInput.trim();
+    if (trimmedRef.length < 3) {
+      showInlineMessage('error', 'يرجى إدخال رقم إيصال أو مرجع تسوية صالح (٣ أحرف على الأقل) لتوثيق العملية مالياً.');
+      return;
+    }
+
+    const result = adminSettleCaptainCash(
+      selectedCaptainForSettle.id,
+      amountPiasters,
+      currentAdmin.name,
+      currentAdmin.role,
+      trimmedRef
+    );
+
+    if (!result.success) {
+      showInlineMessage('error', result.message);
+      return;
+    }
+
+    showInlineMessage(
+      'success',
+      `تم توريد وتسوية ${amountPiasters} قرش (${(amountPiasters / 100).toFixed(2)} ج.م) للكابتن ${selectedCaptainForSettle.name} بموجب مرجع [${trimmedRef}].`
+    );
 
     setSelectedCaptainForSettle(null);
     setRemitAmountInput('');
+    setSettlementRefInput('');
   };
 
   // Handle Captain Subscription Renewal
@@ -299,6 +355,9 @@ export function OwnerAdminDashboard() {
 
   const filteredOrders = orders.filter((o) => {
     if (statusFilter === 'all') return true;
+    if (statusFilter === 'in_transit') {
+      return o.status === 'in_transit' || o.status === 'picked_up' || o.status === 'at_pickup';
+    }
     return o.status === statusFilter;
   });
 
@@ -318,7 +377,7 @@ export function OwnerAdminDashboard() {
           </button>
         </div>
       )}
-      {/* Top Operations Header Bar & Persona Switcher */}
+      {/* Top Operations Header Bar & Non-Production Sandbox Notice */}
       <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 shadow-xl">
         <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 border-b border-slate-800 pb-4">
           <div className="flex items-center gap-3">
@@ -326,46 +385,51 @@ export function OwnerAdminDashboard() {
               🛡️
             </div>
             <div>
-              <div className="flex items-center gap-2">
+              <div className="flex flex-wrap items-center gap-2">
                 <h2 className="text-lg font-black text-white">غرفة تحكم وعمليات مشوار — مركز الباجور</h2>
-                <span className="text-[11px] px-2.5 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 font-bold flex items-center gap-1">
-                  <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
-                  متصل وموثق
+                <span className="text-[11px] px-2.5 py-0.5 rounded-full bg-amber-500/20 text-amber-300 border border-amber-500/40 font-bold flex items-center gap-1">
+                  <Lock className="w-3 h-3 text-amber-400" />
+                  بيئة محاكاة محلية معزولة (Non-Production Sandbox)
                 </span>
               </div>
               <p className="text-xs text-slate-400 mt-0.5">
-                نظام إدارة الأسطول والطلبات والتسعيرة الموثوقة • نطاق مدينة الباجور وقرى مركز المنوفية
+                معاينة محلية معزولة عن واجهات الإنتاج • مسارات <code className="text-amber-300 font-mono">/api/v1/admin/*</code> محمية بـ JWT وتغلق تلقائياً (Fail-Closed 401/403) بدون جلسة Supabase موثقة
               </p>
             </div>
           </div>
 
-          {/* Active Admin Persona Switcher (RBAC) */}
-          <div className="flex items-center gap-2 bg-slate-950 p-2 rounded-xl border border-slate-800">
-            <span className="text-xs text-slate-400 font-bold ml-1">الدور الفعلي (RBAC):</span>
-            {ADMIN_PERSONAS.map((persona) => {
-              const isSelected = currentAdmin.id === persona.id;
-              return (
-                <button
-                  key={persona.id}
-                  onClick={() => setCurrentAdmin(persona)}
-                  className={`px-3 py-1.5 rounded-lg text-xs font-bold transition flex items-center gap-1.5 ${
-                    isSelected
-                      ? 'bg-amber-500 text-slate-950 shadow-md'
-                      : 'text-slate-400 hover:text-white hover:bg-slate-800'
-                  }`}
-                >
-                  <span>{persona.avatar}</span>
-                  <span>{persona.name}</span>
-                </button>
-              );
-            })}
+          {/* Sandbox Role Preview Selector (Explicitly non-authenticating) */}
+          <div className="flex flex-col items-end gap-1 bg-slate-950 p-2.5 rounded-xl border border-amber-500/30">
+            <div className="flex items-center gap-2">
+              <span className="text-[11px] text-amber-300 font-bold ml-1">معاينة صلاحيات الأدوار (محاكاة محلية فقط):</span>
+              {ADMIN_PERSONAS.map((persona) => {
+                const isSelected = currentAdmin.id === persona.id;
+                return (
+                  <button
+                    key={persona.id}
+                    onClick={() => setCurrentAdmin(persona)}
+                    className={`px-3 py-1.5 rounded-lg text-xs font-bold transition flex items-center gap-1.5 ${
+                      isSelected
+                        ? 'bg-amber-500 text-slate-950 shadow-md'
+                        : 'text-slate-400 hover:text-white hover:bg-slate-800'
+                    }`}
+                  >
+                    <span>{persona.avatar}</span>
+                    <span>{persona.name}</span>
+                  </button>
+                );
+              })}
+            </div>
+            <span className="text-[10px] text-slate-500">
+              لا يمنح هذا المحدد أي رمز مصادقة أو صلاحية على خادم الإنتاج
+            </span>
           </div>
         </div>
 
         {/* Current Role Privileges Indicator */}
         <div className="mt-3 flex flex-wrap items-center justify-between gap-3 text-xs">
           <div className="flex items-center gap-2">
-            <span className="text-slate-400">الحساب المفعل:</span>
+            <span className="text-slate-400">دور المحاكاة الحالي:</span>
             <span className="font-bold text-amber-400">{currentAdmin.name}</span>
             <span className="text-slate-500">•</span>
             <span className="text-slate-300">{currentAdmin.roleTitleAr}</span>
@@ -771,9 +835,18 @@ export function OwnerAdminDashboard() {
                     </div>
 
                     <div>
-                      {order.status === 'searching_captain' && (
+                      {(order.status === 'searching_captain' || order.status === 'ready_for_pickup') && (
                         <span className="px-2.5 py-1 rounded-xl text-xs font-bold bg-amber-500/20 text-amber-300 border border-amber-500/40 animate-pulse block text-center">
-                          بانتظار كابتن
+                          {order.status === 'ready_for_pickup' ? 'جاهز للاستلام (بانتظار كابتن)' : 'بانتظار كابتن'}
+                        </span>
+                      )}
+                      {(order.status === 'created' || order.status === 'accepted_by_store' || order.status === 'preparing') && (
+                        <span className="px-2.5 py-1 rounded-xl text-xs font-bold bg-purple-500/20 text-purple-300 border border-purple-500/40 block text-center">
+                          {order.status === 'preparing'
+                            ? 'قيد التحضير بالمتجر'
+                            : order.status === 'accepted_by_store'
+                            ? 'مقبول من المتجر'
+                            : 'طلب جديد (created)'}
                         </span>
                       )}
                       {order.status === 'captain_assigned' && (
@@ -781,7 +854,7 @@ export function OwnerAdminDashboard() {
                           كابتن: {order.assignedCaptainName}
                         </span>
                       )}
-                      {order.status === 'in_transit' && (
+                      {(order.status === 'in_transit' || order.status === 'picked_up' || order.status === 'at_pickup') && (
                         <span className="px-2.5 py-1 rounded-xl text-xs font-bold bg-indigo-500/20 text-indigo-300 border border-indigo-500/40 block text-center">
                           قيد التوصيل ({order.assignedCaptainName})
                         </span>
@@ -801,7 +874,9 @@ export function OwnerAdminDashboard() {
 
                     {/* Operational Action Buttons */}
                     <div className="flex items-center gap-1.5">
-                      {order.status === 'searching_captain' && (
+                      {(order.status === 'searching_captain' ||
+                        order.status === 'ready_for_pickup' ||
+                        (order.status === 'created' && order.serviceType !== 'restaurant_store')) && (
                         <button
                           onClick={() => setSelectedOrderForDispatch(order)}
                           className="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold transition shadow"
@@ -971,16 +1046,10 @@ export function OwnerAdminDashboard() {
               <div className="w-12 h-12 rounded-full bg-red-500/20 text-red-400 flex items-center justify-center mx-auto">
                 <Lock className="w-6 h-6" />
               </div>
-              <h3 className="text-base font-bold text-white">صلاحية تعديل التسعيرة مقيدة</h3>
+              <h3 className="text-base font-bold text-white">صلاحية تعديل التسعيرة مقيدة (403 Forbidden)</h3>
               <p className="text-xs text-slate-300 max-w-md mx-auto leading-relaxed">
-                أنت مسجل حالياً بدور <span className="font-bold text-amber-400">"{currentAdmin.roleTitleAr}"</span>. تعديل معايير التسعيرة الأساسية وسياسات العمولات وسقف النقدية محصورة حصراً بـ <span className="font-bold text-emerald-400">مالك المنصة (Owner)</span> لحماية النزاهة المالية للمنظومة.
+                أنت في وضع معاينة دور <span className="font-bold text-amber-400">"{currentAdmin.roleTitleAr}"</span>. تعديل معايير التسعيرة الأساسية وسياسات العمولات وسقف النقدية محصور حصراً بـ <span className="font-bold text-emerald-400">مالك المنصة (Owner)</span> عبر جلسة مصادقة موثقة، ولا يُسمح بترقية الصلاحية ذاتياً.
               </p>
-              <button
-                onClick={() => setCurrentAdmin(ADMIN_PERSONAS[0])}
-                className="px-4 py-2 rounded-xl bg-amber-500 text-slate-950 font-bold text-xs shadow hover:bg-amber-400 transition"
-              >
-                التبديل لحساب مالك المنصة (د. علاء)
-              </button>
             </div>
           ) : (
             <div className="space-y-6">
@@ -1262,13 +1331,13 @@ export function OwnerAdminDashboard() {
               <div className="flex justify-between">
                 <span className="text-slate-400">إجمالي العهدة النقدية في يد الكابتن:</span>
                 <span className="font-bold text-amber-400">
-                  {(selectedCaptainForSettle.cashHoldingPiasters / 100).toFixed(2)} ج.م
+                  {(selectedCaptainForSettle.cashHoldingPiasters / 100).toFixed(2)} ج.م ({selectedCaptainForSettle.cashHoldingPiasters.toLocaleString()} قرش)
                 </span>
               </div>
               <div className="flex justify-between">
                 <span className="text-slate-400">سقف التحصيل الأقصى:</span>
                 <span className="font-mono text-slate-300">
-                  {(selectedCaptainForSettle.cashCeilingPiasters / 100).toFixed(2)} ج.م
+                  {(selectedCaptainForSettle.cashCeilingPiasters / 100).toFixed(2)} ج.م ({selectedCaptainForSettle.cashCeilingPiasters.toLocaleString()} قرش)
                 </span>
               </div>
             </div>
@@ -1279,10 +1348,36 @@ export function OwnerAdminDashboard() {
               </label>
               <input
                 type="number"
+                step="0.01"
+                min="0.01"
+                max={(selectedCaptainForSettle.cashHoldingPiasters / 100).toFixed(2)}
                 value={remitAmountInput}
                 onChange={(e) => setRemitAmountInput(e.target.value)}
                 className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-sm text-white font-mono"
-                placeholder="أدخل المبلغ بالجنيه"
+                placeholder="أدخل المبلغ بالجنيه (مثال: 250)"
+              />
+              {remitAmountInput.trim() !== '' && (
+                <div className="text-[11px] font-mono text-amber-300 bg-slate-950/80 px-2.5 py-1 rounded-lg border border-slate-800">
+                  {(() => {
+                    const conv = convertEgpInputToPiasters(remitAmountInput);
+                    return conv.valid
+                      ? `القيمة المحولة بالقرش الصحيح (amountPiasters): ${conv.amountPiasters.toLocaleString()} قرش`
+                      : `خطأ: ${conv.errorAr}`;
+                  })()}
+                </div>
+              )}
+            </div>
+
+            <div className="space-y-2">
+              <label className="text-xs font-bold text-slate-300 block">
+                مرجع إيصال التسوية النقدية (إلزامي):
+              </label>
+              <input
+                type="text"
+                value={settlementRefInput}
+                onChange={(e) => setSettlementRefInput(e.target.value)}
+                className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-white font-mono"
+                placeholder="مثال: RCPT-BAGOUR-2026-001"
               />
             </div>
 
@@ -1294,7 +1389,11 @@ export function OwnerAdminDashboard() {
                 تأكيد الإيداع بخزينة المركز
               </button>
               <button
-                onClick={() => setSelectedCaptainForSettle(null)}
+                onClick={() => {
+                  setSelectedCaptainForSettle(null);
+                  setRemitAmountInput('');
+                  setSettlementRefInput('');
+                }}
                 className="px-4 py-2.5 rounded-xl bg-slate-800 text-slate-300 font-bold text-xs hover:bg-slate-700 transition"
               >
                 إلغاء

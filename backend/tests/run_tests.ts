@@ -23,7 +23,8 @@ import { WebhookService } from '../src/payments/webhookService.js';
 import { AccessControlGuard } from '../src/security/rbac.js';
 import { AuditLogger } from '../src/security/auditLogger.js';
 import crypto from 'node:crypto';
-import { PersistentStore } from '../src/store/persistentStore.js';
+import { PersistentStore, convertEgpInputToPiasters } from '../src/store/persistentStore.js';
+import { convertEgpInputToPiasters as convertFrontendEgpToPiasters, DEMO_PERSONAS } from '../../src/store/marketplaceStore.js';
 import { Order, CaptainProfile, WebhookEventPayload } from '../src/types/index.js';
 import { verifyToken, generateTestToken } from '../src/security/auth.js';
 import { CaptainService } from '../src/services/captainService.js';
@@ -3157,6 +3158,710 @@ export async function runAllTests(): Promise<{
       server.close();
     }
   });
+
+  // --------------------------------------------------------------------------
+  // SUITE 25: Phase 1 Security & Business-Logic Hardening (Tasks A, B, C, D, E)
+  // --------------------------------------------------------------------------
+  console.log('\n▶ SUITE 25: Phase 1 Security & Business-Logic Hardening (Tasks A–E)');
+
+  await runTest(
+    'Phase1Hardening',
+    'Task A: Protected /api/v1/admin/* endpoints fail closed (401/403), strip spoofed x-actor-* headers, and DEMO_PERSONAS excludes administrative roles',
+    async () => {
+      // 1. Verify frontend DEMO_PERSONAS does not contain owner or operations/dispatcher persona
+      const hasAdminPersona = DEMO_PERSONAS.some(
+        (p) => (p.role as string) === 'owner' || (p.role as string) === 'operations' || (p.role as string) === 'operations_dispatcher'
+      );
+      assert(!hasAdminPersona, 'DEMO_PERSONAS must not allow switching into an administrative/owner persona');
+
+      resetTestDatabases();
+      const app = createServer();
+      const server = app.listen(0);
+      const port = (server.address() as any).port;
+      const baseUrl = `http://127.0.0.1:${port}/api/v1`;
+
+      try {
+        const custToken = generateTestToken({ userId: 'usr_cust_a', role: 'customer' });
+        const capToken = generateTestToken({ userId: 'usr_cap_a', role: 'captain' });
+        const merchToken = generateTestToken({ userId: 'usr_merch_a', role: 'merchant' });
+        const supportToken = generateTestToken({ userId: 'usr_sup_a', role: 'support_agent' });
+        const dispToken = generateTestToken({ userId: 'usr_disp_a', role: 'operations_dispatcher' });
+
+        // Unauthenticated requests to admin endpoints -> 401
+        const unauthOverview = await fetch(`${baseUrl}/admin/overview`, {
+          headers: {
+            'x-actor-id': 'usr_owner_01',
+            'x-actor-role': 'owner',
+          },
+        });
+        assert(unauthOverview.status === 401, `Expected 401 for unauthenticated /admin/overview, got ${unauthOverview.status}`);
+
+        const invalidJwtRes = await fetch(`${baseUrl}/admin/settings`, {
+          headers: {
+            Authorization: 'Bearer invalid.jwt.token',
+            'x-actor-role': 'owner',
+          },
+        });
+        assert(invalidJwtRes.status === 401, `Expected 401 for invalid JWT on /admin/settings, got ${invalidJwtRes.status}`);
+
+        // Customer / Captain / Merchant attempting admin overview or settings -> 403
+        for (const [label, tok] of [
+          ['customer', custToken],
+          ['captain', capToken],
+          ['merchant', merchToken],
+        ] as const) {
+          const res = await fetch(`${baseUrl}/admin/overview`, {
+            headers: {
+              Authorization: `Bearer ${tok}`,
+              'x-actor-role': 'owner', // Spoofed header must be ignored
+            },
+          });
+          assert(res.status === 403, `Expected 403 for ${label} on /admin/overview even with spoofed header, got ${res.status}`);
+        }
+
+        // Support agent attempting manual dispatch or cash settlement -> 403
+        const supDispatchRes = await fetch(`${baseUrl}/admin/orders/ord_bagour_001/override-dispatch`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${supportToken}`,
+          },
+          body: JSON.stringify({ captainId: 'cpt_ahmed_fathy' }),
+        });
+        assert(supDispatchRes.status === 403, `Expected 403 for support_agent on override-dispatch, got ${supDispatchRes.status}`);
+
+        const supSettleRes = await fetch(`${baseUrl}/admin/captains/cpt_ahmed_fathy/settle-cash`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${supportToken}`,
+          },
+          body: JSON.stringify({ amountPiasters: 5000, settlementReference: 'RCPT-SUP-01' }),
+        });
+        assert(supSettleRes.status === 403, `Expected 403 for support_agent on settle-cash, got ${supSettleRes.status}`);
+
+        // Operations dispatcher attempting Owner-only PUT /admin/settings -> 403
+        const dispSettingsRes = await fetch(`${baseUrl}/admin/settings`, {
+          method: 'PUT',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${dispToken}`,
+          },
+          body: JSON.stringify({ baseFarePiasters: 1600 }),
+        });
+        assert(dispSettingsRes.status === 403, `Expected 403 for operations_dispatcher on PUT /admin/settings, got ${dispSettingsRes.status}`);
+      } finally {
+        server.close();
+      }
+    }
+  );
+
+  await runTest(
+    'Phase1Hardening',
+    'Task B: Settling EGP 250 converts to 25000 integer piasters (not 250), rejects invalid/fractional/excessive settlements without clamping to zero, and enforces idempotency',
+    async () => {
+      // 1. Boundary EGP -> Piasters conversion tests (both backend and frontend helpers)
+      assert(convertEgpInputToPiasters(250) === 25000, 'Backend convertEgpInputToPiasters(250) must equal 25000 piasters');
+      assert(convertEgpInputToPiasters('250') === 25000, 'Backend convertEgpInputToPiasters("250") must equal 25000 piasters');
+      assert(convertEgpInputToPiasters('125.50') === 12550, 'Backend convertEgpInputToPiasters("125.50") must equal 12550 piasters');
+
+      const feConv250 = convertFrontendEgpToPiasters('250');
+      assert(feConv250.valid && feConv250.amountPiasters === 25000, 'Frontend convertEgpInputToPiasters("250") must equal 25000 piasters, not 250');
+
+      for (const badInput of [0, -10, NaN, Infinity, '', '0', '-50', '12.345', 10.999]) {
+        assertThrows(() => convertEgpInputToPiasters(badInput), 'INVALID_PIASTERS_AMOUNT');
+        const feBad = convertFrontendEgpToPiasters(badInput as any);
+        assert(!feBad.valid, `Frontend converter must reject invalid input: ${String(badInput)}`);
+      }
+
+      // 2. HTTP & Store verification: settling EGP 250 (25000 piasters) from a captain holding 38000 piasters leaves 13000 piasters
+      resetTestDatabases();
+      AuditLogger.resetForTesting();
+      const app = createServer();
+      const server = app.listen(0);
+      const port = (server.address() as any).port;
+      const baseUrl = `http://127.0.0.1:${port}/api/v1`;
+
+      try {
+        const dispToken = generateTestToken({ userId: 'usr_disp_settle', role: 'operations_dispatcher' });
+        const targetCap = PersistentStore.getCaptainById('cpt_ahmed_fathy')!;
+        PersistentStore.saveCaptain({ ...targetCap, cashHoldingPiasters: 38000 }); // 380.00 EGP = 38000 piasters
+
+        const amountPiastersFor250Egp = convertEgpInputToPiasters('250'); // 25000 piasters
+        assert(amountPiastersFor250Egp === 25000, 'Must be 25000 piasters');
+
+        // Reject raw amountEgp field
+        const rawEgpFieldRes = await fetch(`${baseUrl}/admin/captains/cpt_ahmed_fathy/settle-cash`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${dispToken}`,
+          },
+          body: JSON.stringify({ amountEgp: 250, settlementReference: 'RCPT-BAD-FIELD' }),
+        });
+        assert(rawEgpFieldRes.status === 400, `Expected 400 when sending raw amountEgp field, got ${rawEgpFieldRes.status}`);
+        assert((await rawEgpFieldRes.json()).error?.code === 'INVALID_SETTLEMENT_FIELD', 'Must return INVALID_SETTLEMENT_FIELD');
+
+        // Reject fractional piasters, zero, negative, or non-numeric
+        for (const invalidPiasters of [0, -500, 250.5, '25000', null]) {
+          const badRes = await fetch(`${baseUrl}/admin/captains/cpt_ahmed_fathy/settle-cash`, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              Authorization: `Bearer ${dispToken}`,
+            },
+            body: JSON.stringify({ amountPiasters: invalidPiasters, settlementReference: 'RCPT-INVALID-01' }),
+          });
+          assert(badRes.status === 400, `Expected 400 for invalid amountPiasters=${String(invalidPiasters)}, got ${badRes.status}`);
+        }
+
+        // Reject missing settlement reference and notes
+        const noRefRes = await fetch(`${baseUrl}/admin/captains/cpt_ahmed_fathy/settle-cash`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${dispToken}`,
+          },
+          body: JSON.stringify({ amountPiasters: 25000 }),
+        });
+        assert(noRefRes.status === 400, `Expected 400 when settlementReference and notes are both missing, got ${noRefRes.status}`);
+        assert((await noRefRes.json()).error?.code === 'MISSING_SETTLEMENT_REFERENCE', 'Must return MISSING_SETTLEMENT_REFERENCE');
+
+        // Reject amount greater than captain's recorded cash holding (50000 > 38000) without clamping to zero!
+        const excessRes = await fetch(`${baseUrl}/admin/captains/cpt_ahmed_fathy/settle-cash`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${dispToken}`,
+          },
+          body: JSON.stringify({ amountPiasters: 50000, settlementReference: 'RCPT-EXCESS-01' }),
+        });
+        assert(excessRes.status === 422, `Expected 422 EXCEEDS_CASH_HOLDING when settling 50000 > 38000, got ${excessRes.status}`);
+        assert((await excessRes.json()).error?.code === 'EXCEEDS_CASH_HOLDING', 'Must return EXCEEDS_CASH_HOLDING');
+        assert(
+          PersistentStore.getCaptainById('cpt_ahmed_fathy')!.cashHoldingPiasters === 38000,
+          'Captain cash holding must remain untouched (38000) after rejected excessive settlement — never clamped to 0!'
+        );
+
+        // Execute valid EGP 250 settlement (25000 piasters)
+        const validSettleRes = await fetch(`${baseUrl}/admin/captains/cpt_ahmed_fathy/settle-cash`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${dispToken}`,
+            'Idempotency-Key': 'idem_settle_250_egp_001',
+          },
+          body: JSON.stringify({
+            amountPiasters: amountPiastersFor250Egp,
+            settlementReference: 'RCPT-BAGOUR-250EGP',
+            notes: 'تسوية نقدية بقيمة ٢٥٠ جنيه (٢٥٠٠٠ قرش)',
+          }),
+        });
+        assert(validSettleRes.status === 200, `Expected 200 on valid 25000 piasters settlement, got ${validSettleRes.status}`);
+        const settleData = (await validSettleRes.json()).data;
+        assert(settleData.remittedAmountPiasters === 25000, `Expected remittedAmountPiasters=25000, got ${settleData.remittedAmountPiasters}`);
+        assert(settleData.remainingCashPiasters === 13000, `Expected remainingCashPiasters=13000 (38000 - 25000), got ${settleData.remainingCashPiasters}`);
+        assert(settleData.isIdempotentReplay === false, 'First call must not be marked as replay');
+
+        // Verify idempotency replay with same key & payload does not double-deduct
+        const replaySettleRes = await fetch(`${baseUrl}/admin/captains/cpt_ahmed_fathy/settle-cash`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${dispToken}`,
+            'Idempotency-Key': 'idem_settle_250_egp_001',
+          },
+          body: JSON.stringify({
+            amountPiasters: amountPiastersFor250Egp,
+            settlementReference: 'RCPT-BAGOUR-250EGP',
+            notes: 'تسوية نقدية بقيمة ٢٥٠ جنيه (٢٥٠٠٠ قرش)',
+          }),
+        });
+        assert(replaySettleRes.status === 200, 'Idempotent replay must return 200');
+        const replayData = (await replaySettleRes.json()).data;
+        assert(replayData.isIdempotentReplay === true, 'Replay must return isIdempotentReplay=true');
+        assert(
+          PersistentStore.getCaptainById('cpt_ahmed_fathy')!.cashHoldingPiasters === 13000,
+          'Idempotent replay must not deduct 25000 piasters a second time'
+        );
+
+        // Verify idempotency key reuse with different amount fails with 409
+        const mismatchSettleRes = await fetch(`${baseUrl}/admin/captains/cpt_ahmed_fathy/settle-cash`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${dispToken}`,
+            'Idempotency-Key': 'idem_settle_250_egp_001',
+          },
+          body: JSON.stringify({
+            amountPiasters: 5000,
+            settlementReference: 'RCPT-BAGOUR-250EGP',
+          }),
+        });
+        assert(mismatchSettleRes.status === 409, `Expected 409 on idempotency mismatch, got ${mismatchSettleRes.status}`);
+
+        // Verify audit log records 25000 قرش (250.00 ج.م) and actual actorRole ('operations_dispatcher', NOT hardcoded 'owner')
+        const logs = AuditLogger.query({ actionType: 'CAPTAIN_CASH_SETTLED', limit: 5 });
+        assert(logs.length >= 1, 'Audit log must contain CAPTAIN_CASH_SETTLED entry');
+        const latestLog = logs[0];
+        assert(
+          latestLog.descriptionAr.includes('25000 قرش') && latestLog.descriptionAr.includes('250.00 ج.م'),
+          `Audit description must report both 25000 piasters and 250.00 EGP, got: ${latestLog.descriptionAr}`
+        );
+        assert(
+          latestLog.actorRole === 'operations_dispatcher',
+          `Audit actorRole must be 'operations_dispatcher' (actual caller), got '${latestLog.actorRole}'`
+        );
+        assert(latestLog.actorId === 'usr_disp_settle', `Audit actorId must be 'usr_disp_settle', got '${latestLog.actorId}'`);
+      } finally {
+        server.close();
+      }
+    }
+  );
+
+  await runTest(
+    'Phase1Hardening',
+    'Task C: Admin dispatch override enforces OrderFsm transitions, rejects terminal/invalid states, validates captain eligibility, and protects acceptedAt timestamps',
+    async () => {
+      resetTestDatabases();
+      const app = createServer();
+      const server = app.listen(0);
+      const port = (server.address() as any).port;
+      const baseUrl = `http://127.0.0.1:${port}/api/v1`;
+
+      try {
+        const dispToken = generateTestToken({ userId: 'usr_disp_fsm', role: 'operations_dispatcher' });
+
+        // 1. Reject dispatch override on delivered order -> 422 TERMINAL_STATE_MUTATION_FORBIDDEN
+        const deliveredOrder: Order = {
+          ...baseOrder,
+          id: 'ord_disp_delivered_01',
+          orderNumber: 'MSH-DELIV-01',
+          status: 'delivered',
+          assignedCaptainId: 'cpt_ahmed_fathy',
+          acceptedAt: '2026-03-30T09:00:00.000Z',
+        };
+        PersistentStore.saveOrder(deliveredOrder);
+
+        const delivRes = await fetch(`${baseUrl}/admin/orders/${deliveredOrder.id}/override-dispatch`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${dispToken}`,
+          },
+          body: JSON.stringify({ captainId: 'cpt_mahmoud_ibrahim' }),
+        });
+        assert(delivRes.status === 422, `Expected 422 when dispatching delivered order, got ${delivRes.status}`);
+        assert(
+          (await delivRes.json()).error?.code === 'TERMINAL_STATE_MUTATION_FORBIDDEN',
+          'Delivered order dispatch must fail with TERMINAL_STATE_MUTATION_FORBIDDEN'
+        );
+
+        // 2. Reject dispatch override on cancelled order -> 422 TERMINAL_STATE_MUTATION_FORBIDDEN
+        const cancelledOrder: Order = {
+          ...baseOrder,
+          id: 'ord_disp_cancelled_01',
+          orderNumber: 'MSH-CANC-01',
+          status: 'cancelled',
+        };
+        PersistentStore.saveOrder(cancelledOrder);
+
+        const cancRes = await fetch(`${baseUrl}/admin/orders/${cancelledOrder.id}/override-dispatch`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${dispToken}`,
+          },
+          body: JSON.stringify({ captainId: 'cpt_mahmoud_ibrahim' }),
+        });
+        assert(cancRes.status === 422, `Expected 422 when dispatching cancelled order, got ${cancRes.status}`);
+        assert(
+          (await cancRes.json()).error?.code === 'TERMINAL_STATE_MUTATION_FORBIDDEN',
+          'Cancelled order dispatch must fail with TERMINAL_STATE_MUTATION_FORBIDDEN'
+        );
+
+        // 3. Reject dispatch override on in_transit order or store order still in 'preparing' -> 422 INVALID_STATE_TRANSITION
+        const inTransitOrder: Order = {
+          ...baseOrder,
+          id: 'ord_disp_intransit_01',
+          status: 'in_transit',
+          assignedCaptainId: 'cpt_ahmed_fathy',
+        };
+        PersistentStore.saveOrder(inTransitOrder);
+
+        const transitRes = await fetch(`${baseUrl}/admin/orders/${inTransitOrder.id}/override-dispatch`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${dispToken}`,
+          },
+          body: JSON.stringify({ captainId: 'cpt_mahmoud_ibrahim' }),
+        });
+        assert(transitRes.status === 422, `Expected 422 when dispatching in_transit order, got ${transitRes.status}`);
+        assert((await transitRes.json()).error?.code === 'INVALID_STATE_TRANSITION', 'Must return INVALID_STATE_TRANSITION');
+
+        const preparingStoreOrder: Order = {
+          ...baseOrder,
+          id: 'ord_disp_preparing_01',
+          serviceTypeId: 'restaurant_store',
+          status: 'preparing',
+        };
+        PersistentStore.saveOrder(preparingStoreOrder);
+
+        const prepRes = await fetch(`${baseUrl}/admin/orders/${preparingStoreOrder.id}/override-dispatch`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${dispToken}`,
+          },
+          body: JSON.stringify({ captainId: 'cpt_mahmoud_ibrahim' }),
+        });
+        assert(prepRes.status === 422, `Expected 422 when dispatching store order in preparing state, got ${prepRes.status}`);
+        assert((await prepRes.json()).error?.code === 'INVALID_STATE_TRANSITION', 'Must return INVALID_STATE_TRANSITION');
+
+        // 4. Reject dispatch to offline, expired, or cash-suspended captain -> 422
+        const searchingOrder: Order = {
+          ...baseOrder,
+          id: 'ord_disp_valid_01',
+          orderNumber: 'MSH-VALID-01',
+          serviceTypeId: 'package',
+          status: 'searching_captain',
+          cityId: 'city_el_bagour',
+          paymentMethod: 'cash_on_delivery',
+        };
+        PersistentStore.saveOrder(searchingOrder);
+
+        // Offline captain
+        PersistentStore.saveCaptain({
+          ...PersistentStore.getCaptainById('cpt_ahmed_fathy')!,
+          id: 'cpt_test_offline_active',
+          fullName: 'كابتن غير متصل',
+          isOnline: false,
+          subscriptionStatus: 'active',
+        });
+
+        const offlineRes = await fetch(`${baseUrl}/admin/orders/${searchingOrder.id}/override-dispatch`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${dispToken}`,
+          },
+          body: JSON.stringify({ captainId: 'cpt_test_offline_active' }),
+        });
+        assert(offlineRes.status === 422, `Expected 422 for offline captain, got ${offlineRes.status}`);
+        assert((await offlineRes.json()).error?.code === 'CAPTAIN_OFFLINE', 'Must return CAPTAIN_OFFLINE');
+
+        // Suspended captain ('cpt_moustafa_kamal' is suspended due to cash ceiling; set isOnline: true to test eligibility check)
+        PersistentStore.saveCaptain({
+          ...PersistentStore.getCaptainById('cpt_moustafa_kamal')!,
+          isOnline: true,
+        });
+        const suspendedRes = await fetch(`${baseUrl}/admin/orders/${searchingOrder.id}/override-dispatch`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${dispToken}`,
+          },
+          body: JSON.stringify({ captainId: 'cpt_moustafa_kamal' }),
+        });
+        assert(suspendedRes.status === 422, `Expected 422 for suspended captain, got ${suspendedRes.status}`);
+        assert((await suspendedRes.json()).error?.code === 'CAPTAIN_INELIGIBLE_FOR_DISPATCH', 'Must return CAPTAIN_INELIGIBLE_FOR_DISPATCH');
+
+        // 5. Reject payload attempting to inject acceptedAt or status from client -> 400 INVALID_DISPATCH_FIELD
+        const injectedFieldRes = await fetch(`${baseUrl}/admin/orders/${searchingOrder.id}/override-dispatch`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${dispToken}`,
+          },
+          body: JSON.stringify({
+            captainId: 'cpt_ahmed_fathy',
+            acceptedAt: 'not-a-valid-timestamp',
+          }),
+        });
+        assert(injectedFieldRes.status === 400, `Expected 400 when injecting acceptedAt in body, got ${injectedFieldRes.status}`);
+        assert((await injectedFieldRes.json()).error?.code === 'INVALID_DISPATCH_FIELD', 'Must return INVALID_DISPATCH_FIELD');
+
+        // 6. Reject order with corrupted pre-existing acceptedAt timestamp in OrderFsm -> 422 INVALID_ORDER_TIMESTAMP
+        const corruptedOrder: Order = {
+          ...searchingOrder,
+          id: 'ord_disp_corrupted_ts',
+          acceptedAt: 'INVALID_TIMESTAMP_STRING',
+        };
+        PersistentStore.saveOrder(corruptedOrder);
+        const corruptRes = await fetch(`${baseUrl}/admin/orders/${corruptedOrder.id}/override-dispatch`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${dispToken}`,
+          },
+          body: JSON.stringify({ captainId: 'cpt_ahmed_fathy' }),
+        });
+        assert(corruptRes.status === 422, `Expected 422 for corrupted acceptedAt timestamp, got ${corruptRes.status}`);
+        assert((await corruptRes.json()).error?.code === 'INVALID_ORDER_TIMESTAMP', 'Must return INVALID_ORDER_TIMESTAMP');
+
+        // 7. Valid dispatch override on searching_captain order with eligible online captain -> 200
+        const validDispRes = await fetch(`${baseUrl}/admin/orders/${searchingOrder.id}/override-dispatch`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${dispToken}`,
+          },
+          body: JSON.stringify({ captainId: 'cpt_ahmed_fathy' }),
+        });
+        assert(validDispRes.status === 200, `Expected 200 on valid dispatch override, got ${validDispRes.status}`);
+        const dispatchedOrder: Order = (await validDispRes.json()).data;
+        assert(dispatchedOrder.status === 'captain_assigned', `Expected status captain_assigned, got ${dispatchedOrder.status}`);
+        assert(dispatchedOrder.assignedCaptainId === 'cpt_ahmed_fathy', 'Must assign cpt_ahmed_fathy');
+        assert(
+          typeof dispatchedOrder.acceptedAt === 'string' && !Number.isNaN(Date.parse(dispatchedOrder.acceptedAt)),
+          `acceptedAt must be a valid ISO-8601 timestamp, got ${dispatchedOrder.acceptedAt}`
+        );
+      } finally {
+        server.close();
+      }
+    }
+  );
+
+  await runTest(
+    'Phase1Hardening',
+    'Task D: Settings and zone tariff updates enforce strict property allowlists, integer piaster ranges, relational tariff constraints, and record true actorRole in audit logs',
+    async () => {
+      resetTestDatabases();
+      AuditLogger.resetForTesting();
+      const app = createServer();
+      const server = app.listen(0);
+      const port = (server.address() as any).port;
+      const baseUrl = `http://127.0.0.1:${port}/api/v1`;
+
+      try {
+        const ownerToken = generateTestToken({ userId: 'usr_owner_d', role: 'owner' });
+        const dispToken = generateTestToken({ userId: 'usr_disp_d', role: 'operations_dispatcher' });
+
+        // 1. Reject unexpected property in PUT /admin/settings -> 400 INVALID_SETTINGS_FIELD
+        const unexpectedSettingRes = await fetch(`${baseUrl}/admin/settings`, {
+          method: 'PUT',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${ownerToken}`,
+          },
+          body: JSON.stringify({
+            baseFarePiasters: 1600,
+            isAdminBypassEnabled: true,
+          }),
+        });
+        assert(unexpectedSettingRes.status === 400, `Expected 400 on unexpected settings key, got ${unexpectedSettingRes.status}`);
+        assert((await unexpectedSettingRes.json()).error?.code === 'INVALID_SETTINGS_FIELD', 'Must return INVALID_SETTINGS_FIELD');
+
+        // 2. Reject fractional or out-of-range piasters in PUT /admin/settings -> 400 INVALID_SETTINGS_VALUE
+        for (const badPayload of [
+          { baseFarePiasters: 1550.75 },
+          { baseFarePiasters: -500 },
+          { ratePerKmPiasters: 999999 },
+          { captainCashCeilingPiasters: 100 }, // below 10000 minimum
+        ]) {
+          const badSetRes = await fetch(`${baseUrl}/admin/settings`, {
+            method: 'PUT',
+            headers: {
+              'Content-Type': 'application/json',
+              Authorization: `Bearer ${ownerToken}`,
+            },
+            body: JSON.stringify(badPayload),
+          });
+          assert(badSetRes.status === 400, `Expected 400 on invalid settings value ${JSON.stringify(badPayload)}, got ${badSetRes.status}`);
+          assert((await badSetRes.json()).error?.code === 'INVALID_SETTINGS_VALUE', 'Must return INVALID_SETTINGS_VALUE');
+        }
+
+        // 3. Reject unexpected property, fractional piasters, or minFarePiasters < baseFarePiasters in PUT /admin/zones/:zoneId/tariffs
+        const badTariffKeyRes = await fetch(`${baseUrl}/admin/zones/zone_bagour_center/tariffs`, {
+          method: 'PUT',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${dispToken}`,
+          },
+          body: JSON.stringify({
+            serviceTypeId: 'package',
+            baseFarePiasters: 1600,
+            actorRole: 'owner', // unexpected field
+          }),
+        });
+        assert(badTariffKeyRes.status === 400, `Expected 400 on unexpected tariff key, got ${badTariffKeyRes.status}`);
+        assert((await badTariffKeyRes.json()).error?.code === 'INVALID_TARIFF_FIELD', 'Must return INVALID_TARIFF_FIELD');
+
+        const invertedMinFareRes = await fetch(`${baseUrl}/admin/zones/zone_bagour_center/tariffs`, {
+          method: 'PUT',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${dispToken}`,
+          },
+          body: JSON.stringify({
+            serviceTypeId: 'package',
+            baseFarePiasters: 2500,
+            minFarePiasters: 1500, // minFare < baseFare!
+          }),
+        });
+        assert(invertedMinFareRes.status === 422, `Expected 422 when minFarePiasters < baseFarePiasters, got ${invertedMinFareRes.status}`);
+        assert((await invertedMinFareRes.json()).error?.code === 'INVALID_TARIFF_CONFIGURATION', 'Must return INVALID_TARIFF_CONFIGURATION');
+
+        // 4. Valid zone tariff update by operations_dispatcher records actorRole = 'operations_dispatcher' (never hardcoded 'owner')
+        const validTariffRes = await fetch(`${baseUrl}/admin/zones/zone_bagour_center/tariffs`, {
+          method: 'PUT',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${dispToken}`,
+          },
+          body: JSON.stringify({
+            serviceTypeId: 'package',
+            baseFarePiasters: 1800,
+            minFarePiasters: 2000,
+            ratePerKmPiasters: 450,
+          }),
+        });
+        assert(validTariffRes.status === 200, `Expected 200 on valid zone tariff update by dispatcher, got ${validTariffRes.status}`);
+
+        const tariffLogs = AuditLogger.query({ actionType: 'ZONE_TARIFF_UPDATED', limit: 5 });
+        assert(tariffLogs.length >= 1, 'Must log ZONE_TARIFF_UPDATED');
+        assert(
+          tariffLogs[0].actorRole === 'operations_dispatcher',
+          `Expected ZONE_TARIFF_UPDATED actorRole='operations_dispatcher', got '${tariffLogs[0].actorRole}'`
+        );
+        assert(tariffLogs[0].actorId === 'usr_disp_d', `Expected actorId='usr_disp_d', got '${tariffLogs[0].actorId}'`);
+
+        // 5. Subscription renewal by operations_dispatcher records actorRole = 'operations_dispatcher'
+        const renewRes = await fetch(`${baseUrl}/admin/captains/cpt_ahmed_fathy/renew-subscription`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${dispToken}`,
+          },
+          body: JSON.stringify({ daysToAdd: 30 }),
+        });
+        assert(renewRes.status === 200, `Expected 200 on subscription renewal by dispatcher, got ${renewRes.status}`);
+        const renewLogs = AuditLogger.query({ actionType: 'CAPTAIN_SUBSCRIPTION_RENEWED', limit: 5 });
+        assert(renewLogs.length >= 1, 'Must log CAPTAIN_SUBSCRIPTION_RENEWED');
+        assert(
+          renewLogs[0].actorRole === 'operations_dispatcher',
+          `Expected CAPTAIN_SUBSCRIPTION_RENEWED actorRole='operations_dispatcher', got '${renewLogs[0].actorRole}'`
+        );
+      } finally {
+        server.close();
+      }
+    }
+  );
+
+  await runTest(
+    'Phase1Hardening',
+    'Task E: MerchantService enforces RBAC manage_merchants permission, active company/tenant city scope for owner & operations_dispatcher, strict store ownership for merchant, and rejects unauthorized roles',
+    async () => {
+      resetTestDatabases();
+      const app = createServer();
+      const server = app.listen(0);
+      const port = (server.address() as any).port;
+      const baseUrl = `http://127.0.0.1:${port}/api/v1`;
+
+      try {
+        const ownerToken = generateTestToken({ userId: 'usr_owner_e', role: 'owner' });
+        const dispToken = generateTestToken({ userId: 'usr_disp_e', role: 'operations_dispatcher' });
+        const owningMerchToken = generateTestToken({ userId: 'usr_merch_basha', role: 'merchant' });
+        const otherMerchToken = generateTestToken({ userId: 'usr_merch_amana', role: 'merchant' });
+        const supportToken = generateTestToken({ userId: 'usr_sup_e', role: 'support_agent' });
+        const custToken = generateTestToken({ userId: 'usr_cust_e', role: 'customer' });
+        const capToken = generateTestToken({ userId: 'usr_cap_e', role: 'captain' });
+
+        // 1. Owning merchant can update their own store ('merchant_basha')
+        const ownStoreRes = await fetch(`${baseUrl}/merchant/stores/merchant_basha/status`, {
+          method: 'PATCH',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${owningMerchToken}`,
+          },
+          body: JSON.stringify({ isOpen: true, prepTimeMinutes: 25 }),
+        });
+        assert(ownStoreRes.status === 200, `Expected 200 for owning merchant, got ${ownStoreRes.status}`);
+
+        // 2. Unrelated merchant ('usr_merch_amana') is blocked from updating 'merchant_basha' -> 403 FORBIDDEN_STORE_OWNERSHIP
+        const crossMerchRes = await fetch(`${baseUrl}/merchant/stores/merchant_basha/status`, {
+          method: 'PATCH',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${otherMerchToken}`,
+          },
+          body: JSON.stringify({ isOpen: false }),
+        });
+        assert(crossMerchRes.status === 403, `Expected 403 for unrelated merchant, got ${crossMerchRes.status}`);
+        assert((await crossMerchRes.json()).error?.code === 'FORBIDDEN_STORE_OWNERSHIP', 'Must return FORBIDDEN_STORE_OWNERSHIP');
+
+        // 3. Unauthorized roles (support_agent, customer, captain) are blocked -> 403 FORBIDDEN_STORE_OWNERSHIP
+        for (const [roleLabel, tok] of [
+          ['support_agent', supportToken],
+          ['customer', custToken],
+          ['captain', capToken],
+        ] as const) {
+          const unauthRoleRes = await fetch(`${baseUrl}/merchant/stores/merchant_basha/status`, {
+            method: 'PATCH',
+            headers: {
+              'Content-Type': 'application/json',
+              Authorization: `Bearer ${tok}`,
+            },
+            body: JSON.stringify({ isOpen: false }),
+          });
+          assert(unauthRoleRes.status === 403, `Expected 403 for ${roleLabel} managing merchant store, got ${unauthRoleRes.status}`);
+        }
+
+        // 4. Owner and operations_dispatcher can manage store when within active company city scope ('city_el_bagour')
+        const ownerManageRes = await fetch(`${baseUrl}/merchant/stores/merchant_basha/status`, {
+          method: 'PATCH',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${ownerToken}`,
+          },
+          body: JSON.stringify({ prepTimeMinutes: 20 }),
+        });
+        assert(ownerManageRes.status === 200, `Expected 200 for owner managing store in active company scope, got ${ownerManageRes.status}`);
+
+        const dispManageRes = await fetch(`${baseUrl}/merchant/stores/merchant_basha/status`, {
+          method: 'PATCH',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${dispToken}`,
+            'x-hub-city-scope': 'city_el_bagour',
+          },
+          body: JSON.stringify({ prepTimeMinutes: 22 }),
+        });
+        assert(dispManageRes.status === 200, `Expected 200 for operations_dispatcher in matching city scope, got ${dispManageRes.status}`);
+
+        // 5. Operations dispatcher is blocked when city/tenant scope mismatches ('city_shebin_el_kom' vs store's 'city_el_bagour') -> 403 FORBIDDEN_TENANT_SCOPE
+        const dispMismatchScopeRes = await fetch(`${baseUrl}/merchant/stores/merchant_basha/status`, {
+          method: 'PATCH',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${dispToken}`,
+            'x-hub-city-scope': 'city_shebin_el_kom',
+          },
+          body: JSON.stringify({ prepTimeMinutes: 30 }),
+        });
+        assert(dispMismatchScopeRes.status === 403, `Expected 403 when dispatcher city scope mismatches store city, got ${dispMismatchScopeRes.status}`);
+        assert((await dispMismatchScopeRes.json()).error?.code === 'FORBIDDEN_TENANT_SCOPE', 'Must return FORBIDDEN_TENANT_SCOPE');
+
+        // 6. Store in an unactivated/external tenant city is blocked even for owner/dispatcher -> 403 FORBIDDEN_TENANT_SCOPE
+        const bashaStore = PersistentStore.getStoreById('merchant_basha')!;
+        PersistentStore.saveStore({ ...bashaStore, id: 'store_external_tenant', cityId: 'city_external_unmanaged' });
+
+        const externalTenantRes = await fetch(`${baseUrl}/merchant/stores/store_external_tenant/status`, {
+          method: 'PATCH',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${dispToken}`,
+          },
+          body: JSON.stringify({ isOpen: false }),
+        });
+        assert(externalTenantRes.status === 403, `Expected 403 for store outside active company cities, got ${externalTenantRes.status}`);
+        assert((await externalTenantRes.json()).error?.code === 'FORBIDDEN_TENANT_SCOPE', 'Must return FORBIDDEN_TENANT_SCOPE');
+      } finally {
+        server.close();
+      }
+    }
+  );
 
   const total = results.length;
   const passed = results.filter((r) => r.passed).length;

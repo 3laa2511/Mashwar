@@ -59,6 +59,10 @@ const paymentIntentIdempotencyStore = new Map<
   string,
   { payloadFingerprint: string; responseBody: any }
 >();
+const cashSettlementIdempotencyStore = new Map<
+  string,
+  { payloadFingerprint: string; responseBody: any }
+>();
 const mockCaptains = new Map<string, CaptainProfile>();
 
 function syncWithStore() {
@@ -277,17 +281,19 @@ router.get('/stores/:storeId/catalog', (req: Request, res: Response) => {
   }
 });
 
-// Merchant Store Status & Settings Update (Strict Store Ownership)
+// Merchant Store Status & Settings Update (Strict Store Ownership + Tenant Scope)
 router.patch('/merchant/stores/:storeId/status', authenticate, (req: Request, res: Response) => {
   try {
     const { actorId, actorRole, actorName } = getActorFromAuth(req);
-    const { isOpen, prepTimeMinutes, minOrderPiasters } = req.body;
+    const { isOpen, prepTimeMinutes, minOrderPiasters } = req.body || {};
+    const actorCityScopeId = typeof req.headers['x-hub-city-scope'] === 'string' ? req.headers['x-hub-city-scope'] : undefined;
 
     const updatedStore = MerchantService.updateStoreStatus({
       storeId: req.params.storeId,
       actorId,
       actorRole,
       actorName,
+      actorCityScopeId,
       isOpen,
       prepTimeMinutes,
       minOrderPiasters,
@@ -299,22 +305,24 @@ router.patch('/merchant/stores/:storeId/status', authenticate, (req: Request, re
   }
 });
 
-// Merchant Create Menu Item (Strict Store Ownership + Integer Piasters)
+// Merchant Create Menu Item (Strict Store Ownership + Integer Piasters + Tenant Scope)
 router.post('/merchant/stores/:storeId/menu-items', authenticate, (req: Request, res: Response) => {
   try {
     const { actorId, actorRole, actorName } = getActorFromAuth(req);
-    const { categoryId, categoryNameAr, nameAr, descriptionAr, pricePiasters, unitAr, isAvailable } = req.body;
+    const { categoryId, categoryNameAr, nameAr, descriptionAr, pricePiasters, unitAr, isAvailable } = req.body || {};
+    const actorCityScopeId = typeof req.headers['x-hub-city-scope'] === 'string' ? req.headers['x-hub-city-scope'] : undefined;
 
     const item = MerchantService.createMenuItem({
       storeId: req.params.storeId,
       actorId,
       actorRole,
       actorName,
+      actorCityScopeId,
       categoryId,
       categoryNameAr,
       nameAr,
       descriptionAr,
-      pricePiasters: Number(pricePiasters),
+      pricePiasters: typeof pricePiasters === 'number' ? pricePiasters : Number(pricePiasters),
       unitAr,
       isAvailable,
     });
@@ -325,11 +333,12 @@ router.post('/merchant/stores/:storeId/menu-items', authenticate, (req: Request,
   }
 });
 
-// Merchant Update Menu Item (Strict Store Ownership + Integer Piasters)
+// Merchant Update Menu Item (Strict Store Ownership + Integer Piasters + Tenant Scope)
 router.patch('/merchant/stores/:storeId/menu-items/:itemId', authenticate, (req: Request, res: Response) => {
   try {
     const { actorId, actorRole, actorName } = getActorFromAuth(req);
-    const { nameAr, descriptionAr, pricePiasters, isAvailable } = req.body;
+    const { nameAr, descriptionAr, pricePiasters, isAvailable } = req.body || {};
+    const actorCityScopeId = typeof req.headers['x-hub-city-scope'] === 'string' ? req.headers['x-hub-city-scope'] : undefined;
 
     const item = MerchantService.updateMenuItem({
       storeId: req.params.storeId,
@@ -337,9 +346,10 @@ router.patch('/merchant/stores/:storeId/menu-items/:itemId', authenticate, (req:
       actorId,
       actorRole,
       actorName,
+      actorCityScopeId,
       nameAr,
       descriptionAr,
-      pricePiasters: pricePiasters !== undefined ? Number(pricePiasters) : undefined,
+      pricePiasters: pricePiasters !== undefined ? (typeof pricePiasters === 'number' ? pricePiasters : Number(pricePiasters)) : undefined,
       isAvailable,
     });
 
@@ -1526,14 +1536,30 @@ router.post('/admin/orders/:id/override-dispatch', authenticate, (req: Request, 
     const { actorId, actorRole, actorName } = getActorFromAuth(req);
     AccessControlGuard.checkPermission(actorRole, 'manual_dispatch_override');
 
+    if (!req.body || typeof req.body !== 'object' || Array.isArray(req.body)) {
+      return sendError(res, 'INVALID_DISPATCH_PAYLOAD', 'بيانات التوجيه اليدوي غير صالحة.', 400);
+    }
+
+    const ALLOWED_DISPATCH_KEYS = new Set(['captainId', 'notes']);
+    for (const key of Object.keys(req.body)) {
+      if (!ALLOWED_DISPATCH_KEYS.has(key)) {
+        return sendError(
+          res,
+          'INVALID_DISPATCH_FIELD',
+          `حقل غير مسموح به في طلب التوجيه اليدوي: ${key}. لا يُسمح بتمرير الحالة أو الطابع الزمني أو هوية المنفذ من الواجهة.`,
+          400
+        );
+      }
+    }
+
     const { captainId } = req.body;
-    if (!captainId) {
+    if (typeof captainId !== 'string' || captainId.trim() === '') {
       return sendError(res, 'MISSING_CAPTAIN_ID', 'معرف الكابتن مطلوب للتعيين اليدوي.', 400);
     }
 
     const updatedOrder = PersistentStore.manualAssignCaptainToOrder(
       req.params.id,
-      captainId,
+      captainId.trim(),
       actorId,
       actorName,
       actorRole
@@ -1553,10 +1579,14 @@ router.post('/admin/orders/:id/emergency-cancel', authenticate, (req: Request, r
     const { actorId, actorRole, actorName } = getActorFromAuth(req);
     AccessControlGuard.checkPermission(actorRole, 'cancel_order');
 
-    const { reason = 'إلغاء طارئ من مركز عمليات الباجور' } = req.body;
+    const rawReason = req.body?.reason ?? 'إلغاء طارئ من مركز عمليات الباجور';
+    if (typeof rawReason !== 'string' || rawReason.trim().length < 3) {
+      return sendError(res, 'INVALID_CANCELLATION_REASON', 'سبب الإلغاء الطارئ يجب أن يكون نصاً واضحاً (3 أحرف على الأقل).', 400);
+    }
+
     const cancelledOrder = PersistentStore.emergencyCancelOrder(
       req.params.id,
-      reason,
+      rawReason.trim(),
       actorId,
       actorName,
       actorRole
@@ -1576,28 +1606,127 @@ router.post('/admin/captains/:id/settle-cash', authenticate, (req: Request, res:
     const { actorId, actorRole, actorName } = getActorFromAuth(req);
     AccessControlGuard.checkPermission(actorRole, 'settle_cash_remittance');
 
-    const { amountPiasters, notes } = req.body;
-    if (!amountPiasters || Number(amountPiasters) <= 0) {
-      return sendError(res, 'INVALID_AMOUNT', 'مبلغ التوريد بالقرش غير صحيح.', 400);
+    if (!req.body || typeof req.body !== 'object' || Array.isArray(req.body)) {
+      return sendError(res, 'INVALID_SETTLEMENT_PAYLOAD', 'بيانات التسوية النقدية غير صالحة.', 400);
+    }
+
+    const ALLOWED_SETTLEMENT_KEYS = new Set(['amountPiasters', 'notes', 'settlementReference']);
+    for (const key of Object.keys(req.body)) {
+      if (!ALLOWED_SETTLEMENT_KEYS.has(key)) {
+        return sendError(
+          res,
+          'INVALID_SETTLEMENT_FIELD',
+          `حقل غير مسموح به في التسوية النقدية: ${key}. يجب إرسال المبلغ بالقروش الصحيحة (amountPiasters) فقط.`,
+          400
+        );
+      }
+    }
+
+    const { amountPiasters, notes, settlementReference } = req.body;
+
+    if (
+      typeof amountPiasters !== 'number' ||
+      !Number.isFinite(amountPiasters) ||
+      !Number.isInteger(amountPiasters) ||
+      amountPiasters <= 0
+    ) {
+      return sendError(
+        res,
+        'INVALID_PIASTERS_AMOUNT',
+        'مبلغ التوريد بالقروش غير صالح. يجب أن يكون عدداً صحيحاً موجباً بالقروش (بدون كسور أو قيم سالبة أو صفرية).',
+        400
+      );
+    }
+
+    if (settlementReference !== undefined) {
+      if (
+        typeof settlementReference !== 'string' ||
+        settlementReference.trim().length < 3 ||
+        settlementReference.trim().length > 128
+      ) {
+        return sendError(
+          res,
+          'INVALID_SETTLEMENT_REFERENCE',
+          'مرجع التسوية النقدية غير صالح (يجب أن يكون نصاً بين 3 و 128 حرفاً).',
+          400
+        );
+      }
+    }
+
+    if (notes !== undefined && typeof notes !== 'string') {
+      return sendError(res, 'INVALID_SETTLEMENT_NOTES', 'ملاحظات التسوية يجب أن تكون نصية.', 400);
+    }
+
+    const trimmedRef = typeof settlementReference === 'string' ? settlementReference.trim() : undefined;
+    const trimmedNotes = typeof notes === 'string' ? notes.trim() : undefined;
+
+    if (!trimmedRef && !trimmedNotes) {
+      return sendError(
+        res,
+        'MISSING_SETTLEMENT_REFERENCE',
+        'يجب إرفاق مرجع التسوية (settlementReference) أو بيان الإيصال (notes) لتوثيق العملية مالياً.',
+        400
+      );
+    }
+
+    // Idempotency protection via Idempotency-Key header or explicit settlementReference
+    const headerIdempotencyKey =
+      typeof req.headers['idempotency-key'] === 'string' ? req.headers['idempotency-key'].trim() : '';
+    const effectiveIdempotencyKey = headerIdempotencyKey || (trimmedRef ? `ref:${req.params.id}:${trimmedRef}` : '');
+    const payloadFingerprint = JSON.stringify({
+      captainId: req.params.id,
+      amountPiasters,
+      settlementReference: trimmedRef || null,
+    });
+
+    if (effectiveIdempotencyKey) {
+      const existingRecord = cashSettlementIdempotencyStore.get(effectiveIdempotencyKey);
+      if (existingRecord) {
+        if (existingRecord.payloadFingerprint !== payloadFingerprint) {
+          return sendError(
+            res,
+            'IDEMPOTENCY_PAYLOAD_MISMATCH',
+            'تم استخدام مفتاح/مرجع التسوية مسبقاً مع بيانات مبلغ أو كابتن مختلف.',
+            409
+          );
+        }
+        return sendSuccess(res, {
+          ...existingRecord.responseBody,
+          isIdempotentReplay: true,
+        });
+      }
     }
 
     const captain = PersistentStore.remitCaptainCash(
       req.params.id,
-      Number(amountPiasters),
+      amountPiasters,
       actorId,
       actorName,
-      notes
+      trimmedNotes,
+      actorRole,
+      trimmedRef
     );
 
     mockCaptains.set(captain.id, captain);
 
-    return sendSuccess(res, {
+    const responseBody = {
       captain,
-      remittedAmountPiasters: Number(amountPiasters),
-      formattedRemittedEgp: `${(Number(amountPiasters) / 100).toFixed(2)} ج.م`,
+      remittedAmountPiasters: amountPiasters,
+      formattedRemittedEgp: `${(amountPiasters / 100).toFixed(2)} ج.م`,
       remainingCashPiasters: captain.cashHoldingPiasters,
       formattedRemainingEgp: `${(captain.cashHoldingPiasters / 100).toFixed(2)} ج.م`,
-    });
+      settlementReference: trimmedRef,
+      isIdempotentReplay: false,
+    };
+
+    if (effectiveIdempotencyKey) {
+      cashSettlementIdempotencyStore.set(effectiveIdempotencyKey, {
+        payloadFingerprint,
+        responseBody,
+      });
+    }
+
+    return sendSuccess(res, responseBody);
   } catch (err: any) {
     return sendError(res, err.code || 'REMITTANCE_FAILED', err.message, err.statusCode || 400);
   }
@@ -1609,19 +1738,30 @@ router.post('/admin/captains/:id/renew-subscription', authenticate, (req: Reques
     const { actorId, actorRole, actorName } = getActorFromAuth(req);
     AccessControlGuard.checkPermission(actorRole, 'manage_captain_accounts');
 
-    const { daysToAdd = 30 } = req.body;
+    if (req.body && typeof req.body === 'object' && !Array.isArray(req.body)) {
+      for (const key of Object.keys(req.body)) {
+        if (key !== 'daysToAdd') {
+          return sendError(res, 'INVALID_SUBSCRIPTION_FIELD', `حقل غير مسموح به في تجديد الاشتراك: ${key}`, 400);
+        }
+      }
+    }
+
+    const rawDays = req.body?.daysToAdd ?? 30;
+    const daysToAdd = typeof rawDays === 'number' ? rawDays : Number(rawDays);
+
     const captain = PersistentStore.renewCaptainSubscription(
       req.params.id,
-      Number(daysToAdd),
+      daysToAdd,
       actorId,
-      actorName
+      actorName,
+      actorRole
     );
 
     mockCaptains.set(captain.id, captain);
 
     return sendSuccess(res, {
       captain,
-      daysAdded: Number(daysToAdd),
+      daysAdded: daysToAdd,
       newExpiryDate: captain.currentPeriodEndsAt,
       commissionInvariant: '0% Order Commission Verified',
     });
@@ -1645,7 +1785,7 @@ router.put('/admin/settings', authenticate, (req: Request, res: Response) => {
     const { actorId, actorRole, actorName } = getActorFromAuth(req);
     AccessControlGuard.checkPermission(actorRole, 'manage_pricing');
 
-    const updatedSettings = PersistentStore.updateSettings(req.body, actorId, actorName);
+    const updatedSettings = PersistentStore.updateSettings(req.body, actorId, actorName, actorRole);
     return sendSuccess(res, updatedSettings);
   } catch (err: any) {
     return sendError(res, err.code || 'SETTINGS_UPDATE_FAILED', err.message, err.statusCode || 400);
@@ -1658,13 +1798,18 @@ router.put('/admin/zones/:zoneId/tariffs', authenticate, (req: Request, res: Res
     const { actorId, actorRole, actorName } = getActorFromAuth(req);
     AccessControlGuard.checkPermission(actorRole, 'manage_zones');
 
+    if (!req.body || typeof req.body !== 'object' || Array.isArray(req.body)) {
+      return sendError(res, 'INVALID_TARIFF_PAYLOAD', 'بيانات تحديث التعريفة غير صالحة.', 400);
+    }
+
     const { serviceTypeId = 'package', ...updates } = req.body;
     const updatedTariff = PersistentStore.updateZoneTariff(
       req.params.zoneId,
       serviceTypeId,
       updates,
       actorId,
-      actorName
+      actorName,
+      actorRole
     );
     return sendSuccess(res, updatedTariff);
   } catch (err: any) {
@@ -1710,6 +1855,7 @@ export function resetTestDatabases() {
   ordersDb.clear();
   idempotencyStore.clear();
   paymentIntentIdempotencyStore.clear();
+  cashSettlementIdempotencyStore.clear();
   mockCaptains.clear();
   WebhookService.clearCache();
   CashCollectionService.clearCache();

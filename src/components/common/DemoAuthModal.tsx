@@ -64,8 +64,8 @@ export const DemoAuthModal: React.FC<DemoAuthModalProps> = ({ isOpen, onClose })
               <KeyRound className="w-4 h-4" />
             </div>
             <div>
-              <h2 className="text-sm font-black text-slate-900">تسجيل الدخول والتبديل بين الحسابات التجريبية</h2>
-              <p className="text-[11px] text-slate-500">منظومة مشوار الموحدة متعددة الأدوار (الباجور)</p>
+              <h2 className="text-sm font-black text-slate-900">التبديل بين حسابات المحاكاة المحلية (Non-Production Sandbox)</h2>
+              <p className="text-[11px] text-slate-500">محاكاة واجهات العميل والكابتن والتاجر فقط — معزولة عن واجهات الإدارة والإنتاج</p>
             </div>
           </div>
           <button
@@ -81,9 +81,9 @@ export const DemoAuthModal: React.FC<DemoAuthModalProps> = ({ isOpen, onClose })
           <ShieldAlert className="w-4 h-4 text-amber-700 shrink-0 mt-0.5" />
           <div>
             <strong className="font-extrabold text-amber-950 block mb-0.5">
-              بيئة محاكاة وتجربة أولية (Demo Prototype Simulation):
+              بيئة محاكاة محلية معزولة (Non-Production Sandbox Mode):
             </strong>
-            الحسابات المعروضة هنا تحاكي تسجيل الدخول وسيناريوهات السوق (العميل، الكابتن، والتاجر، وعمليات الشركة) لاختبار تدفق الطلبات وعزل البيانات. لا تمثل تفويضاً أمنياً إنتاجياً ولا تسمح بترقية الصلاحيات دون ضوابط الخادم الحقيقية.
+            تقتصر هذه النافذة على محاكاة حسابات العميل والكابتن والتاجر في الذاكرة المحلية للمتصفح فقط. تم إزالة حسابات المالك وإدارة العمليات من مبدل الحسابات، وتخضع كافة مسارات الإدارة <code className="font-mono text-[11px]">/api/v1/admin/*</code> للتحقق الصارم من رمز مصادقة الخادم (Fail-Closed 401/403).
           </div>
         </div>
 

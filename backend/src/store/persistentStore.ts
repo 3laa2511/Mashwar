@@ -22,6 +22,40 @@ import {
   OrderStatus,
 } from '../types/index.js';
 import { AuditLogger } from '../security/auditLogger.js';
+import { OrderFsm } from '../orders/orderFsm.js';
+import { CaptainEligibilityEngine } from '../captain/captainEligibility.js';
+import { UserRole } from '../security/rbac.js';
+
+/**
+ * Converts a user-facing EGP input (number or numeric string) into integer Egyptian piasters (1 EGP = 100 piasters)
+ * exactly once at the boundary, rejecting non-finite, zero/negative, or fractional piaster values.
+ */
+export function convertEgpInputToPiasters(egpInput: unknown): number {
+  const numericValue =
+    typeof egpInput === 'number'
+      ? egpInput
+      : typeof egpInput === 'string' && egpInput.trim() !== ''
+      ? Number(egpInput.trim())
+      : NaN;
+
+  if (!Number.isFinite(numericValue) || numericValue <= 0) {
+    const err = new Error('قيمة المبلغ بالجنيه يجب أن تكون رقماً موجباً صالحاً أكبر من الصفر.');
+    (err as any).code = 'INVALID_PIASTERS_AMOUNT';
+    (err as any).statusCode = 400;
+    throw err;
+  }
+
+  const scaled = numericValue * 100;
+  const rounded = Math.round(scaled);
+  if (Math.abs(scaled - rounded) > 1e-6 || !Number.isSafeInteger(rounded) || rounded <= 0) {
+    const err = new Error('لا يُسمح بكسور القرش؛ يجب أن يتحول المبلغ إلى عدد صحيح من القروش.');
+    (err as any).code = 'INVALID_PIASTERS_AMOUNT';
+    (err as any).statusCode = 400;
+    throw err;
+  }
+
+  return rounded;
+}
 
 export interface SystemSettings {
   hubNameAr: string; // مركز عمليات الباجور - المنوفية
@@ -911,11 +945,64 @@ export class PersistentStore {
   public static updateZoneTariff(
     zoneId: string,
     serviceTypeId: 'package' | 'restaurant_store' | 'errand',
-    updates: Partial<Pick<ZoneTariff, 'baseFarePiasters' | 'ratePerKmPiasters' | 'ruralSurchargePiasters' | 'platformFeePiasters' | 'minFarePiasters' | 'isActive'>>,
+    updates: Partial<Pick<ZoneTariff, 'baseFarePiasters' | 'baseIncludedKm' | 'ratePerKmPiasters' | 'ruralSurchargePiasters' | 'platformFeePiasters' | 'minFarePiasters' | 'isActive'>>,
     actorId: string,
-    actorName: string
+    actorName: string,
+    actorRole: UserRole = 'owner'
   ): ZoneTariff {
     this.initialize();
+
+    if ((serviceTypeId as string) === 'passenger') {
+      const err = new Error(
+        'محظور نظامياً: لا يمكن تفعيل أو تعديل تعريفة نقل الركاب وفقاً للقانون رقم ٧٣ لسنة ٢٠١٨.'
+      );
+      (err as any).code = 'REGULATORY_COMPLIANCE_LOCK';
+      (err as any).statusCode = 403;
+      throw err;
+    }
+
+    const ALLOWED_SERVICE_TYPES = ['package', 'restaurant_store', 'errand'] as const;
+    if (!ALLOWED_SERVICE_TYPES.includes(serviceTypeId)) {
+      const err = new Error(`نوع الخدمة غير صالح لتحديث التعريفة: ${String(serviceTypeId)}`);
+      (err as any).code = 'INVALID_SERVICE_TYPE';
+      (err as any).statusCode = 400;
+      throw err;
+    }
+
+    if (!updates || typeof updates !== 'object' || Array.isArray(updates)) {
+      const err = new Error('بيانات تحديث التعريفة غير صالحة.');
+      (err as any).code = 'INVALID_TARIFF_PAYLOAD';
+      (err as any).statusCode = 400;
+      throw err;
+    }
+
+    const ALLOWED_TARIFF_KEYS = new Set([
+      'baseFarePiasters',
+      'baseIncludedKm',
+      'ratePerKmPiasters',
+      'ruralSurchargePiasters',
+      'platformFeePiasters',
+      'minFarePiasters',
+      'isActive',
+    ]);
+
+    const updateKeys = Object.keys(updates);
+    if (updateKeys.length === 0) {
+      const err = new Error('يجب تحديد حقل واحد على الأقل لتحديث التعريفة.');
+      (err as any).code = 'EMPTY_TARIFF_UPDATES';
+      (err as any).statusCode = 400;
+      throw err;
+    }
+
+    for (const key of updateKeys) {
+      if (!ALLOWED_TARIFF_KEYS.has(key)) {
+        const err = new Error(`حقل غير مسموح به في تحديث التعريفة: ${key}`);
+        (err as any).code = 'INVALID_TARIFF_FIELD';
+        (err as any).statusCode = 400;
+        throw err;
+      }
+    }
+
     const id = `tariff_${zoneId}_${serviceTypeId}`;
     const existing = this.zoneTariffs.get(id);
     if (!existing) {
@@ -925,16 +1012,71 @@ export class PersistentStore {
       throw err;
     }
 
+    const assertIntegerPiastersInRange = (val: unknown, fieldName: string, min: number, max: number): number => {
+      if (typeof val !== 'number' || !Number.isFinite(val) || !Number.isInteger(val) || val < min || val > max) {
+        const err = new Error(`قيمة غير صالحة للحقل ${fieldName}: يجب أن تكون عدداً صحيحاً بالقروش بين ${min} و ${max}.`);
+        (err as any).code = 'INVALID_TARIFF_VALUE';
+        (err as any).statusCode = 400;
+        throw err;
+      }
+      return val;
+    };
+
+    const sanitizedUpdates: Partial<ZoneTariff> = {};
+
+    if (updates.baseFarePiasters !== undefined) {
+      sanitizedUpdates.baseFarePiasters = assertIntegerPiastersInRange(updates.baseFarePiasters, 'baseFarePiasters', 500, 100000);
+    }
+    if (updates.ratePerKmPiasters !== undefined) {
+      sanitizedUpdates.ratePerKmPiasters = assertIntegerPiastersInRange(updates.ratePerKmPiasters, 'ratePerKmPiasters', 100, 50000);
+    }
+    if (updates.ruralSurchargePiasters !== undefined) {
+      sanitizedUpdates.ruralSurchargePiasters = assertIntegerPiastersInRange(updates.ruralSurchargePiasters, 'ruralSurchargePiasters', 0, 50000);
+    }
+    if (updates.platformFeePiasters !== undefined) {
+      sanitizedUpdates.platformFeePiasters = assertIntegerPiastersInRange(updates.platformFeePiasters, 'platformFeePiasters', 0, 10000);
+    }
+    if (updates.minFarePiasters !== undefined) {
+      sanitizedUpdates.minFarePiasters = assertIntegerPiastersInRange(updates.minFarePiasters, 'minFarePiasters', 500, 200000);
+    }
+    if (updates.baseIncludedKm !== undefined) {
+      if (typeof updates.baseIncludedKm !== 'number' || !Number.isFinite(updates.baseIncludedKm) || updates.baseIncludedKm < 0 || updates.baseIncludedKm > 50) {
+        const err = new Error('قيمة غير صالحة للحقل baseIncludedKm: يجب أن تكون بين 0 و 50 كم.');
+        (err as any).code = 'INVALID_TARIFF_VALUE';
+        (err as any).statusCode = 400;
+        throw err;
+      }
+      sanitizedUpdates.baseIncludedKm = updates.baseIncludedKm;
+    }
+    if (updates.isActive !== undefined) {
+      if (typeof updates.isActive !== 'boolean') {
+        const err = new Error('قيمة غير صالحة للحقل isActive: يجب أن تكون قيمة منطقية (boolean).');
+        (err as any).code = 'INVALID_TARIFF_VALUE';
+        (err as any).statusCode = 400;
+        throw err;
+      }
+      sanitizedUpdates.isActive = updates.isActive;
+    }
+
+    const nextBaseFare = sanitizedUpdates.baseFarePiasters ?? existing.baseFarePiasters;
+    const nextMinFare = sanitizedUpdates.minFarePiasters ?? existing.minFarePiasters;
+    if (nextMinFare < nextBaseFare) {
+      const err = new Error('الحد الأدنى للأجرة (minFarePiasters) لا يمكن أن يكون أقل من فتحة العداد الأساسية (baseFarePiasters).');
+      (err as any).code = 'INVALID_TARIFF_CONFIGURATION';
+      (err as any).statusCode = 422;
+      throw err;
+    }
+
     const updated: ZoneTariff = {
       ...existing,
-      ...updates,
+      ...sanitizedUpdates,
       updatedAt: new Date().toISOString(),
     };
     this.zoneTariffs.set(id, updated);
 
     AuditLogger.record({
       actorId,
-      actorRole: 'owner',
+      actorRole,
       actorName,
       actionType: 'ZONE_TARIFF_UPDATED',
       targetEntity: 'zone',
@@ -1110,9 +1252,17 @@ export class PersistentStore {
   public static updateSettings(
     newSettings: Partial<SystemSettings>,
     actorId: string,
-    actorName: string
+    actorName: string,
+    actorRole: UserRole = 'owner'
   ): SystemSettings {
     this.initialize();
+
+    if (!newSettings || typeof newSettings !== 'object' || Array.isArray(newSettings)) {
+      const err = new Error('بيانات الإعدادات غير صالحة.');
+      (err as any).code = 'INVALID_SETTINGS_PAYLOAD';
+      (err as any).statusCode = 400;
+      throw err;
+    }
 
     const previousState = { ...this.settings };
 
@@ -1126,9 +1276,91 @@ export class PersistentStore {
       throw err;
     }
 
+    const ALLOWED_SETTINGS_KEYS = new Set([
+      'hubNameAr',
+      'baseFarePiasters',
+      'baseIncludedKm',
+      'ratePerKmPiasters',
+      'ruralSurchargePiasters',
+      'platformFeePiasters',
+      'captainCashCeilingPiasters',
+      'subscriptionGracePeriodHours',
+      'subscriptionMonthlyFeePiasters',
+      'passengerMobilityLocked',
+    ]);
+
+    const inputKeys = Object.keys(newSettings);
+    if (inputKeys.length === 0) {
+      const err = new Error('يجب تمرير حقل واحد على الأقل لتحديث الإعدادات.');
+      (err as any).code = 'EMPTY_SETTINGS_UPDATES';
+      (err as any).statusCode = 400;
+      throw err;
+    }
+
+    for (const key of inputKeys) {
+      if (!ALLOWED_SETTINGS_KEYS.has(key)) {
+        const err = new Error(`حقل غير مسموح به في تحديث إعدادات النظام: ${key}`);
+        (err as any).code = 'INVALID_SETTINGS_FIELD';
+        (err as any).statusCode = 400;
+        throw err;
+      }
+    }
+
+    const assertIntRange = (val: unknown, field: string, min: number, max: number): number => {
+      if (typeof val !== 'number' || !Number.isFinite(val) || !Number.isInteger(val) || val < min || val > max) {
+        const err = new Error(`قيمة غير صالحة للحقل ${field}: يجب أن تكون عدداً صحيحاً بين ${min} و ${max}.`);
+        (err as any).code = 'INVALID_SETTINGS_VALUE';
+        (err as any).statusCode = 400;
+        throw err;
+      }
+      return val;
+    };
+
+    const sanitized: Partial<SystemSettings> = {};
+
+    if (newSettings.hubNameAr !== undefined) {
+      if (typeof newSettings.hubNameAr !== 'string' || newSettings.hubNameAr.trim().length < 3 || newSettings.hubNameAr.trim().length > 120) {
+        const err = new Error('اسم مركز العمليات غير صالح (يجب أن يكون نصاً بين 3 و 120 حرفاً).');
+        (err as any).code = 'INVALID_SETTINGS_VALUE';
+        (err as any).statusCode = 400;
+        throw err;
+      }
+      sanitized.hubNameAr = newSettings.hubNameAr.trim();
+    }
+    if (newSettings.baseFarePiasters !== undefined) {
+      sanitized.baseFarePiasters = assertIntRange(newSettings.baseFarePiasters, 'baseFarePiasters', 500, 100000);
+    }
+    if (newSettings.baseIncludedKm !== undefined) {
+      if (typeof newSettings.baseIncludedKm !== 'number' || !Number.isFinite(newSettings.baseIncludedKm) || newSettings.baseIncludedKm < 0 || newSettings.baseIncludedKm > 50) {
+        const err = new Error('قيمة غير صالحة للحقل baseIncludedKm: يجب أن تكون بين 0 و 50 كم.');
+        (err as any).code = 'INVALID_SETTINGS_VALUE';
+        (err as any).statusCode = 400;
+        throw err;
+      }
+      sanitized.baseIncludedKm = newSettings.baseIncludedKm;
+    }
+    if (newSettings.ratePerKmPiasters !== undefined) {
+      sanitized.ratePerKmPiasters = assertIntRange(newSettings.ratePerKmPiasters, 'ratePerKmPiasters', 100, 50000);
+    }
+    if (newSettings.ruralSurchargePiasters !== undefined) {
+      sanitized.ruralSurchargePiasters = assertIntRange(newSettings.ruralSurchargePiasters, 'ruralSurchargePiasters', 0, 50000);
+    }
+    if (newSettings.platformFeePiasters !== undefined) {
+      sanitized.platformFeePiasters = assertIntRange(newSettings.platformFeePiasters, 'platformFeePiasters', 0, 10000);
+    }
+    if (newSettings.captainCashCeilingPiasters !== undefined) {
+      sanitized.captainCashCeilingPiasters = assertIntRange(newSettings.captainCashCeilingPiasters, 'captainCashCeilingPiasters', 10000, 1000000);
+    }
+    if (newSettings.subscriptionGracePeriodHours !== undefined) {
+      sanitized.subscriptionGracePeriodHours = assertIntRange(newSettings.subscriptionGracePeriodHours, 'subscriptionGracePeriodHours', 0, 720);
+    }
+    if (newSettings.subscriptionMonthlyFeePiasters !== undefined) {
+      sanitized.subscriptionMonthlyFeePiasters = assertIntRange(newSettings.subscriptionMonthlyFeePiasters, 'subscriptionMonthlyFeePiasters', 0, 500000);
+    }
+
     this.settings = {
       ...this.settings,
-      ...newSettings,
+      ...sanitized,
       passengerMobilityLocked: true, // Permanent lock
       lastUpdated: new Date().toISOString(),
       updatedBy: actorName,
@@ -1136,7 +1368,7 @@ export class PersistentStore {
 
     AuditLogger.record({
       actorId,
-      actorRole: 'owner',
+      actorRole,
       actorName,
       actionType: 'SYSTEM_SETTINGS_UPDATED',
       targetEntity: 'system_settings',
@@ -1155,18 +1387,58 @@ export class PersistentStore {
     amountPiasters: number,
     actorId: string,
     actorName: string,
-    notes?: string
+    notes?: string,
+    actorRole: UserRole = 'owner',
+    settlementReference?: string
   ): CaptainProfile {
     this.initialize();
     const captain = this.captains.get(captainId);
     if (!captain) {
       const err = new Error('الكابتن غير موجود في النظام.');
+      (err as any).code = 'CAPTAIN_NOT_FOUND';
       (err as any).statusCode = 404;
       throw err;
     }
 
+    if (
+      typeof amountPiasters !== 'number' ||
+      !Number.isFinite(amountPiasters) ||
+      !Number.isInteger(amountPiasters) ||
+      amountPiasters <= 0
+    ) {
+      const err = new Error('قيمة المبلغ بالقروش غير صالحة. يجب أن تكون عدداً صحيحاً موجباً (بدون كسور قرش).');
+      (err as any).code = 'INVALID_PIASTERS_AMOUNT';
+      (err as any).statusCode = 400;
+      throw err;
+    }
+
+    if (settlementReference !== undefined) {
+      if (typeof settlementReference !== 'string' || settlementReference.trim().length < 3 || settlementReference.trim().length > 128) {
+        const err = new Error('مرجع التسوية النقدية غير صالح (يجب أن يكون نصاً بين 3 و 128 حرفاً).');
+        (err as any).code = 'INVALID_SETTLEMENT_REFERENCE';
+        (err as any).statusCode = 400;
+        throw err;
+      }
+    }
+
+    if (notes !== undefined && typeof notes !== 'string') {
+      const err = new Error('ملاحظات التسوية يجب أن تكون نصية.');
+      (err as any).code = 'INVALID_SETTLEMENT_NOTES';
+      (err as any).statusCode = 400;
+      throw err;
+    }
+
     const previousHolding = captain.cashHoldingPiasters;
-    const newHolding = Math.max(0, previousHolding - amountPiasters);
+    if (amountPiasters > previousHolding) {
+      const err = new Error(
+        `المبلغ المطلوب تسويته (${amountPiasters} قرش / ${(amountPiasters / 100).toFixed(2)} ج.م) يتجاوز العهدة النقدية المسجلة للكابتن (${previousHolding} قرش / ${(previousHolding / 100).toFixed(2)} ج.م).`
+      );
+      (err as any).code = 'EXCEEDS_CASH_HOLDING';
+      (err as any).statusCode = 422;
+      throw err;
+    }
+
+    const newHolding = previousHolding - amountPiasters;
     captain.cashHoldingPiasters = newHolding;
 
     // If suspended due to cash ceiling, check if eligible for re-activation
@@ -1176,17 +1448,26 @@ export class PersistentStore {
 
     this.captains.set(captain.id, captain);
 
+    const effectiveNotes = settlementReference
+      ? `[مرجع التسوية: ${settlementReference.trim()}] ${notes ? notes.trim() : ''}`.trim()
+      : notes;
+
     AuditLogger.record({
       actorId,
-      actorRole: 'owner',
+      actorRole,
       actorName,
       actionType: 'CAPTAIN_CASH_SETTLED',
       targetEntity: 'captain',
       targetId: captain.id,
-      descriptionAr: `توريد وتسوية نقدية بمبلغ ${(amountPiasters / 100).toFixed(2)} ج.م للكابتن ${captain.fullName}. المتبقي في العهدة: ${(newHolding / 100).toFixed(2)} ج.م.`,
+      descriptionAr: `توريد وتسوية نقدية بمبلغ ${amountPiasters} قرش (${(amountPiasters / 100).toFixed(2)} ج.م) للكابتن ${captain.fullName}. المتبقي في العهدة: ${newHolding} قرش (${(newHolding / 100).toFixed(2)} ج.م).`,
       previousState: { cashHoldingPiasters: previousHolding },
-      newState: { cashHoldingPiasters: newHolding, subscriptionStatus: captain.subscriptionStatus },
-      notes,
+      newState: {
+        cashHoldingPiasters: newHolding,
+        remittedAmountPiasters: amountPiasters,
+        subscriptionStatus: captain.subscriptionStatus,
+        ...(settlementReference ? { settlementReference: settlementReference.trim() } : {}),
+      },
+      notes: effectiveNotes,
     });
 
     return captain;
@@ -1196,13 +1477,22 @@ export class PersistentStore {
     captainId: string,
     daysToAdd: number = 30,
     actorId: string,
-    actorName: string
+    actorName: string,
+    actorRole: UserRole = 'owner'
   ): CaptainProfile {
     this.initialize();
     const captain = this.captains.get(captainId);
     if (!captain) {
       const err = new Error('الكابتن غير موجود في النظام.');
+      (err as any).code = 'CAPTAIN_NOT_FOUND';
       (err as any).statusCode = 404;
+      throw err;
+    }
+
+    if (typeof daysToAdd !== 'number' || !Number.isFinite(daysToAdd) || !Number.isInteger(daysToAdd) || daysToAdd < 1 || daysToAdd > 365) {
+      const err = new Error('عدد أيام التجديد يجب أن يكون عدداً صحيحاً بين 1 و 365 يوماً.');
+      (err as any).code = 'INVALID_SUBSCRIPTION_DAYS';
+      (err as any).statusCode = 400;
       throw err;
     }
 
@@ -1235,7 +1525,7 @@ export class PersistentStore {
 
     AuditLogger.record({
       actorId,
-      actorRole: 'owner',
+      actorRole,
       actorName,
       actionType: 'CAPTAIN_SUBSCRIPTION_RENEWED',
       targetEntity: 'captain',
@@ -1258,12 +1548,13 @@ export class PersistentStore {
     captainId: string,
     actorId: string,
     actorName: string,
-    actorRole: any = 'operations_dispatcher'
+    actorRole: UserRole = 'operations_dispatcher'
   ): Order {
     this.initialize();
     const order = this.orders.get(orderId);
     if (!order) {
       const err = new Error('الطلب غير موجود.');
+      (err as any).code = 'ORDER_NOT_FOUND';
       (err as any).statusCode = 404;
       throw err;
     }
@@ -1271,30 +1562,129 @@ export class PersistentStore {
     const captain = this.captains.get(captainId);
     if (!captain) {
       const err = new Error('الكابتن المطلوب غير موجود.');
+      (err as any).code = 'CAPTAIN_NOT_FOUND';
       (err as any).statusCode = 404;
       throw err;
     }
 
-    if (captain.subscriptionStatus === 'expired' || captain.subscriptionStatus === 'suspended') {
-      const err = new Error(`لا يمكن تعيين الكابتن: حسابه غير مؤهل (${captain.subscriptionStatus}).`);
+    // 1. Terminal state check
+    if (order.status === 'delivered' || order.status === 'cancelled') {
+      const err = new Error(
+        `غير مسموح بالتوجيه الإداري: الطلب في حالة نهائية (${order.status}) ولا يقبل أي تعديل.`
+      );
+      (err as any).code = 'TERMINAL_STATE_MUTATION_FORBIDDEN';
+      (err as any).statusCode = 422;
+      throw err;
+    }
+
+    // 2. Enforce allowed states for administrative dispatch:
+    // - For restaurant_store orders: only 'ready_for_pickup' or 'searching_captain' (cannot skip store acceptance/preparation).
+    // - For package / errand orders: 'searching_captain', 'ready_for_pickup', or 'created' (transitioned via searching_captain -> captain_assigned).
+    // - Already in-progress delivery states ('captain_assigned', 'at_pickup', 'picked_up', 'in_transit') cannot be re-dispatched without proper transition.
+    const allowedStatusesForManualDispatch: OrderStatus[] =
+      order.serviceTypeId === 'restaurant_store'
+        ? ['searching_captain', 'ready_for_pickup']
+        : ['searching_captain', 'ready_for_pickup', 'created'];
+
+    if (!allowedStatusesForManualDispatch.includes(order.status)) {
+      const err = new Error(
+        `انتقال حالة غير صالح للتوجيه اليدوي: لا يمكن تعيين كابتن والطلب في حالة (${order.status}). يجب أن يكون الطلب في حالة البحث عن كابتن أو جاهز للاستلام.`
+      );
+      (err as any).code = 'INVALID_STATE_TRANSITION';
+      (err as any).statusCode = 422;
+      throw err;
+    }
+
+    if (order.assignedCaptainId && order.assignedCaptainId === captain.id) {
+      const err = new Error('هذا الكابتن معين بالفعل لهذا الطلب.');
+      (err as any).code = 'CAPTAIN_ALREADY_ASSIGNED';
+      (err as any).statusCode = 409;
+      throw err;
+    }
+
+    // 3. Enforce comprehensive Captain Eligibility (online status, subscription, cash ceiling, city scope)
+    if (!captain.isOnline) {
+      const err = new Error(`لا يمكن تعيين الكابتن (${captain.fullName}): الكابتن غير متصل حالياً (Offline).`);
+      (err as any).code = 'CAPTAIN_OFFLINE';
+      (err as any).statusCode = 422;
+      throw err;
+    }
+
+    const eligibility = CaptainEligibilityEngine.evaluate(captain);
+    if (!eligibility.isEligibleForNewOffers) {
+      const err = new Error(
+        `لا يمكن تعيين الكابتن: ${eligibility.statusMessageAr || `حسابه غير مؤهل (${captain.subscriptionStatus}).`}`
+      );
+      (err as any).code = 'CAPTAIN_INELIGIBLE_FOR_DISPATCH';
+      (err as any).statusCode = 422;
+      throw err;
+    }
+
+    if (order.paymentMethod === 'cash_on_delivery' && !eligibility.canAcceptCashOrders) {
+      const err = new Error(
+        `لا يمكن تعيين الكابتن لطلب نقدي: ${eligibility.statusMessageAr || 'تجاوز سقف العهدة النقدية.'}`
+      );
+      (err as any).code = 'CAPTAIN_CASH_CEILING_EXCEEDED';
+      (err as any).statusCode = 422;
+      throw err;
+    }
+
+    if (order.cityId && captain.cityId && order.cityId !== captain.cityId) {
+      const err = new Error(
+        `لا يمكن تعيين الكابتن (${captain.fullName}) لأن نطاق عمله (${captain.cityId}) يختلف عن مدينة الطلب (${order.cityId}).`
+      );
+      (err as any).code = 'CAPTAIN_ZONE_MISMATCH';
       (err as any).statusCode = 422;
       throw err;
     }
 
     const previousOrder = { ...order };
-    const nowIso = new Date().toISOString();
-    order.status = 'captain_assigned';
-    order.acceptedAt = order.acceptedAt || nowIso;
-    order.assignedCaptainId = captain.id;
-    order.captainName = captain.fullName;
-    order.captainPhone = captain.phone;
-    order.captainVehicle = `${captain.vehicleType} (${captain.vehiclePlate})`;
-    order.updatedAt = nowIso;
+    let workingOrder: Order = { ...order };
 
-    this.orders.set(order.id, order);
+    // If package/errand order is in 'created', transition through 'searching_captain' first via OrderFsm
+    if (workingOrder.status === 'created') {
+      const searchResult = OrderFsm.transition(workingOrder, {
+        targetStatus: 'searching_captain',
+        actorId,
+        actorRole,
+      });
+      workingOrder = searchResult.order;
+      this.recordOrderStateHistory({
+        orderId: workingOrder.id,
+        fromStatus: 'created',
+        toStatus: 'searching_captain',
+        actorId,
+        actorRole,
+        notes: 'بدء البحث عن كابتن تمهيداً للتوجيه الإداري',
+      });
+    }
+
+    const statusBeforeAssign = workingOrder.status;
+    const preAssignedOrder: Order = {
+      ...workingOrder,
+      assignedCaptainId: captain.id,
+    };
+
+    const assignResult = OrderFsm.transition(preAssignedOrder, {
+      targetStatus: 'captain_assigned',
+      actorId,
+      actorRole,
+    });
+
+    const nowIso = assignResult.order.updatedAt;
+    const updatedOrder: Order = {
+      ...assignResult.order,
+      acceptedAt: assignResult.order.acceptedAt || nowIso,
+      assignedCaptainId: captain.id,
+      captainName: captain.fullName,
+      captainPhone: captain.phone,
+      captainVehicle: `${captain.vehicleType} (${captain.vehiclePlate})`,
+    };
+
+    this.orders.set(updatedOrder.id, updatedOrder);
     this.recordOrderStateHistory({
-      orderId: order.id,
-      fromStatus: previousOrder.status,
+      orderId: updatedOrder.id,
+      fromStatus: statusBeforeAssign,
       toStatus: 'captain_assigned',
       actorId,
       actorRole,
@@ -1307,13 +1697,13 @@ export class PersistentStore {
       actorName,
       actionType: 'MANUAL_DISPATCH_ASSIGNMENT',
       targetEntity: 'order',
-      targetId: order.id,
-      descriptionAr: `تدخل يدوي من العمليات: تعيين الكابتن ${captain.fullName} للطلب رقم ${order.orderNumber}.`,
+      targetId: updatedOrder.id,
+      descriptionAr: `تدخل يدوي من العمليات: تعيين الكابتن ${captain.fullName} للطلب رقم ${updatedOrder.orderNumber}.`,
       previousState: { status: previousOrder.status, assignedCaptainId: previousOrder.assignedCaptainId },
-      newState: { status: order.status, assignedCaptainId: order.assignedCaptainId },
+      newState: { status: updatedOrder.status, assignedCaptainId: updatedOrder.assignedCaptainId, acceptedAt: updatedOrder.acceptedAt },
     });
 
-    return order;
+    return updatedOrder;
   }
 
   public static emergencyCancelOrder(
@@ -1321,30 +1711,33 @@ export class PersistentStore {
     reason: string,
     actorId: string,
     actorName: string,
-    actorRole: any = 'operations_dispatcher'
+    actorRole: UserRole = 'operations_dispatcher'
   ): Order {
     this.initialize();
     const order = this.orders.get(orderId);
     if (!order) {
       const err = new Error('الطلب غير موجود.');
+      (err as any).code = 'ORDER_NOT_FOUND';
       (err as any).statusCode = 404;
       throw err;
     }
 
-    if (order.status === 'delivered') {
-      const err = new Error('لا يمكن إلغاء طلب تم تسليمه بنجاح.');
-      (err as any).statusCode = 422;
-      throw err;
-    }
-
     const prevStatus = order.status;
-    order.status = 'cancelled';
-    order.specialInstructions = `${order.specialInstructions || ''} [إلغاء إداري: ${reason}]`;
-    order.updatedAt = new Date().toISOString();
+    const cancelResult = OrderFsm.transition(order, {
+      targetStatus: 'cancelled',
+      actorId,
+      actorRole,
+      cancellationReason: reason,
+    });
 
-    this.orders.set(order.id, order);
+    const updatedOrder: Order = {
+      ...cancelResult.order,
+      specialInstructions: `${order.specialInstructions || ''} [إلغاء إداري: ${reason}]`.trim(),
+    };
+
+    this.orders.set(updatedOrder.id, updatedOrder);
     this.recordOrderStateHistory({
-      orderId: order.id,
+      orderId: updatedOrder.id,
       fromStatus: prevStatus,
       toStatus: 'cancelled',
       actorId,
@@ -1358,13 +1751,13 @@ export class PersistentStore {
       actorName,
       actionType: 'ORDER_EMERGENCY_CANCELLED',
       targetEntity: 'order',
-      targetId: order.id,
-      descriptionAr: `إلغاء إداري للطلب ${order.orderNumber}. السبب: ${reason}`,
+      targetId: updatedOrder.id,
+      descriptionAr: `إلغاء إداري للطلب ${updatedOrder.orderNumber}. السبب: ${reason}`,
       previousState: { status: prevStatus },
       newState: { status: 'cancelled' },
     });
 
-    return order;
+    return updatedOrder;
   }
 
   public static resetAll(): void {

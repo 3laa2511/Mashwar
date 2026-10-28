@@ -217,10 +217,12 @@ export function formatHumanReadableAcceptedTimestamp(
   acceptedAtLabel?: string
 ): string | null {
   if (!acceptedAtIso && !acceptedAtLabel) return null;
-  if (!acceptedAtIso) return acceptedAtLabel || null;
 
-  const dt = new Date(acceptedAtIso);
-  if (isNaN(dt.getTime())) return acceptedAtLabel || null;
+  const candidateIso = acceptedAtIso || acceptedAtLabel;
+  if (!candidateIso) return null;
+
+  const dt = new Date(candidateIso);
+  if (isNaN(dt.getTime())) return acceptedAtLabel || acceptedAtIso || null;
 
   const clockStr = formatArabicClockTime(dt);
   const diffMs = Date.now() - dt.getTime();
@@ -241,6 +243,46 @@ export function formatHumanReadableAcceptedTimestamp(
   }
 
   return `الساعة ${clockStr} (${relativeStr})`;
+}
+
+/**
+ * Converts a user-facing EGP input (number or numeric string) into integer Egyptian piasters (1 EGP = 100 piasters)
+ * exactly once at the UI boundary. Rejects non-finite, zero/negative, or fractional piaster values.
+ */
+export function convertEgpInputToPiasters(egpInput: string | number): {
+  valid: boolean;
+  amountPiasters: number;
+  errorAr?: string;
+} {
+  const rawNumber =
+    typeof egpInput === 'number'
+      ? egpInput
+      : typeof egpInput === 'string' && egpInput.trim() !== ''
+      ? Number(egpInput.trim())
+      : NaN;
+
+  if (!Number.isFinite(rawNumber) || rawNumber <= 0) {
+    return {
+      valid: false,
+      amountPiasters: 0,
+      errorAr: 'يرجى إدخال مبلغ صحيح موجب بالجنيه أكبر من الصفر.',
+    };
+  }
+
+  const scaled = rawNumber * 100;
+  const rounded = Math.round(scaled);
+  if (Math.abs(scaled - rounded) > 1e-6 || !Number.isSafeInteger(rounded) || rounded <= 0) {
+    return {
+      valid: false,
+      amountPiasters: 0,
+      errorAr: 'لا يُسمح بكسور القرش؛ يجب أن يتحول المبلغ إلى عدد صحيح من القروش.',
+    };
+  }
+
+  return {
+    valid: true,
+    amountPiasters: rounded,
+  };
 }
 
 // ============================================================================
@@ -312,14 +354,6 @@ export const DEMO_PERSONAS: DemoUser[] = [
     roleBadgeAr: 'تاجر (سوبرماركت خيرات الباجور)',
     avatar: '🛒',
     merchantId: 'merchant_khairat',
-  },
-  {
-    id: 'usr_ops_admin',
-    name: 'د. علاء (غرفة العمليات)',
-    phone: '01000000001',
-    role: 'operations',
-    roleBadgeAr: 'إدارة العمليات المركزية',
-    avatar: '🛡️',
   },
 ];
 
@@ -863,8 +897,14 @@ interface MarketplaceContextType {
   systemSettings: PlatformSystemSettings;
   auditLogs: PlatformAuditLog[];
   adminAssignCaptain: (orderId: string, captainId: string, actorName: string, actorRole: string) => { success: boolean; message: string };
-  adminEmergencyCancelOrder: (orderId: string, reason: string, actorName: string, actorRole: string) => void;
-  adminSettleCaptainCash: (captainId: string, amountPiasters: number, actorName: string, actorRole: string) => void;
+  adminEmergencyCancelOrder: (orderId: string, reason: string, actorName: string, actorRole: string) => { success: boolean; message: string };
+  adminSettleCaptainCash: (
+    captainId: string,
+    amountPiasters: number,
+    actorName: string,
+    actorRole: string,
+    settlementReference?: string
+  ) => { success: boolean; message: string; remittedAmountPiasters?: number; remainingCashPiasters?: number };
   adminRenewCaptainSubscription: (captainId: string, actorName: string, actorRole: string) => void;
   adminUpdateSettings: (newSettings: PlatformSystemSettings, actorName: string, actorRole: string) => void;
 
@@ -1667,10 +1707,43 @@ export const MarketplaceProvider: React.FC<{ children: React.ReactNode }> = ({ c
     if (!captain || !targetOrder) {
       return { success: false, message: 'الكابتن أو الطلب غير موجود.' };
     }
+    if (targetOrder.status === 'delivered' || targetOrder.status === 'cancelled') {
+      return {
+        success: false,
+        message: `غير مسموح بالتوجيه الإداري: الطلب في حالة نهائية (${targetOrder.status}).`,
+      };
+    }
+
+    const allowedDispatchStatuses =
+      targetOrder.serviceType === 'restaurant_store'
+        ? ['searching_captain', 'ready_for_pickup']
+        : ['searching_captain', 'ready_for_pickup', 'created'];
+
+    if (!allowedDispatchStatuses.includes(targetOrder.status)) {
+      return {
+        success: false,
+        message: `انتقال حالة غير صالح للتوجيه اليدوي: لا يمكن تعيين كابتن والطلب في حالة (${targetOrder.status}).`,
+      };
+    }
+
+    if (!captain.isOnline) {
+      return {
+        success: false,
+        message: `عذراً: الكابتن (${captain.name}) غير متصل حالياً (Offline).`,
+      };
+    }
+
     if (captain.status === 'expired' || captain.status === 'suspended') {
       return {
         success: false,
         message: `عذراً: الكابتن غير مؤهل لاستلام الطلبات حالياً (${captain.statusAr}).`,
+      };
+    }
+
+    if (targetOrder.paymentMethod === 'cash' && captain.cashHoldingPiasters >= captain.cashCeilingPiasters) {
+      return {
+        success: false,
+        message: `عذراً: الكابتن تجاوز سقف العهدة النقدية المسموح به للطلبات النقدية.`,
       };
     }
 
@@ -1720,9 +1793,17 @@ export const MarketplaceProvider: React.FC<{ children: React.ReactNode }> = ({ c
     reason: string,
     actorName: string,
     actorRole: string
-  ) => {
+  ): { success: boolean; message: string } => {
     const targetOrder = orders.find((o) => o.id === orderId);
-    if (!targetOrder) return;
+    if (!targetOrder) {
+      return { success: false, message: 'الطلب غير موجود.' };
+    }
+    if (targetOrder.status === 'delivered' || targetOrder.status === 'cancelled') {
+      return {
+        success: false,
+        message: `لا يمكن إلغاء طلب في حالة نهائية (${targetOrder.status}).`,
+      };
+    }
 
     setOrders((prev) =>
       prev.map((o) =>
@@ -1744,21 +1825,47 @@ export const MarketplaceProvider: React.FC<{ children: React.ReactNode }> = ({ c
       },
       ...prev,
     ]);
+
+    return {
+      success: true,
+      message: `تم إلغاء الطلب ${targetOrder.orderNumber} بنجاح.`,
+    };
   };
 
   const adminSettleCaptainCash = (
     captainId: string,
     amountPiasters: number,
     actorName: string,
-    actorRole: string
-  ) => {
+    actorRole: string,
+    settlementReference?: string
+  ): { success: boolean; message: string; remittedAmountPiasters?: number; remainingCashPiasters?: number } => {
     const captain = captains.find((c) => c.id === captainId);
-    if (!captain || amountPiasters <= 0) return;
+    if (!captain) {
+      return { success: false, message: 'الكابتن غير موجود في النظام.' };
+    }
+    if (
+      typeof amountPiasters !== 'number' ||
+      !Number.isFinite(amountPiasters) ||
+      !Number.isInteger(amountPiasters) ||
+      amountPiasters <= 0
+    ) {
+      return {
+        success: false,
+        message: 'قيمة المبلغ بالقروش غير صالحة. يجب أن تكون عدداً صحيحاً موجباً بالقروش.',
+      };
+    }
+    if (amountPiasters > captain.cashHoldingPiasters) {
+      return {
+        success: false,
+        message: `المبلغ المطلوب تسويته (${amountPiasters} قرش / ${(amountPiasters / 100).toFixed(2)} ج.م) يتجاوز العهدة النقدية المسجلة للكابتن (${captain.cashHoldingPiasters} قرش / ${(captain.cashHoldingPiasters / 100).toFixed(2)} ج.م).`,
+      };
+    }
+
+    const newHolding = captain.cashHoldingPiasters - amountPiasters;
 
     setCaptains((prev) =>
       prev.map((c) => {
         if (c.id === captainId) {
-          const newHolding = Math.max(0, c.cashHoldingPiasters - amountPiasters);
           const newStatus =
             c.status === 'suspended' && newHolding < c.cashCeilingPiasters
               ? 'active'
@@ -1775,9 +1882,10 @@ export const MarketplaceProvider: React.FC<{ children: React.ReactNode }> = ({ c
     );
 
     if (captain.id === 'cpt_02') {
-      setCaptainCashHoldingEgp((prev) => Math.max(0, prev - Math.round(amountPiasters / 100)));
+      setCaptainCashHoldingEgp(Math.round(newHolding / 100));
     }
 
+    const refSuffix = settlementReference ? ` [مرجع: ${settlementReference}]` : '';
     setAuditLogs((prev) => [
       {
         id: `aud_${Date.now()}`,
@@ -1786,10 +1894,17 @@ export const MarketplaceProvider: React.FC<{ children: React.ReactNode }> = ({ c
         actorRole,
         actionType: 'CAPTAIN_CASH_SETTLED',
         target: `كابتن ${captain.name}`,
-        descriptionAr: `توريد وتسوية نقدية بمبلغ ${(amountPiasters / 100).toFixed(2)} ج.م للكابتن ${captain.name}. تم إيداع المبلغ بخزينة مركز الباجور.`,
+        descriptionAr: `توريد وتسوية نقدية بمبلغ ${amountPiasters} قرش (${(amountPiasters / 100).toFixed(2)} ج.م) للكابتن ${captain.name}. المتبقي في العهدة: ${newHolding} قرش (${(newHolding / 100).toFixed(2)} ج.م).${refSuffix}`,
       },
       ...prev,
     ]);
+
+    return {
+      success: true,
+      message: `تم استلام وتسوية ${amountPiasters} قرش (${(amountPiasters / 100).toFixed(2)} ج.م) من ${captain.name} بنجاح.`,
+      remittedAmountPiasters: amountPiasters,
+      remainingCashPiasters: newHolding,
+    };
   };
 
   const adminRenewCaptainSubscription = (

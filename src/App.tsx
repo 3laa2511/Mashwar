@@ -521,15 +521,22 @@ export default function App() {
     marketplaceOrders.find((o) => Boolean(o.acceptedAtIso || o.acceptedAt)) ||
     activeOrderState;
 
-  const extractedAcceptedAtIso =
-    currentTrackedOrder.acceptedAtIso || activeOrderState.acceptedAtIso;
-  const extractedAcceptedAtFallback =
-    currentTrackedOrder.acceptedAt || activeOrderState.acceptedAt;
+  const hasCurrentOrderAcceptanceTimestamp = Boolean(
+    currentTrackedOrder.acceptedAtIso || currentTrackedOrder.acceptedAt
+  );
+  const extractedAcceptedAtIso = hasCurrentOrderAcceptanceTimestamp
+    ? currentTrackedOrder.acceptedAtIso
+    : activeOrderState.acceptedAtIso;
+  const extractedAcceptedAtFallback = hasCurrentOrderAcceptanceTimestamp
+    ? currentTrackedOrder.acceptedAt
+    : activeOrderState.acceptedAt;
   const humanReadableAcceptedTime =
     formatHumanReadableAcceptedTimestamp(
       extractedAcceptedAtIso,
       extractedAcceptedAtFallback
-    ) || extractedAcceptedAtFallback;
+    ) ||
+    extractedAcceptedAtFallback ||
+    'بانتظار تسجيل وقت القبول...';
 
   // Captain experience state
   const [isCaptainOnline, setIsCaptainOnline] = useState(true);
@@ -792,7 +799,50 @@ export default function App() {
       <main className="flex-1 max-w-7xl w-full mx-auto p-2 sm:p-4 flex flex-col gap-4">
         {/* Render Mobile App Prototype (Customer & Captain Home Screens First) */}
         {workspaceMode === 'mobile' && (
-          <MobileAppFrame onOpenOperationsDashboard={() => setWorkspaceMode('admin')} />
+          <div className="flex flex-col gap-4" dir={isRtl ? 'rtl' : 'ltr'}>
+            {/* Synchronized Active Order Tracking Summary Bar */}
+            <div
+              data-testid="active-order-tracking-widget"
+              className="bg-slate-900 border border-slate-800 rounded-2xl p-4 shadow-lg flex flex-col md:flex-row md:items-center justify-between gap-4"
+            >
+              <div className="flex items-center gap-3">
+                <span className="w-3 h-3 rounded-full bg-emerald-500 animate-ping shrink-0" />
+                <div>
+                  <div className="flex items-center gap-2">
+                    <span className="text-sm font-black text-white">
+                      متابعة الطلب الحي في المحاكي الموحد ({currentTrackedOrder.orderNumber})
+                    </span>
+                    <span className="text-xs font-bold text-emerald-400 bg-emerald-500/15 px-2.5 py-0.5 rounded-full border border-emerald-500/30">
+                      {currentTrackedOrder.totalEgp}.00 ج.م
+                    </span>
+                  </div>
+                  <p className="text-xs text-slate-400 mt-0.5">
+                    {('assignedCaptainName' in currentTrackedOrder && currentTrackedOrder.assignedCaptainName) ||
+                      activeOrderState.captainName}{' '}
+                    • الوجهة:{' '}
+                    {('deliveryAddress' in currentTrackedOrder && currentTrackedOrder.deliveryAddress) ||
+                      activeOrderState.destination}
+                  </p>
+                </div>
+              </div>
+
+              <div
+                data-testid="active-order-accepted-time"
+                className="px-3.5 py-2 rounded-xl bg-emerald-500/10 border border-emerald-500/30 flex items-center gap-2 text-xs text-emerald-300 shrink-0"
+              >
+                <Clock className="w-4 h-4 text-emerald-400 shrink-0" />
+                <span className="font-bold">وقت قبول الطلب:</span>
+                <span className="font-black text-white">
+                  {formatHumanReadableAcceptedTimestamp(
+                    extractedAcceptedAtIso,
+                    extractedAcceptedAtFallback
+                  ) || humanReadableAcceptedTime}
+                </span>
+              </div>
+            </div>
+
+            <MobileAppFrame onOpenOperationsDashboard={() => setWorkspaceMode('admin')} />
+          </div>
         )}
 
         {/* Render Phase 4.1 Owner & Operations Admin Dashboard */}
@@ -1162,7 +1212,19 @@ export default function App() {
                           }
                         }
                         if (currIdx < states.length - 1) {
-                          setFsmCurrentState(states[currIdx + 1]);
+                          const nextState = states[currIdx + 1];
+                          setFsmCurrentState(nextState);
+                          if (nextState === 'captain_assigned') {
+                            const now = new Date();
+                            setActiveOrderState((prev) => ({
+                              ...prev,
+                              acceptedAtIso: now.toISOString(),
+                              acceptedAt: now.toLocaleTimeString('ar-EG', {
+                                hour: '2-digit',
+                                minute: '2-digit',
+                              }),
+                            }));
+                          }
                         } else {
                           setFsmCurrentState('created');
                         }
@@ -1319,7 +1381,12 @@ export default function App() {
               >
                 <Clock className="w-4 h-4 text-emerald-400 shrink-0" />
                 <span className="font-bold">وقت قبول الطلب:</span>
-                <span className="font-black text-white">{humanReadableAcceptedTime}</span>
+                <span className="font-black text-white">
+                  {formatHumanReadableAcceptedTimestamp(
+                    extractedAcceptedAtIso,
+                    extractedAcceptedAtFallback
+                  ) || humanReadableAcceptedTime}
+                </span>
               </div>
             </div>
 
