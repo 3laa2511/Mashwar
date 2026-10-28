@@ -2999,6 +2999,165 @@ export async function runAllTests(): Promise<{
     assert(s2.order.acceptedAt === firstAcceptedAt, 'Subsequent transitions must preserve original acceptedAt timestamp');
   });
 
+  await runTest('RideBookingJourneyE2E', 'Executes complete Customer مشوار (errand) HTTP ride-booking journey: quote, route reversal, order creation, captain acceptance, immutable acceptedAt across at_pickup -> picked_up -> in_transit -> delivered, and cancellation guards', async () => {
+    resetTestDatabases();
+    const app = createServer();
+    const server = app.listen(0);
+    const address = server.address() as { port: number };
+    const baseUrl = `http://127.0.0.1:${address.port}/api/v1`;
+
+    try {
+      const custToken = generateTestToken({ userId: 'usr_cust_01', role: 'customer' });
+      const capToken = generateTestToken({ userId: 'usr_cpt_01', role: 'captain' });
+
+      // Step 1 & 2: Request quote for مشوار (errand) from Station Square to Behnay Village
+      const quoteRes1 = await fetch(`${baseUrl}/quotes`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          serviceTypeId: 'errand',
+          distanceKm: 3.1,
+          isRuralOrVillage: true,
+          pickupLandmark: 'ميدان المحطة - وسط الباجور',
+          dropoffLandmark: 'قرية بهناي - المدخل الرئيسي',
+        }),
+      });
+      assert(quoteRes1.status === 201, `Expected 201 from POST /quotes for errand, got ${quoteRes1.status}`);
+      const quote1 = (await quoteRes1.json()).data;
+      assert(quote1.serviceTypeId === 'errand', 'Quote serviceTypeId must be errand');
+      assert(Number.isInteger(quote1.totalFarePiasters) && quote1.totalFarePiasters > 0, 'Quote totalFarePiasters must be positive integer');
+      assert(typeof quote1.signature === 'string' && quote1.signature.length === 64, 'Quote must include 64-char HMAC-SHA256 signature');
+
+      // Step 3 & 4: Reverse route and request updated quote
+      const quoteResReversed = await fetch(`${baseUrl}/quotes`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          serviceTypeId: 'errand',
+          distanceKm: 3.1,
+          isRuralOrVillage: true,
+          pickupLandmark: 'قرية بهناي - المدخل الرئيسي',
+          dropoffLandmark: 'ميدان المحطة - وسط الباجور',
+        }),
+      });
+      assert(quoteResReversed.status === 201, `Expected 201 from reversed POST /quotes, got ${quoteResReversed.status}`);
+      const quoteReversed = (await quoteResReversed.json()).data;
+      assert(quoteReversed.totalFarePiasters === quote1.totalFarePiasters, 'Reversed route with same distance/rural status must produce deterministic fare');
+
+      // Step 5: Confirm ride request (POST /orders)
+      const createOrderRes = await fetch(`${baseUrl}/orders`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${custToken}`,
+          'Idempotency-Key': 'e2e_ride_journey_order_01',
+        },
+        body: JSON.stringify({
+          serviceTypeId: 'errand',
+          quoteId: quoteReversed.quoteId,
+          totalFarePiasters: quoteReversed.totalFarePiasters,
+          quoteExpiresAt: quoteReversed.expiresAt,
+          quoteSignature: quoteReversed.signature,
+          pickup: { address: 'قرية بهناي - المدخل الرئيسي' },
+          dropoff: { address: 'ميدان المحطة - وسط الباجور' },
+          itemDescription: 'مشوار خاص سريع بالباجور',
+          paymentMethod: 'cash_on_delivery',
+        }),
+      });
+      assert(createOrderRes.status === 201, `Expected 201 on ride order creation, got ${createOrderRes.status}`);
+      const createdOrder: Order = (await createOrderRes.json()).data;
+      assert(createdOrder.status === 'created', `New order starts in created state, got ${createdOrder.status}`);
+      assert(createdOrder.acceptedAt === undefined, 'Unaccepted order must not have acceptedAt');
+
+      // Step 6: Captain sees order in /captain/orders/available and accepts it (POST /captain/orders/:id/accept)
+      const availRes = await fetch(`${baseUrl}/captain/orders/available`, {
+        headers: { Authorization: `Bearer ${capToken}` },
+      });
+      assert(availRes.status === 200, `Expected 200 from /captain/orders/available, got ${availRes.status}`);
+      const availOrders: Order[] = (await availRes.json()).data.orders;
+      assert(availOrders.some((o) => o.id === createdOrder.id), 'Captain must see the newly created ride request in available orders');
+
+      const acceptRes = await fetch(`${baseUrl}/captain/orders/${createdOrder.id}/accept`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${capToken}`,
+        },
+      });
+      assert(acceptRes.status === 200, `Expected 200 on captain accept, got ${acceptRes.status}`);
+      const acceptedData = (await acceptRes.json()).data;
+      const acceptedOrder: Order = acceptedData.order || acceptedData;
+      assert(acceptedOrder.status === 'captain_assigned', `Expected captain_assigned after accept, got ${acceptedOrder.status}`);
+      assert(typeof acceptedOrder.acceptedAt === 'string' && acceptedOrder.acceptedAt.length >= 20, 'acceptedAt ISO timestamp must be recorded on captain_assigned');
+      const immutableAcceptedAt = acceptedOrder.acceptedAt;
+
+      // Step 7: Invalid state jump (captain_assigned -> delivered directly) must be rejected
+      const invalidJumpRes = await fetch(`${baseUrl}/orders/${createdOrder.id}/transitions`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${capToken}`,
+        },
+        body: JSON.stringify({ targetStatus: 'delivered' }),
+      });
+      assert(invalidJumpRes.status >= 400, `Expected 4xx on illegal state jump captain_assigned -> delivered, got ${invalidJumpRes.status}`);
+
+      // Step 8: Valid transitions (at_pickup -> picked_up -> in_transit) preserve acceptedAt immutably
+      for (const nextStep of ['at_pickup', 'picked_up', 'in_transit'] as const) {
+        const stepRes = await fetch(`${baseUrl}/orders/${createdOrder.id}/transitions`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${capToken}`,
+          },
+          body: JSON.stringify({ targetStatus: nextStep }),
+        });
+        assert(stepRes.status === 200, `Expected 200 transitioning to ${nextStep}, got ${stepRes.status}`);
+        const stepOrder: Order = (await stepRes.json()).data.order;
+        assert(stepOrder.status === nextStep, `Expected order status ${nextStep}, got ${stepOrder.status}`);
+        assert(
+          stepOrder.acceptedAt === immutableAcceptedAt,
+          `acceptedAt must remain immutable (${immutableAcceptedAt}) during transition to ${nextStep}, got ${stepOrder.acceptedAt}`
+        );
+      }
+
+      // Step 9: Customer cancellation after pickup must be rejected (403 CANCELLATION_NOT_ALLOWED)
+      const lateCancelRes = await fetch(`${baseUrl}/orders/${createdOrder.id}/cancel`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${custToken}`,
+        },
+        body: JSON.stringify({ reason: 'محاولة إلغاء بعد الاستلام' }),
+      });
+      assert(lateCancelRes.status === 403, `Expected 403 when customer cancels in_transit order, got ${lateCancelRes.status}`);
+
+      // Step 10: Complete ride via Cash Collection & verify delivered state + immutable acceptedAt
+      const codRes = await fetch(`${baseUrl}/captain/orders/${createdOrder.id}/cash-collection`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${capToken}`,
+          'Idempotency-Key': 'e2e_ride_cod_key_01',
+        },
+        body: JSON.stringify({
+          amountCollectedPiasters: createdOrder.totalFarePiasters,
+          customerConfirmed: true,
+        }),
+      });
+      assert(codRes.status === 200, `Expected 200 on cash collection, got ${codRes.status}`);
+      const finalOrder = PersistentStore.getOrderById(createdOrder.id);
+      assert(finalOrder?.status === 'delivered', `Expected delivered status, got ${finalOrder?.status}`);
+      assert(finalOrder?.isPaid === true, 'Order must be marked isPaid = true');
+      assert(
+        finalOrder?.acceptedAt === immutableAcceptedAt,
+        'Final delivered order must preserve original acceptedAt timestamp'
+      );
+    } finally {
+      server.close();
+    }
+  });
+
   const total = results.length;
   const passed = results.filter((r) => r.passed).length;
   const failed = results.filter((r) => !r.passed).length;

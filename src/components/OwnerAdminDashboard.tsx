@@ -154,7 +154,7 @@ export function OwnerAdminDashboard() {
         ? 'delivered'
         : o.status === 'cancelled'
         ? 'cancelled'
-        : o.status === 'in_transit' || o.status === 'at_pickup'
+        : o.status === 'in_transit' || o.status === 'picked_up' || o.status === 'at_pickup'
         ? 'in_transit'
         : o.status === 'captain_assigned'
         ? 'captain_assigned'

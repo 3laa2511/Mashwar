@@ -57,6 +57,7 @@ interface QuotePreviewData {
   totalEgp: number;
   totalPiasters: number;
   signaturePreview: string;
+  isLiveBackendQuote?: boolean;
 }
 
 export const CustomerMobileExperience: React.FC<CustomerMobileExperienceProps> = ({
@@ -159,25 +160,33 @@ export const CustomerMobileExperience: React.FC<CustomerMobileExperienceProps> =
         setQuoteData(null);
         return;
       }
+      if (bookingServiceMode === 'passenger_locked') {
+        setBookingError(null);
+        setQuoteData(null);
+        return;
+      }
       setBookingError(null);
       setIsLoadingQuote(true);
 
-      const categoryWeight = bookingServiceMode === 'heavy' ? 12 : bookingServiceMode === 'package' ? 4 : 1;
-      const pickupLat = 30.4318 + pickupLandmark.distanceFromCenterKm * 0.004;
-      const pickupLng = 30.9665 + pickupLandmark.distanceFromCenterKm * 0.004;
-      const dropoffLat = 30.4318 - dropoffLandmark.distanceFromCenterKm * 0.005;
-      const dropoffLng = 30.9665 + dropoffLandmark.distanceFromCenterKm * 0.006;
+      const distKm = Number(
+        Math.max(
+          1.4,
+          Math.abs(pickupLandmark.distanceFromCenterKm - dropoffLandmark.distanceFromCenterKm) + 1.6
+        ).toFixed(1)
+      );
+      const isRuralRoute = pickupLandmark.isRural || dropoffLandmark.isRural;
+      const heavyExtraEgp = bookingServiceMode === 'heavy' ? 10 : 0;
 
       try {
         const res = await fetch('/api/v1/quotes', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            serviceType: 'package_delivery',
-            pickup: { lat: pickupLat, lng: pickupLng, address: pickupLandmark.nameAr },
-            dropoff: { lat: dropoffLat, lng: dropoffLng, address: dropoffLandmark.nameAr },
-            packageWeightKg: categoryWeight,
-            isRuralRoute: pickupLandmark.isRural || dropoffLandmark.isRural,
+            serviceTypeId: bookingServiceMode === 'errand' ? 'errand' : 'package',
+            distanceKm: distKm,
+            isRuralOrVillage: isRuralRoute,
+            pickupLandmark: pickupLandmark.nameAr,
+            dropoffLandmark: dropoffLandmark.nameAr,
           }),
         });
 
@@ -185,20 +194,25 @@ export const CustomerMobileExperience: React.FC<CustomerMobileExperienceProps> =
           const json = await res.json();
           if (isMounted && json.data) {
             const q = json.data;
-            const b = q.breakdown || {};
-            const totalPiasters = q.totalPiasters || 2500;
-            const totalEgp = Math.round(totalPiasters / 100);
+            const baseFareEgp = Math.round((q.baseFarePiasters ?? 1500) / 100) + heavyExtraEgp;
+            const distanceFareEgp = Math.round((q.distanceFarePiasters ?? 0) / 100);
+            const ruralSurchargeEgp = Math.round((q.ruralSurchargePiasters ?? 0) / 100);
+            const platformFeeEgp = Math.round((q.platformFeePiasters ?? 200) / 100);
+            const totalEgp = baseFareEgp + distanceFareEgp + ruralSurchargeEgp + platformFeeEgp;
+            const totalPiasters = totalEgp * 100;
+
             setQuoteData({
               quoteId: q.quoteId || 'qt_live',
-              distanceKm: q.distanceKm || 2.1,
-              etaMinutes: Math.max(6, Math.round((q.distanceKm || 2.1) * 4 + 4)),
-              baseFareEgp: Math.round((b.baseFarePiasters || 1500) / 100),
-              distanceFareEgp: Math.round((b.distanceFarePiasters || 600) / 100),
-              ruralSurchargeEgp: Math.round(((b.ruralSurchargePiasters || 0) + (b.weightSurchargePiasters || 0)) / 100),
-              platformFeeEgp: Math.round((b.platformServiceFeePiasters || 200) / 100),
+              distanceKm: q.distanceKm || distKm,
+              etaMinutes: q.estimatedDurationMinutes || Math.max(7, Math.round(distKm * 4 + 4)),
+              baseFareEgp,
+              distanceFareEgp,
+              ruralSurchargeEgp,
+              platformFeeEgp,
               totalEgp,
               totalPiasters,
-              signaturePreview: (q.hmacSignature || '9f8e7d6c5b4a').slice(0, 12),
+              signaturePreview: String(q.signature || 'hmac_sha256').slice(0, 14),
+              isLiveBackendQuote: true,
             });
             setIsLoadingQuote(false);
             return;
@@ -209,15 +223,9 @@ export const CustomerMobileExperience: React.FC<CustomerMobileExperienceProps> =
       }
 
       if (isMounted) {
-        const distKm = Number(
-          Math.max(
-            1.4,
-            Math.abs(pickupLandmark.distanceFromCenterKm - dropoffLandmark.distanceFromCenterKm) + 1.6
-          ).toFixed(1)
-        );
-        const baseFareEgp = bookingServiceMode === 'heavy' ? 25 : 15;
-        const distanceFareEgp = Math.max(4, Math.round(distKm * 3.5));
-        const ruralSurchargeEgp = pickupLandmark.isRural || dropoffLandmark.isRural ? 5 : 0;
+        const baseFareEgp = (bookingServiceMode === 'heavy' ? 25 : 15);
+        const distanceFareEgp = Math.max(0, Math.round(Math.max(0, distKm - 1.5) * 4));
+        const ruralSurchargeEgp = isRuralRoute ? 5 : 0;
         const platformFeeEgp = 2;
         const totalEgp = baseFareEgp + distanceFareEgp + ruralSurchargeEgp + platformFeeEgp;
         setQuoteData({
@@ -231,6 +239,7 @@ export const CustomerMobileExperience: React.FC<CustomerMobileExperienceProps> =
           totalEgp,
           totalPiasters: totalEgp * 100,
           signaturePreview: 'hmac_sha256_ok',
+          isLiveBackendQuote: false,
         });
         setIsLoadingQuote(false);
       }
@@ -529,10 +538,14 @@ export const CustomerMobileExperience: React.FC<CustomerMobileExperienceProps> =
                     <span className="font-extrabold text-xs sm:text-sm text-slate-900 truncate">
                       {activeCustomerOrder.status === 'created' && 'تم إرسال الطلب للمتجر • بانتظار الموافقة'}
                       {activeCustomerOrder.status === 'searching_captain' && 'جاري البحث عن أقرب كابتن متاح في الباجور...'}
-                      {activeCustomerOrder.status === 'merchant_accepted' && 'المتجر قبل طلبك ويقوم بتجهيزه الآن 🍳'}
+                      {(activeCustomerOrder.status === 'accepted_by_store' ||
+                        activeCustomerOrder.status === 'preparing' ||
+                        activeCustomerOrder.status === 'merchant_accepted') &&
+                        'المتجر قبل طلبك ويقوم بتجهيزه الآن 🍳'}
                       {activeCustomerOrder.status === 'ready_for_pickup' && 'الطلب جاهز • بانتظار استلام الكابتن'}
                       {activeCustomerOrder.status === 'captain_assigned' && 'تم تعيين الكابتن • في الطريق للاستلام 🛵'}
                       {activeCustomerOrder.status === 'at_pickup' && 'الكابتن وصل لنقطة الاستلام'}
+                      {activeCustomerOrder.status === 'picked_up' && 'الكابتن استلم الطلب من نقطة الانطلاق 📦'}
                       {activeCustomerOrder.status === 'in_transit' && 'الكابتن في الطريق إليك الآن 🛵'}
                       {activeCustomerOrder.status === 'delivered' && 'تم إتمام المشوار والتسليم بنجاح!'}
                     </span>
@@ -574,7 +587,7 @@ export const CustomerMobileExperience: React.FC<CustomerMobileExperienceProps> =
                   <div className="grid grid-cols-4 gap-1 text-center text-[9px] font-bold">
                     <div
                       className={`p-1.5 rounded-lg ${
-                        ['created', 'merchant_accepted', 'ready_for_pickup', 'captain_assigned', 'at_pickup', 'in_transit', 'delivered'].includes(activeCustomerOrder.status)
+                        ['created', 'accepted_by_store', 'preparing', 'merchant_accepted', 'ready_for_pickup', 'captain_assigned', 'at_pickup', 'picked_up', 'in_transit', 'delivered'].includes(activeCustomerOrder.status)
                           ? 'bg-emerald-700 text-white'
                           : 'bg-slate-100 text-slate-400'
                       }`}
@@ -583,7 +596,7 @@ export const CustomerMobileExperience: React.FC<CustomerMobileExperienceProps> =
                     </div>
                     <div
                       className={`p-1.5 rounded-lg ${
-                        ['merchant_accepted', 'ready_for_pickup', 'captain_assigned', 'at_pickup', 'in_transit', 'delivered'].includes(activeCustomerOrder.status)
+                        ['accepted_by_store', 'preparing', 'merchant_accepted', 'ready_for_pickup', 'captain_assigned', 'at_pickup', 'picked_up', 'in_transit', 'delivered'].includes(activeCustomerOrder.status)
                           ? 'bg-emerald-700 text-white'
                           : 'bg-slate-100 text-slate-400'
                       }`}
@@ -592,7 +605,7 @@ export const CustomerMobileExperience: React.FC<CustomerMobileExperienceProps> =
                     </div>
                     <div
                       className={`p-1.5 rounded-lg ${
-                        ['ready_for_pickup', 'captain_assigned', 'at_pickup', 'in_transit', 'delivered'].includes(activeCustomerOrder.status)
+                        ['ready_for_pickup', 'captain_assigned', 'at_pickup', 'picked_up', 'in_transit', 'delivered'].includes(activeCustomerOrder.status)
                           ? 'bg-emerald-700 text-white'
                           : 'bg-slate-100 text-slate-400'
                       }`}
@@ -613,7 +626,7 @@ export const CustomerMobileExperience: React.FC<CustomerMobileExperienceProps> =
                   <div className="grid grid-cols-4 gap-1 text-center text-[9px] font-bold">
                     <div
                       className={`p-1.5 rounded-lg ${
-                        ['searching_captain', 'captain_assigned', 'at_pickup', 'in_transit', 'delivered'].includes(activeCustomerOrder.status)
+                        ['searching_captain', 'captain_assigned', 'at_pickup', 'picked_up', 'in_transit', 'delivered'].includes(activeCustomerOrder.status)
                           ? 'bg-emerald-700 text-white'
                           : 'bg-slate-100 text-slate-400'
                       }`}
@@ -622,7 +635,7 @@ export const CustomerMobileExperience: React.FC<CustomerMobileExperienceProps> =
                     </div>
                     <div
                       className={`p-1.5 rounded-lg ${
-                        ['captain_assigned', 'at_pickup', 'in_transit', 'delivered'].includes(activeCustomerOrder.status)
+                        ['captain_assigned', 'at_pickup', 'picked_up', 'in_transit', 'delivered'].includes(activeCustomerOrder.status)
                           ? 'bg-emerald-700 text-white'
                           : 'bg-slate-100 text-slate-400'
                       }`}
@@ -631,7 +644,7 @@ export const CustomerMobileExperience: React.FC<CustomerMobileExperienceProps> =
                     </div>
                     <div
                       className={`p-1.5 rounded-lg ${
-                        ['at_pickup', 'in_transit', 'delivered'].includes(activeCustomerOrder.status)
+                        ['at_pickup', 'picked_up', 'in_transit', 'delivered'].includes(activeCustomerOrder.status)
                           ? 'bg-emerald-700 text-white'
                           : 'bg-slate-100 text-slate-400'
                       }`}
@@ -1144,8 +1157,8 @@ export const CustomerMobileExperience: React.FC<CustomerMobileExperienceProps> =
                       <ShieldCheck className="w-3.5 h-3.5" />
                       <span>تسعيرة الخادم الموقعة (Piasters Engine)</span>
                     </span>
-                    <span className="text-[9px] font-mono text-slate-400">
-                      #{quoteData.signaturePreview}
+                    <span className="text-[9px] font-mono text-emerald-300 bg-emerald-950/80 px-1.5 py-0.5 rounded border border-emerald-800">
+                      {quoteData.isLiveBackendQuote ? `LIVE API • #${quoteData.signaturePreview}` : `#${quoteData.signaturePreview}`}
                     </span>
                   </div>
                   <div className="grid grid-cols-2 gap-1 text-[11px] text-slate-300">
@@ -1569,7 +1582,7 @@ export const CustomerMobileExperience: React.FC<CustomerMobileExperienceProps> =
               </button>
             </div>
 
-            {/* PROMINENT CUSTOMER WALLET SECTION (AVAILABLE CREDIT + ADD FUNDS + TRANSACTIONS) */}
+            {/* PROMINENT CUSTOMER WALLET SECTION (AVAILABLE CREDIT + ADD FUNDS + PROTOTYPE NOTICE) */}
             <div
               data-testid="customer-wallet-section"
               className="rounded-2xl bg-gradient-to-br from-emerald-800 via-emerald-900 to-slate-900 text-white p-4 shadow-lg flex flex-col gap-3"
@@ -1580,11 +1593,16 @@ export const CustomerMobileExperience: React.FC<CustomerMobileExperienceProps> =
                     <Wallet className="w-4 h-4 text-emerald-300" />
                   </div>
                   <div>
-                    <span className="text-[11px] text-emerald-200 font-bold block">
-                      محفظة مشوار الرقمية (Available Credit)
-                    </span>
-                    <span className="text-[10px] text-slate-300">
-                      الرصيد المتاح للمشاوير والطلبات
+                    <div className="flex items-center gap-1.5">
+                      <span className="text-[11px] text-emerald-200 font-bold">
+                        محفظة مشوار الرقمية (Available Credit)
+                      </span>
+                      <span className="text-[9px] font-extrabold px-1.5 py-0.2 rounded bg-amber-400/20 text-amber-300 border border-amber-400/30">
+                        محاكاة تجريبية (Prototype)
+                      </span>
+                    </div>
+                    <span className="text-[10px] text-slate-300 block">
+                      الرصيد المتاح للمشاوير والطلبات (في الإنتاج يتطلب Webhook موثق)
                     </span>
                   </div>
                 </div>
@@ -1676,7 +1694,7 @@ export const CustomerMobileExperience: React.FC<CustomerMobileExperienceProps> =
         )}
       </div>
 
-      {/* Add Funds Modal */}
+      {/* Add Funds Modal (Clearly Labeled Prototype Simulation) */}
       {showAddFundsModal && (
         <div className="absolute inset-0 z-50 bg-black/60 backdrop-blur-2xs flex items-center justify-center p-4">
           <form
@@ -1684,7 +1702,12 @@ export const CustomerMobileExperience: React.FC<CustomerMobileExperienceProps> =
             className="bg-white rounded-3xl p-5 shadow-2xl max-w-sm w-full flex flex-col gap-3"
           >
             <div className="flex items-center justify-between border-b border-slate-100 pb-2">
-              <h3 className="font-extrabold text-sm text-slate-900">شحن رصيد محفظة مشوار</h3>
+              <div>
+                <h3 className="font-extrabold text-sm text-slate-900">شحن رصيد محفظة مشوار</h3>
+                <span className="text-[10px] font-bold text-amber-700">
+                  محاكاة تجريبية (Prototype Simulation)
+                </span>
+              </div>
               <button
                 type="button"
                 onClick={() => setShowAddFundsModal(false)}
@@ -1694,8 +1717,12 @@ export const CustomerMobileExperience: React.FC<CustomerMobileExperienceProps> =
               </button>
             </div>
 
+            <div className="p-2.5 rounded-xl bg-amber-50 border border-amber-200 text-[10px] text-amber-900 leading-relaxed">
+              <strong>تنبيه الأمان المالي:</strong> هذا الشحن محاكاة لتجربة المستخدم فقط. في بيئة الإنتاج الفعلية لا يُضاف الرصيد إلا عبر إشعار دفع موقع رقمياً (`POST /api/v1/webhooks/payments/paymob`).
+            </div>
+
             <div>
-              <label className="text-xs font-bold text-slate-700 block mb-1.5">اختر قيمة الشحن (ج.م):</label>
+              <label className="text-xs font-bold text-slate-700 block mb-1.5">اختر قيمة الشحن (١٠ إلى ٥٠٠٠ ج.م):</label>
               <div className="grid grid-cols-3 gap-2">
                 {[50, 100, 200].map((amt) => (
                   <button
@@ -1715,7 +1742,7 @@ export const CustomerMobileExperience: React.FC<CustomerMobileExperienceProps> =
             </div>
 
             <div>
-              <label className="text-xs font-bold text-slate-700 block mb-1">وسيلة الإيداع:</label>
+              <label className="text-xs font-bold text-slate-700 block mb-1">وسيلة الإيداع التجريبية:</label>
               <select
                 value={topUpMethodLabel}
                 onChange={(e) => setTopUpMethodLabel(e.target.value)}
@@ -1731,7 +1758,7 @@ export const CustomerMobileExperience: React.FC<CustomerMobileExperienceProps> =
               type="submit"
               className="w-full py-2.5 rounded-xl bg-emerald-700 hover:bg-emerald-800 text-white font-extrabold text-xs shadow-md cursor-pointer"
             >
-              تأكيد شحن +{topUpAmountEgp} ج.م الآن
+              تأكيد شحن تجريبي +{topUpAmountEgp} ج.م الآن
             </button>
           </form>
         </div>

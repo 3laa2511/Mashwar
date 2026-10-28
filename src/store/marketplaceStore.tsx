@@ -57,11 +57,14 @@ export interface CartItem {
 
 export type OrderStatus =
   | 'created' // بانتظار قبول المتجر
-  | 'searching_captain' // جاري البحث عن أقرب كابتن بالباجور
-  | 'merchant_accepted' // المتجر يجهز الطلب
+  | 'accepted_by_store' // المتجر قبل الطلب (Canonical Backend Status)
+  | 'preparing' // قيد التحضير بالمتجر
+  | 'merchant_accepted' // توافق رجعي (Legacy Alias)
   | 'ready_for_pickup' // جاهز للاستلام من الكابتن
+  | 'searching_captain' // جاري البحث عن أقرب كابتن بالباجور
   | 'captain_assigned' // الكابتن في الطريق للاستلام
   | 'at_pickup' // الكابتن وصل لنقطة الاستلام
+  | 'picked_up' // تم استلام الطلب من نقطة الانطلاق
   | 'in_transit' // الكابتن في الطريق للعميل
   | 'delivered' // تم التسليم وتحصيل الكاش
   | 'cancelled'; // ملغي
@@ -615,7 +618,7 @@ const INITIAL_ORDERS: MarketplaceOrder[] = [
     totalEgp: 312,
     totalFarePiasters: 31200,
     paymentMethod: 'cash',
-    status: 'merchant_accepted',
+    status: 'accepted_by_store',
     assignedCaptainId: 'usr_capt_1',
     assignedCaptainName: 'كابتن محمود الصياد',
     assignedCaptainPhone: '01198765432',
@@ -836,7 +839,7 @@ interface MarketplaceContextType {
   captainCompletedDeliveries: number;
   captainCashHoldingEgp: number;
   captainAcceptDelivery: (orderId: string) => void;
-  captainUpdateStep: (orderId: string, nextStatus: 'at_pickup' | 'in_transit' | 'delivered') => void;
+  captainUpdateStep: (orderId: string, nextStatus: 'at_pickup' | 'picked_up' | 'in_transit' | 'delivered') => void;
   captainConfirmCashCollection: (orderId: string) => void;
 
   // Customer Wallet & Transactions
@@ -875,13 +878,36 @@ interface MarketplaceContextType {
 
 const MarketplaceContext = createContext<MarketplaceContextType | undefined>(undefined);
 
+const STORAGE_KEYS = {
+  ORDERS: 'mashwar_bagour_orders_v2',
+  WALLET_BALANCE: 'mashwar_bagour_wallet_balance_v2',
+  WALLET_TX: 'mashwar_bagour_wallet_tx_v2',
+};
+
 export const MarketplaceProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [currentUser, setCurrentUser] = useState<DemoUser>(DEMO_PERSONAS[0]);
   const [isAuthModalOpen, setIsAuthModalOpen] = useState<boolean>(false);
 
   const [stores, setStores] = useState<StoreItem[]>(INITIAL_STORES);
   const [products, setProducts] = useState<ProductItem[]>(INITIAL_PRODUCTS);
-  const [orders, setOrders] = useState<MarketplaceOrder[]>(INITIAL_ORDERS);
+  const [orders, setOrders] = useState<MarketplaceOrder[]>(() => {
+    try {
+      const saved = typeof window !== 'undefined' ? window.localStorage.getItem(STORAGE_KEYS.ORDERS) : null;
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          return parsed.map((o: any) => ({
+            ...o,
+            status: o.status === 'merchant_accepted' ? 'accepted_by_store' : o.status,
+            createdAtDate: o.createdAtDate ? new Date(o.createdAtDate) : new Date(),
+          }));
+        }
+      }
+    } catch {
+      // Fallback to INITIAL_ORDERS
+    }
+    return INITIAL_ORDERS;
+  });
 
   // Cart state
   const [cartItems, setCartItems] = useState<CartItem[]>([]);
@@ -893,35 +919,79 @@ export const MarketplaceProvider: React.FC<{ children: React.ReactNode }> = ({ c
   const [captainCompletedDeliveries, setCaptainCompletedDeliveries] = useState<number>(8);
   const [captainCashHoldingEgp, setCaptainCashHoldingEgp] = useState<number>(450);
 
-  // Customer Wallet State
-  const [customerWalletBalanceEgp, setCustomerWalletBalanceEgp] = useState<number>(245);
-  const [walletTransactions, setWalletTransactions] = useState<WalletTransaction[]>([
-    {
-      id: 'wtx_1',
-      titleAr: 'شحن رصيد المحفظة عبر إنستاباي (InstaPay)',
-      type: 'credit',
-      amountEgp: 200,
-      methodAr: 'إنستاباي',
-      timestampAr: 'أمس • ٠٨:٣٠ م',
-    },
-    {
-      id: 'wtx_2',
-      titleAr: 'رصيد ترحيبي لعملاء مركز الباجور',
-      type: 'credit',
-      amountEgp: 75,
-      methodAr: 'مكافأة مشوار',
-      timestampAr: 'منذ ٣ أيام',
-    },
-    {
-      id: 'wtx_3',
-      titleAr: 'سداد مشوار توصيل طرد #MSH-8101',
-      type: 'debit',
-      amountEgp: 30,
-      methodAr: 'خصم محفظة',
-      timestampAr: 'اليوم • ٠٩:٣٦ ص',
-      orderNumber: 'MSH-8101',
-    },
-  ]);
+  // Customer Wallet State (Prototype Simulation persisted in localStorage)
+  const [customerWalletBalanceEgp, setCustomerWalletBalanceEgp] = useState<number>(() => {
+    try {
+      const saved = typeof window !== 'undefined' ? window.localStorage.getItem(STORAGE_KEYS.WALLET_BALANCE) : null;
+      if (saved !== null) {
+        const num = Number(saved);
+        if (Number.isFinite(num) && num >= 0) return num;
+      }
+    } catch {
+      // Fallback
+    }
+    return 245;
+  });
+  const [walletTransactions, setWalletTransactions] = useState<WalletTransaction[]>(() => {
+    try {
+      const saved = typeof window !== 'undefined' ? window.localStorage.getItem(STORAGE_KEYS.WALLET_TX) : null;
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+      }
+    } catch {
+      // Fallback
+    }
+    return [
+      {
+        id: 'wtx_1',
+        titleAr: 'شحن رصيد تجريبي عبر إنستاباي (InstaPay Prototype)',
+        type: 'credit',
+        amountEgp: 200,
+        methodAr: 'إنستاباي (محاكاة)',
+        timestampAr: 'أمس • ٠٨:٣٠ م',
+      },
+      {
+        id: 'wtx_2',
+        titleAr: 'رصيد ترحيبي تجريبي لعملاء مركز الباجور',
+        type: 'credit',
+        amountEgp: 75,
+        methodAr: 'مكافأة مشوار',
+        timestampAr: 'منذ ٣ أيام',
+      },
+      {
+        id: 'wtx_3',
+        titleAr: 'سداد مشوار توصيل طرد #MSH-8101',
+        type: 'debit',
+        amountEgp: 30,
+        methodAr: 'خصم محفظة',
+        timestampAr: 'اليوم • ٠٩:٣٦ ص',
+        orderNumber: 'MSH-8101',
+      },
+    ];
+  });
+
+  // Persist orders & wallet across page reloads
+  useEffect(() => {
+    try {
+      if (typeof window !== 'undefined') {
+        window.localStorage.setItem(STORAGE_KEYS.ORDERS, JSON.stringify(orders));
+      }
+    } catch {
+      // Ignore storage quota errors
+    }
+  }, [orders]);
+
+  useEffect(() => {
+    try {
+      if (typeof window !== 'undefined') {
+        window.localStorage.setItem(STORAGE_KEYS.WALLET_BALANCE, String(customerWalletBalanceEgp));
+        window.localStorage.setItem(STORAGE_KEYS.WALLET_TX, JSON.stringify(walletTransactions));
+      }
+    } catch {
+      // Ignore storage quota errors
+    }
+  }, [customerWalletBalanceEgp, walletTransactions]);
 
   // Notifications
   const [notifications, setNotifications] = useState<AppNotification[]>([
@@ -1383,7 +1453,7 @@ export const MarketplaceProvider: React.FC<{ children: React.ReactNode }> = ({ c
         o.id === orderId
           ? {
               ...o,
-              status: 'merchant_accepted',
+              status: 'accepted_by_store',
               acceptedAt: o.acceptedAt || nowTimeAr,
               acceptedAtIso: o.acceptedAtIso || nowIso,
             }
@@ -1458,7 +1528,7 @@ export const MarketplaceProvider: React.FC<{ children: React.ReactNode }> = ({ c
       pushNotification({
         recipientRole: 'customer',
         titleAr: `تم تعيين الكابتن لطلبك #${ord.orderNumber}`,
-        bodyAr: `وقت القبول: ${nowTimeAr} • الكابتن في الطريق للاستلام.`,
+        bodyAr: `وقت القبول: ${ord.acceptedAt || nowTimeAr} • الكابتن في الطريق للاستلام.`,
         orderNumber: ord.orderNumber,
       });
     }
@@ -1466,7 +1536,7 @@ export const MarketplaceProvider: React.FC<{ children: React.ReactNode }> = ({ c
 
   const captainUpdateStep = (
     orderId: string,
-    nextStatus: 'at_pickup' | 'in_transit' | 'delivered'
+    nextStatus: 'at_pickup' | 'picked_up' | 'in_transit' | 'delivered'
   ) => {
     const nowTimeAr = formatArabicClockTime(new Date());
     setOrders((prev) =>
@@ -1475,7 +1545,13 @@ export const MarketplaceProvider: React.FC<{ children: React.ReactNode }> = ({ c
           ? {
               ...o,
               status: nextStatus,
-              pickedUpAt: nextStatus === 'in_transit' ? nowTimeAr : o.pickedUpAt,
+              // Preserve acceptedAt & acceptedAtIso immutably across all post-acceptance transitions
+              acceptedAt: o.acceptedAt,
+              acceptedAtIso: o.acceptedAtIso,
+              pickedUpAt:
+                nextStatus === 'picked_up' || nextStatus === 'in_transit'
+                  ? o.pickedUpAt || nowTimeAr
+                  : o.pickedUpAt,
               deliveredAt: nextStatus === 'delivered' ? nowTimeAr : o.deliveredAt,
             }
           : o
@@ -1520,18 +1596,19 @@ export const MarketplaceProvider: React.FC<{ children: React.ReactNode }> = ({ c
     });
   };
 
-  // Customer Wallet Top-up
+  // Customer Wallet Top-up (Prototype Simulation with strict bounds validation)
   const topUpCustomerWallet = (amountEgp: number, methodAr: string) => {
-    if (amountEgp <= 0) return;
+    const sanitizedAmount = Math.round(Number(amountEgp));
+    if (!Number.isFinite(sanitizedAmount) || sanitizedAmount < 10 || sanitizedAmount > 5000) return;
     const nowTimeAr = formatArabicClockTime(new Date());
-    setCustomerWalletBalanceEgp((prev) => prev + amountEgp);
+    setCustomerWalletBalanceEgp((prev) => prev + sanitizedAmount);
     setWalletTransactions((prev) => [
       {
         id: `wtx_${Date.now()}`,
-        titleAr: `شحن رصيد المحفظة (${methodAr})`,
+        titleAr: `شحن رصيد تجريبي (${methodAr} - Prototype)`,
         type: 'credit',
-        amountEgp,
-        methodAr,
+        amountEgp: sanitizedAmount,
+        methodAr: `${methodAr} (محاكاة)`,
         timestampAr: `اليوم • ${nowTimeAr}`,
       },
       ...prev,

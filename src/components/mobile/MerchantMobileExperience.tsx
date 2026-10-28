@@ -64,11 +64,13 @@ export const MerchantMobileExperience: React.FC<MerchantMobileExperienceProps> =
   // ONLY products for this specific store
   const storeProducts = products.filter((p) => p.storeId === currentStore.id);
 
-  // Filter orders by status
+  // Filter orders by status (supports canonical accepted_by_store, preparing, picked_up)
   const incomingOrders = storeOrders.filter((o) => o.status === 'created');
-  const preparingOrders = storeOrders.filter((o) => o.status === 'merchant_accepted');
+  const preparingOrders = storeOrders.filter(
+    (o) => o.status === 'accepted_by_store' || o.status === 'preparing' || o.status === 'merchant_accepted'
+  );
   const readyOrders = storeOrders.filter((o) =>
-    ['ready_for_pickup', 'captain_assigned', 'at_pickup', 'in_transit'].includes(o.status)
+    ['ready_for_pickup', 'captain_assigned', 'at_pickup', 'picked_up', 'in_transit'].includes(o.status)
   );
   const completedOrders = storeOrders.filter((o) => o.status === 'delivered');
 

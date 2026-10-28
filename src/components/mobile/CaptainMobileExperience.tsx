@@ -69,7 +69,7 @@ export const CaptainMobileExperience: React.FC<CaptainMobileExperienceProps> = (
   const activeAssignedOrder = orders.find(
     (o) =>
       o.assignedCaptainId === currentUser.id &&
-      ['captain_assigned', 'at_pickup', 'in_transit'].includes(o.status)
+      ['captain_assigned', 'at_pickup', 'picked_up', 'in_transit'].includes(o.status)
   );
 
   // Ready store orders OR direct customer ride/package requests waiting for dispatch
@@ -248,6 +248,24 @@ export const CaptainMobileExperience: React.FC<CaptainMobileExperienceProps> = (
                   <div className="text-xs font-extrabold text-amber-300">{captainCashHoldingEgp}.00 ج.م</div>
                 </div>
               </div>
+
+              {skippedOrders.length > 0 && !incomingDispatchOrder && !activeAssignedOrder && (
+                <div className="bg-amber-50/95 backdrop-blur-md border border-amber-300 rounded-xl p-2.5 flex items-center justify-between text-xs text-amber-950 shadow-md">
+                  <span className="font-bold text-[11px]">
+                    تم تخطي {skippedOrders.length} طلبات في الرادار
+                  </span>
+                  <button
+                    onClick={() => {
+                      setSkippedOrders([]);
+                      setRequestCountdown(15);
+                    }}
+                    className="px-2.5 py-1 rounded-lg bg-amber-500 hover:bg-amber-400 text-slate-950 font-extrabold text-[10px] flex items-center gap-1 cursor-pointer"
+                  >
+                    <RotateCcw className="w-3 h-3" />
+                    <span>إعادة عرض الطلبات (Retry)</span>
+                  </button>
+                </div>
+              )}
             </div>
 
             {/* INCOMING DISPATCH MODAL SHEET (When a merchant finishes an order) */}
@@ -349,6 +367,7 @@ export const CaptainMobileExperience: React.FC<CaptainMobileExperienceProps> = (
                         (activeAssignedOrder.serviceType === 'restaurant_store'
                           ? 'استلام الطلب من التاجر'
                           : 'عند نقطة الانطلاق / استلام المشوار')}
+                      {activeAssignedOrder.status === 'picked_up' && 'تم استلام الشحنة • بدء التحرك للعميل'}
                       {activeAssignedOrder.status === 'in_transit' && 'في الطريق للوجهة النهائية'}
                     </span>
                   </div>
@@ -378,12 +397,12 @@ export const CaptainMobileExperience: React.FC<CaptainMobileExperienceProps> = (
                   <Navigation className="w-4 h-4 text-emerald-700 mt-0.5 shrink-0" />
                   <div className="text-xs">
                     <div className="text-[10px] text-emerald-800 font-bold">
-                      {activeAssignedOrder.status !== 'in_transit'
+                      {activeAssignedOrder.status === 'captain_assigned' || activeAssignedOrder.status === 'at_pickup'
                         ? 'الوجهة الحالية: نقطة الاستلام / الانطلاق'
                         : 'الوجهة الحالية: موقع تسليم العميل'}
                     </div>
                     <div className="font-extrabold text-slate-900 mt-0.5">
-                      {activeAssignedOrder.status !== 'in_transit'
+                      {activeAssignedOrder.status === 'captain_assigned' || activeAssignedOrder.status === 'at_pickup'
                         ? `${activeAssignedOrder.storeName} - ${activeAssignedOrder.storeAddress}`
                         : `${activeAssignedOrder.customerName} - ${activeAssignedOrder.deliveryAddress}`}
                     </div>
@@ -448,24 +467,34 @@ export const CaptainMobileExperience: React.FC<CaptainMobileExperienceProps> = (
                 )}
 
                 {/* Stage Progression Buttons */}
-                <div>
+                <div className="flex flex-col gap-2">
                   {activeAssignedOrder.status === 'captain_assigned' && (
                     <button
                       onClick={() => captainUpdateStep(activeAssignedOrder.id, 'at_pickup')}
-                      className="w-full py-3 rounded-xl bg-emerald-700 hover:bg-emerald-800 text-white font-extrabold text-xs shadow-md shadow-emerald-700/20 flex items-center justify-center gap-1.5"
+                      className="w-full py-3 rounded-xl bg-emerald-700 hover:bg-emerald-800 text-white font-extrabold text-xs shadow-md shadow-emerald-700/20 flex items-center justify-center gap-1.5 cursor-pointer"
                     >
                       <MapPin className="w-4 h-4" />
-                      <span>وصلت لموقع المتجر لاستلام الطلب</span>
+                      <span>١. وصلت لنقطة الانطلاق / الاستلام (at_pickup)</span>
                     </button>
                   )}
 
                   {activeAssignedOrder.status === 'at_pickup' && (
                     <button
+                      onClick={() => captainUpdateStep(activeAssignedOrder.id, 'picked_up')}
+                      className="w-full py-3 rounded-xl bg-emerald-700 hover:bg-emerald-800 text-white font-extrabold text-xs shadow-md shadow-emerald-700/20 flex items-center justify-center gap-1.5 cursor-pointer"
+                    >
+                      <CheckCircle2 className="w-4 h-4" />
+                      <span>٢. تأكيد استلام الطلب / الطرد (picked_up)</span>
+                    </button>
+                  )}
+
+                  {activeAssignedOrder.status === 'picked_up' && (
+                    <button
                       onClick={() => captainUpdateStep(activeAssignedOrder.id, 'in_transit')}
-                      className="w-full py-3 rounded-xl bg-emerald-700 hover:bg-emerald-800 text-white font-extrabold text-xs shadow-md shadow-emerald-700/20 flex items-center justify-center gap-1.5"
+                      className="w-full py-3 rounded-xl bg-emerald-700 hover:bg-emerald-800 text-white font-extrabold text-xs shadow-md shadow-emerald-700/20 flex items-center justify-center gap-1.5 cursor-pointer"
                     >
                       <Bike className="w-4 h-4" />
-                      <span>استلمت الشحنة وبدأت التحرك للعميل</span>
+                      <span>٣. بدء التحرك نحو وجهة العميل (in_transit)</span>
                     </button>
                   )}
 
@@ -480,7 +509,7 @@ export const CaptainMobileExperience: React.FC<CaptainMobileExperienceProps> = (
                       }`}
                     >
                       <CheckCircle2 className="w-4 h-4" />
-                      <span>تأكيد التسليم وتحصيل الكاش (+{activeAssignedOrder.deliveryFeeEgp} ج.م)</span>
+                      <span>٤. تأكيد التسليم وتحصيل الكاش (+{activeAssignedOrder.deliveryFeeEgp} ج.م)</span>
                     </button>
                   )}
                 </div>
