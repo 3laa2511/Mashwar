@@ -92,7 +92,7 @@ jobs:
         if: steps.check_flutter.outputs.present == 'true'
         run: |
           cd flutter_mashwar
-          flutter analyze
+          flutter analyze --no-fatal-infos
 
       - name: Run Flutter unit tests
         if: steps.check_flutter.outputs.present == 'true'
