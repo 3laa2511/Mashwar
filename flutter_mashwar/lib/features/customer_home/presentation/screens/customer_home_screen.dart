@@ -1,11 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
-import '../../../app/localization/app_strings.dart';
-import '../../../app/theme/app_colors.dart';
-import '../../../shared/models/order_model.dart';
-import '../../../shared/providers/orders_provider.dart';
-import '../../../shared/providers/role_provider.dart';
+import '../../../../app/localization/app_strings.dart';
+import '../../../../app/theme/app_colors.dart';
+import '../../../../shared/models/order_model.dart';
+import '../../../../shared/providers/orders_provider.dart';
+import '../../../../shared/providers/role_provider.dart';
 
 class CustomerHomeScreen extends ConsumerStatefulWidget {
   const CustomerHomeScreen({super.key});
@@ -350,12 +350,16 @@ class _CustomerHomeScreenState extends ConsumerState<CustomerHomeScreen> {
                             const SizedBox(height: 6),
                           ],
                           Row(
-                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
                             children: [
-                              Text(
-                                'من: ${order.pickupAddress} ➔ ${order.dropoffAddress}',
-                                style: const TextStyle(fontSize: 11, color: AppColors.slate600),
+                              Expanded(
+                                child: Text(
+                                  'من: ${order.pickupAddress} ➔ ${order.dropoffAddress}',
+                                  style: const TextStyle(fontSize: 11, color: AppColors.slate600),
+                                  maxLines: 2,
+                                  overflow: TextOverflow.ellipsis,
+                                ),
                               ),
+                              const SizedBox(width: 8),
                               const Icon(Icons.arrow_forward_ios, size: 12, color: AppColors.slate400),
                             ],
                           ),

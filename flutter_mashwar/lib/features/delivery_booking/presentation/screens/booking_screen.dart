@@ -1,13 +1,13 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
-import '../../../app/theme/app_colors.dart';
-import '../../../core/utils/input_validator.dart';
-import '../../../core/utils/price_calculator.dart';
-import '../../../shared/models/fare_quote_model.dart';
-import '../../../shared/models/order_model.dart';
-import '../../../shared/providers/orders_provider.dart';
-import '../../../shared/services/mock_data_repository.dart';
+import '../../../../app/theme/app_colors.dart';
+import '../../../../core/utils/input_validator.dart';
+import '../../../../core/utils/price_calculator.dart';
+import '../../../../shared/models/fare_quote_model.dart';
+import '../../../../shared/models/order_model.dart';
+import '../../../../shared/providers/orders_provider.dart';
+import '../../../../shared/services/mock_data_repository.dart';
 
 class BookingScreen extends ConsumerStatefulWidget {
   final OrderServiceType initialServiceType;
@@ -98,8 +98,6 @@ class _BookingScreenState extends ConsumerState<BookingScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-
     return Scaffold(
       appBar: AppBar(
         title: Text(

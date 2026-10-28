@@ -1,8 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
-import '../../../app/theme/app_colors.dart';
-import '../../../shared/providers/role_provider.dart';
+import '../../../../app/theme/app_colors.dart';
+import '../../../../shared/providers/role_provider.dart';
 
 class MerchantWorkspaceScreen extends ConsumerStatefulWidget {
   const MerchantWorkspaceScreen({super.key});
