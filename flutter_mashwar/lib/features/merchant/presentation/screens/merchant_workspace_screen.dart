@@ -1,8 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
-import '../../../app/theme/app_colors.dart';
-import '../../../shared/providers/role_provider.dart';
+import '../../../../app/theme/app_colors.dart';
+import '../../../../shared/providers/role_provider.dart';
 
 class MerchantWorkspaceScreen extends ConsumerStatefulWidget {
   const MerchantWorkspaceScreen({super.key});
@@ -43,7 +43,7 @@ class _MerchantWorkspaceScreenState extends ConsumerState<MerchantWorkspaceScree
         actions: [
           Switch(
             value: _isStoreOpen,
-            activeColor: AppColors.secondary,
+            activeThumbColor: AppColors.secondary,
             onChanged: (val) {
               setState(() => _isStoreOpen = val);
             },
@@ -86,7 +86,7 @@ class _MerchantWorkspaceScreenState extends ConsumerState<MerchantWorkspaceScree
             Container(
               padding: const EdgeInsets.all(14),
               decoration: BoxDecoration(
-                color: _isStoreOpen ? AppColors.secondary.withOpacity(0.1) : Colors.red.shade50,
+                color: _isStoreOpen ? AppColors.secondary.withValues(alpha: 0.1) : Colors.red.shade50,
                 borderRadius: BorderRadius.circular(16),
                 border: Border.all(
                   color: _isStoreOpen ? AppColors.secondary : Colors.red.shade300,
@@ -129,7 +129,7 @@ class _MerchantWorkspaceScreenState extends ConsumerState<MerchantWorkspaceScree
                 Container(
                   padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 2),
                   decoration: BoxDecoration(
-                    color: AppColors.primary.withOpacity(0.2),
+                    color: AppColors.primary.withValues(alpha: 0.2),
                     borderRadius: BorderRadius.circular(12),
                   ),
                   child: Text('${_merchantOrders.length} طلبات تجريبية', style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
