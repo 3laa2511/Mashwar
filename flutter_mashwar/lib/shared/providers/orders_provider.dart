@@ -51,6 +51,7 @@ class OrdersNotifier extends StateNotifier<List<OrderModel>> {
           captainName: 'كابتن طارق الغريب',
           captainPhone: '01198765432',
           captainVehicle: 'دراجة هوجان سوداء (٤٣٢١ م ن)',
+          acceptedAt: order.acceptedAt ?? DateTime.now(),
           notes: 'تم قبول المشوار من الكابتن',
         );
       case OrderStatus.captainAssigned:

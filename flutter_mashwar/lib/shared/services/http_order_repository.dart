@@ -9,22 +9,37 @@ import 'order_repository_interface.dart';
 class HttpOrderRepository implements IOrderRepository {
   final String baseUrl;
   final http.Client client;
+  final String? Function()? authTokenProvider;
 
   HttpOrderRepository({
     this.baseUrl = 'https://api.mashwar.app/api/v1',
     http.Client? client,
+    this.authTokenProvider,
   }) : client = client ?? http.Client();
+
+  Map<String, String> _buildHeaders({Map<String, String>? extra}) {
+    final headers = <String, String>{
+      'Accept': 'application/json',
+      if (extra != null) ...extra,
+    };
+    final token = authTokenProvider?.call();
+    if (token != null && token.trim().isNotEmpty) {
+      headers['Authorization'] = 'Bearer ${token.trim()}';
+    }
+    return headers;
+  }
 
   @override
   Future<List<OrderModel>> getOrders() async {
     final response = await client.get(
       Uri.parse('$baseUrl/orders'),
-      headers: {'Accept': 'application/json'},
+      headers: _buildHeaders(),
     );
 
     if (response.statusCode == 200) {
       final decoded = jsonDecode(response.body);
-      final List data = decoded['data'] ?? [];
+      final dataNode = decoded['data'];
+      final List data = dataNode is Map ? (dataNode['orders'] ?? []) : (dataNode ?? []);
       return data.map((json) => _orderFromJson(json)).toList();
     } else {
       throw Exception('فشل جلب قائمة الطلبات من الخادم (${response.statusCode})');
@@ -35,7 +50,7 @@ class HttpOrderRepository implements IOrderRepository {
   Future<OrderModel?> getOrderById(String orderId) async {
     final response = await client.get(
       Uri.parse('$baseUrl/orders/$orderId'),
-      headers: {'Accept': 'application/json'},
+      headers: _buildHeaders(),
     );
 
     if (response.statusCode == 200) {
@@ -56,7 +71,7 @@ class HttpOrderRepository implements IOrderRepository {
   }) async {
     final idempotencyKey = 'idemp_${DateTime.now().millisecondsSinceEpoch}_${newOrder.id}';
     final payload = {
-      'serviceTypeId': newOrder.serviceType.name,
+      'serviceTypeId': _serviceTypeToBackend(newOrder.serviceType),
       'quoteId': quoteId ?? 'quote_default',
       'quoteSignature': quoteSignature,
       'itemDescription': newOrder.itemDescription,
@@ -79,11 +94,10 @@ class HttpOrderRepository implements IOrderRepository {
 
     final response = await client.post(
       Uri.parse('$baseUrl/orders'),
-      headers: {
+      headers: _buildHeaders(extra: {
         'Content-Type': 'application/json',
-        'Accept': 'application/json',
         'Idempotency-Key': idempotencyKey,
-      },
+      }),
       body: jsonEncode(payload),
     );
 
@@ -107,17 +121,15 @@ class HttpOrderRepository implements IOrderRepository {
   }) async {
     final payload = {
       'targetStatus': _statusToBackend(targetStatus),
-      'actorRole': actorRole ?? 'captain',
-      'notes': notes,
-      'cashCollectedPiasters': cashCollectedPiasters,
+      if (notes != null) 'notes': notes,
+      if (cashCollectedPiasters != null) 'cashCollectedPiasters': cashCollectedPiasters,
     };
 
     final response = await client.post(
       Uri.parse('$baseUrl/orders/$orderId/transitions'),
-      headers: {
+      headers: _buildHeaders(extra: {
         'Content-Type': 'application/json',
-        'Accept': 'application/json',
-      },
+      }),
       body: jsonEncode(payload),
     );
 
@@ -135,12 +147,11 @@ class HttpOrderRepository implements IOrderRepository {
   Future<OrderModel> cancelOrder(String orderId, {String? cancellationReason}) async {
     final response = await client.post(
       Uri.parse('$baseUrl/orders/$orderId/cancel'),
-      headers: {
+      headers: _buildHeaders(extra: {
         'Content-Type': 'application/json',
-        'Accept': 'application/json',
-      },
+      }),
       body: jsonEncode({
-        'cancellationReason': cancellationReason ?? 'إلغاء من قبل المستخدم',
+        'reason': cancellationReason ?? 'إلغاء من قبل المستخدم',
       }),
     );
 
@@ -206,8 +217,24 @@ class HttpOrderRepository implements IOrderRepository {
       createdAt: json['createdAt'] != null
           ? DateTime.tryParse(json['createdAt']) ?? DateTime.now()
           : DateTime.now(),
+      acceptedAt: json['acceptedAt'] != null
+          ? DateTime.tryParse(json['acceptedAt'])
+          : null,
       notes: json['specialInstructions'] ?? json['notes'],
     );
+  }
+
+  String _serviceTypeToBackend(OrderServiceType type) {
+    switch (type) {
+      case OrderServiceType.restaurantStore:
+        return 'restaurant_store';
+      case OrderServiceType.errand:
+        return 'errand';
+      case OrderServiceType.passengerRestricted:
+        return 'passenger';
+      case OrderServiceType.package:
+        return 'package';
+    }
   }
 
   OrderServiceType _serviceTypeFromBackend(String? type) {

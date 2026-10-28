@@ -25,7 +25,11 @@ import {
   Info
 } from 'lucide-react';
 import { EgyptianMapCanvas } from './EgyptianMapCanvas';
-import { useMarketplace, MarketplaceOrder } from '../../store/marketplaceStore';
+import {
+  useMarketplace,
+  MarketplaceOrder,
+  formatHumanReadableAcceptedTimestamp
+} from '../../store/marketplaceStore';
 
 interface CaptainMobileExperienceProps {
   onSwitchToCustomer?: () => void;
@@ -68,10 +72,12 @@ export const CaptainMobileExperience: React.FC<CaptainMobileExperienceProps> = (
       ['captain_assigned', 'at_pickup', 'in_transit'].includes(o.status)
   );
 
-  // Ready orders waiting for dispatch (not yet assigned and not skipped)
+  // Ready store orders OR direct customer ride/package requests waiting for dispatch
   const incomingDispatchOrder = !activeAssignedOrder && isCaptainOnline
     ? orders.find(
-        (o) => o.status === 'ready_for_pickup' && !skippedOrders.includes(o.id)
+        (o) =>
+          (o.status === 'ready_for_pickup' || o.status === 'searching_captain') &&
+          !skippedOrders.includes(o.id)
       )
     : null;
 
@@ -335,9 +341,15 @@ export const CaptainMobileExperience: React.FC<CaptainMobileExperienceProps> = (
                   <div className="flex items-center gap-2">
                     <span className="w-2.5 h-2.5 rounded-full bg-emerald-600 animate-ping" />
                     <span className="font-black text-sm text-slate-900">
-                      {activeAssignedOrder.status === 'captain_assigned' && 'التحرك لموقع المتجر'}
-                      {activeAssignedOrder.status === 'at_pickup' && 'استلام الطلب من التاجر'}
-                      {activeAssignedOrder.status === 'in_transit' && 'في الطريق للعميل'}
+                      {activeAssignedOrder.status === 'captain_assigned' &&
+                        (activeAssignedOrder.serviceType === 'restaurant_store'
+                          ? 'التحرك لموقع المتجر'
+                          : 'التحرك لنقطة الانطلاق')}
+                      {activeAssignedOrder.status === 'at_pickup' &&
+                        (activeAssignedOrder.serviceType === 'restaurant_store'
+                          ? 'استلام الطلب من التاجر'
+                          : 'عند نقطة الانطلاق / استلام المشوار')}
+                      {activeAssignedOrder.status === 'in_transit' && 'في الطريق للوجهة النهائية'}
                     </span>
                   </div>
                   <span className="text-xs font-black text-emerald-800 bg-emerald-50 px-2 py-0.5 rounded-full">
@@ -345,14 +357,30 @@ export const CaptainMobileExperience: React.FC<CaptainMobileExperienceProps> = (
                   </span>
                 </div>
 
+                {/* Accepted Timestamp Badge */}
+                {(activeAssignedOrder.acceptedAtIso || activeAssignedOrder.acceptedAt) && (
+                  <div className="px-3 py-1.5 rounded-xl bg-emerald-50 border border-emerald-200 flex items-center justify-between text-[11px] text-emerald-900">
+                    <span className="font-bold flex items-center gap-1">
+                      <Clock className="w-3.5 h-3.5 text-emerald-700" />
+                      <span>وقت قبول الطلب:</span>
+                    </span>
+                    <span className="font-black text-emerald-800">
+                      {formatHumanReadableAcceptedTimestamp(
+                        activeAssignedOrder.acceptedAtIso,
+                        activeAssignedOrder.acceptedAt
+                      )}
+                    </span>
+                  </div>
+                )}
+
                 {/* Current Target Location Highlight */}
                 <div className="p-3 bg-emerald-50/60 rounded-2xl border border-emerald-200 flex items-start gap-2.5">
                   <Navigation className="w-4 h-4 text-emerald-700 mt-0.5 shrink-0" />
                   <div className="text-xs">
                     <div className="text-[10px] text-emerald-800 font-bold">
                       {activeAssignedOrder.status !== 'in_transit'
-                        ? 'الوجهة الحالية: موقع المتجر'
-                        : 'الوجهة الحالية: موقع العميل'}
+                        ? 'الوجهة الحالية: نقطة الاستلام / الانطلاق'
+                        : 'الوجهة الحالية: موقع تسليم العميل'}
                     </div>
                     <div className="font-extrabold text-slate-900 mt-0.5">
                       {activeAssignedOrder.status !== 'in_transit'

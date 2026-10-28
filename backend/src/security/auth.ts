@@ -604,8 +604,11 @@ export function verifyToken(token: string): AuthenticatedUser {
   }
 
   // Step 8: Role must strictly come from server-managed app_metadata.role
-  const appMetadata = payload.app_metadata || {};
-  const role = appMetadata.role as UserRole;
+  // Safely normalize case (e.g. 'CUSTOMER' -> 'customer') without trusting user_metadata or root claims
+  const appMetadata =
+    payload.app_metadata && typeof payload.app_metadata === 'object' ? payload.app_metadata : {};
+  const rawRole = typeof appMetadata.role === 'string' ? appMetadata.role.trim().toLowerCase() : '';
+  const role = rawRole as UserRole;
 
   const validRoles: UserRole[] = [
     'owner',
@@ -630,7 +633,7 @@ export function verifyToken(token: string): AuthenticatedUser {
     phone: payload.phone || payload.user_metadata?.phone,
     fullName: payload.user_metadata?.full_name || payload.name,
     email: payload.email,
-    appMetadata,
+    appMetadata: { ...appMetadata, role },
     userMetadata: payload.user_metadata || {},
   };
 }

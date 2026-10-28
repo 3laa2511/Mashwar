@@ -710,6 +710,7 @@ export class PersistentStore {
         captainPhone: '01012345671',
         captainVehicle: 'موتوسيكل (م ن ف ٤٨١٢)',
         cashCollectedPiasters: 3000,
+        acceptedAt: new Date(Date.now() - 170 * 60 * 1000).toISOString(),
         createdAt: new Date(Date.now() - 3 * 3600 * 1000).toISOString(),
         updatedAt: new Date(Date.now() - 2 * 3600 * 1000).toISOString(),
       },
@@ -742,6 +743,7 @@ export class PersistentStore {
         captainName: 'أحمد فتحي الديب',
         captainPhone: '01012345671',
         captainVehicle: 'موتوسيكل (م ن ف ٤٨١٢)',
+        acceptedAt: new Date(Date.now() - 38 * 60 * 1000).toISOString(),
         createdAt: new Date(Date.now() - 45 * 60 * 1000).toISOString(),
         updatedAt: new Date(Date.now() - 15 * 60 * 1000).toISOString(),
       },
@@ -1280,12 +1282,14 @@ export class PersistentStore {
     }
 
     const previousOrder = { ...order };
+    const nowIso = new Date().toISOString();
     order.status = 'captain_assigned';
+    order.acceptedAt = order.acceptedAt || nowIso;
     order.assignedCaptainId = captain.id;
     order.captainName = captain.fullName;
     order.captainPhone = captain.phone;
     order.captainVehicle = `${captain.vehicleType} (${captain.vehiclePlate})`;
-    order.updatedAt = new Date().toISOString();
+    order.updatedAt = nowIso;
 
     this.orders.set(order.id, order);
     this.recordOrderStateHistory({

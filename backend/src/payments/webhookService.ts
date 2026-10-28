@@ -23,6 +23,29 @@ export class WebhookService {
     vodafone_cash: process.env.VODAFONE_CASH_SECRET || 'vodafone_cash_api_key_delta',
   };
 
+  private static resolveWebhookSecret(provider: 'paymob' | 'fawry' | 'vodafone_cash'): string | undefined {
+    const providerEnvMap: Record<'paymob' | 'fawry' | 'vodafone_cash', string | undefined> = {
+      paymob: process.env.PAYMOB_HMAC_SECRET || process.env.PAYMENT_WEBHOOK_SECRET,
+      fawry: process.env.FAWRY_SECURITY_SECRET || process.env.PAYMENT_WEBHOOK_SECRET,
+      vodafone_cash: process.env.VODAFONE_CASH_SECRET || process.env.PAYMENT_WEBHOOK_SECRET,
+    };
+
+    const configured = providerEnvMap[provider]?.trim();
+    if (process.env.NODE_ENV === 'production') {
+      if (!configured || configured.startsWith('CHANGE_ME_') || configured.length < 24) {
+        const err = new Error(
+          'خطأ إعدادات أمنية حرج: مفتاح التحقق من إشعارات الدفع مفقود أو غير صالح في بيئة الإنتاج (Fail-Closed).'
+        );
+        (err as any).code = 'WEBHOOK_CONFIG_MISSING';
+        (err as any).statusCode = 500;
+        throw err;
+      }
+      return configured;
+    }
+
+    return configured || this.DEFAULT_WEBHOOK_SECRETS[provider];
+  }
+
   /**
    * Generates a valid HMAC signature for testing or gateway simulation.
    */
@@ -30,7 +53,7 @@ export class WebhookService {
     payload: string,
     provider: 'paymob' | 'fawry' | 'vodafone_cash'
   ): string {
-    const secret = this.DEFAULT_WEBHOOK_SECRETS[provider];
+    const secret = this.resolveWebhookSecret(provider) || this.DEFAULT_WEBHOOK_SECRETS[provider];
     return crypto.createHmac('sha256', secret).update(payload).digest('hex');
   }
 
@@ -42,7 +65,7 @@ export class WebhookService {
     signatureHeader: string,
     provider: 'paymob' | 'fawry' | 'vodafone_cash'
   ): boolean {
-    const secret = this.DEFAULT_WEBHOOK_SECRETS[provider];
+    const secret = this.resolveWebhookSecret(provider);
     if (!secret || !signatureHeader) return false;
 
     const expectedSignature = crypto
@@ -51,10 +74,12 @@ export class WebhookService {
       .digest('hex');
 
     try {
-      return crypto.timingSafeEqual(
-        Buffer.from(signatureHeader, 'hex'),
-        Buffer.from(expectedSignature, 'hex')
-      );
+      const sigBuf = Buffer.from(signatureHeader, 'hex');
+      const expBuf = Buffer.from(expectedSignature, 'hex');
+      if (sigBuf.length !== expBuf.length) {
+        return false;
+      }
+      return crypto.timingSafeEqual(sigBuf, expBuf);
     } catch {
       return false;
     }

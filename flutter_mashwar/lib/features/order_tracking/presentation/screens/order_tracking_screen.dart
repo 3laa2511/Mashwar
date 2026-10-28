@@ -147,7 +147,9 @@ class OrderTrackingScreen extends ConsumerWidget {
                           order.status == OrderStatus.atPickup ||
                           order.status == OrderStatus.inTransit ||
                           order.status == OrderStatus.delivered,
-                      order.captainName != null ? '${order.captainName} (${order.captainVehicle})' : 'في انتظار القبول',
+                      order.captainName != null
+                          ? '${order.captainName} (${order.captainVehicle})${order.formattedAcceptedAtAr != null ? ' • تم القبول: ${order.formattedAcceptedAtAr}' : ''}'
+                          : 'في انتظار القبول',
                     ),
                     _buildTimelineStep(
                       'الكابتن وصل للاستلام',
@@ -182,6 +184,8 @@ class OrderTrackingScreen extends ConsumerWidget {
                   children: [
                     const Text('تفاصيل الشحنة', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
                     const Divider(height: 16),
+                    if (order.formattedAcceptedAtAr != null)
+                      _buildInfoRow('وقت قبول الطلب:', order.formattedAcceptedAtAr!),
                     _buildInfoRow('محتوى الطلب:', order.itemDescription),
                     _buildInfoRow('قيمة التوصيل:', '${order.estimatedFareEGP} ج.م'),
                     _buildInfoRow('المسافة التقديرية:', '${order.distanceKm} كم'),

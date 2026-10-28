@@ -55,6 +55,10 @@ PersistentStore.initialize();
 // In-memory repositories synchronized with PersistentStore
 const ordersDb = new Map<string, Order>();
 const idempotencyStore = new Map<string, { orderId: string; payloadFingerprint: string; responseBody: any }>();
+const paymentIntentIdempotencyStore = new Map<
+  string,
+  { payloadFingerprint: string; responseBody: any }
+>();
 const mockCaptains = new Map<string, CaptainProfile>();
 
 function syncWithStore() {
@@ -1298,8 +1302,44 @@ router.post('/payments/intents', authenticate, (req: Request, res: Response) => 
     }
   }
 
+  // 9. User-scoped idempotency protection on payment intent creation
+  const rawIdempotencyKey =
+    (req.headers['idempotency-key'] as string | undefined) ||
+    (req.headers['x-idempotency-key'] as string | undefined);
+  const idempotencyKey =
+    typeof rawIdempotencyKey === 'string' && rawIdempotencyKey.trim().length > 0
+      ? rawIdempotencyKey.trim()
+      : undefined;
+
+  const payloadFingerprint = JSON.stringify({
+    userId: user.id,
+    orderId: order.id,
+    provider,
+    amountPiasters: order.totalFarePiasters,
+    currency: 'EGP',
+  });
+
+  if (idempotencyKey) {
+    const scopedIdempotencyKey = `${user.id}:${idempotencyKey}`;
+    const existingIntent = paymentIntentIdempotencyStore.get(scopedIdempotencyKey);
+    if (existingIntent) {
+      if (existingIntent.payloadFingerprint !== payloadFingerprint) {
+        return sendError(
+          res,
+          'IDEMPOTENCY_PAYLOAD_MISMATCH',
+          'تعارض في مفتاح عدم التكرار (Idempotency-Key): تم استخدام نفس المفتاح سابقاً لطلب دفع بمعاملات مختلفة.',
+          409
+        );
+      }
+      return sendSuccess(res, {
+        ...existingIntent.responseBody,
+        isIdempotentReplay: true,
+      });
+    }
+  }
+
   const paymentIntentId = `pi_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
-  return sendSuccess(res, {
+  const responseBody = {
     paymentIntentId,
     orderId: order.id,
     amountPiasters: order.totalFarePiasters,
@@ -1308,15 +1348,64 @@ router.post('/payments/intents', authenticate, (req: Request, res: Response) => 
     provider,
     clientSecret: `sec_${Math.random().toString(36).substring(2, 12)}`,
     status: 'requires_customer_action',
-  });
+    isIdempotentReplay: false,
+  };
+
+  if (idempotencyKey) {
+    paymentIntentIdempotencyStore.set(`${user.id}:${idempotencyKey}`, {
+      payloadFingerprint,
+      responseBody,
+    });
+  }
+
+  return sendSuccess(res, responseBody);
 });
 
 router.post('/webhooks/payments/:provider', webhookRateLimiter, async (req: Request, res: Response) => {
   try {
     const provider = req.params.provider as 'paymob' | 'fawry' | 'vodafone_cash';
+    if (!(ALLOWED_PAYMENT_PROVIDERS as ReadonlyArray<string>).includes(provider)) {
+      return res.status(400).json({
+        received: false,
+        code: 'INVALID_PAYMENT_PROVIDER',
+        error: 'بوابة الدفع المحددة في المسار غير مدعومة.',
+      });
+    }
+
     const signature = (req.headers['x-provider-signature'] as string) || '';
     const rawBody = JSON.stringify(req.body);
     const payload = req.body as WebhookEventPayload;
+
+    if (!payload || typeof payload !== 'object' || payload.provider !== provider) {
+      return res.status(400).json({
+        received: false,
+        code: 'WEBHOOK_PROVIDER_MISMATCH',
+        error: 'مزود الدفع في محتوى الإشعار لا يطابق مسار الـ Webhook.',
+      });
+    }
+
+    // Pre-validate order state and amount if order exists in store before mutating state
+    if (payload.orderId && (ordersDb.has(payload.orderId) || PersistentStore.getOrderById(payload.orderId))) {
+      const targetOrder = ordersDb.get(payload.orderId) || PersistentStore.getOrderById(payload.orderId)!;
+      if (targetOrder.status === 'cancelled') {
+        return res.status(409).json({
+          received: false,
+          code: 'ORDER_CANCELLED_CANNOT_MARK_PAID',
+          error: 'لا يمكن تأكيد سداد طلب ملغى.',
+        });
+      }
+      if (
+        typeof payload.amountPiasters !== 'number' ||
+        !Number.isInteger(payload.amountPiasters) ||
+        payload.amountPiasters !== targetOrder.totalFarePiasters
+      ) {
+        return res.status(422).json({
+          received: false,
+          code: 'WEBHOOK_AMOUNT_MISMATCH',
+          error: 'قيمة الدفع الواردة في الإشعار لا تطابق إجمالي تسعيرة الطلب بالقرش.',
+        });
+      }
+    }
 
     const result = await WebhookService.processWebhook(rawBody, signature, payload, async (event) => {
       if (event.orderId && (ordersDb.has(event.orderId) || PersistentStore.getOrderById(event.orderId))) {
@@ -1333,7 +1422,12 @@ router.post('/webhooks/payments/:provider', webhookRateLimiter, async (req: Requ
 
     return res.status(200).json(result);
   } catch (err: any) {
-    return res.status(400).json({ received: false, error: err.message });
+    const statusCode = err.statusCode || 400;
+    return res.status(statusCode).json({
+      received: false,
+      code: err.code || 'WEBHOOK_ERROR',
+      error: err.message,
+    });
   }
 });
 
@@ -1615,6 +1709,7 @@ router.get('/admin/database-status', authenticate, async (req: Request, res: Res
 export function resetTestDatabases() {
   ordersDb.clear();
   idempotencyStore.clear();
+  paymentIntentIdempotencyStore.clear();
   mockCaptains.clear();
   WebhookService.clearCache();
   CashCollectionService.clearCache();

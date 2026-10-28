@@ -2764,6 +2764,241 @@ export async function runAllTests(): Promise<{
     }
   });
 
+  // --------------------------------------------------------------------------
+  // SUITE 24: Payment Intent Idempotency, Webhook Amount/State Hardening & Role Case Normalization
+  // --------------------------------------------------------------------------
+  console.log('\n▶ SUITE 24: Payment Intent Idempotency, Webhook Amount/State Hardening & Role Case Normalization');
+
+  await runTest('RoleNormalization', 'Safely normalizes uppercase/mixed-case app_metadata.role (e.g. CUSTOMER, CAPTAIN) while still rejecting unknown roles', () => {
+    const secret =
+      process.env.SUPABASE_JWT_SECRET ||
+      process.env.JWT_SECRET ||
+      'mashwar_secure_supabase_jwt_secret_el_bagour_2026';
+    const header = Buffer.from(JSON.stringify({ alg: 'HS256', typ: 'JWT' })).toString('base64url');
+    const upperPayload = Buffer.from(
+      JSON.stringify({
+        sub: 'usr_upper_role_01',
+        iss: 'supabase',
+        aud: 'authenticated',
+        exp: Math.floor(Date.now() / 1000) + 3600,
+        app_metadata: { role: 'CUSTOMER' },
+      })
+    ).toString('base64url');
+    const sig = crypto
+      .createHmac('sha256', secret)
+      .update(`${header}.${upperPayload}`)
+      .digest('base64url');
+    const verified = verifyToken(`${header}.${upperPayload}.${sig}`);
+    assert(verified.role === 'customer', `Expected normalized role 'customer', got '${verified.role}'`);
+  });
+
+  await runTest('PaymentIntentIdempotency', 'Enforces user-scoped idempotency on POST /payments/intents, replays identical requests, rejects payload mismatches (409), and isolates across customers', async () => {
+    resetTestDatabases();
+    const app = createServer();
+    const server = app.listen(0);
+    const address = server.address() as { port: number };
+    const baseUrl = `http://127.0.0.1:${address.port}/api/v1`;
+
+    try {
+      const cust1Token = generateTestToken({ userId: 'usr_cust_02', role: 'customer' }); // owns ord_bagour_8102 (3500 piasters, in_transit, unpaid)
+      const cust2Token = generateTestToken({ userId: 'usr_cust_03', role: 'customer' }); // owns ord_bagour_8103 (1700 piasters, searching_captain, unpaid)
+
+      // 1. First request with Idempotency-Key
+      const res1 = await fetch(`${baseUrl}/payments/intents`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${cust1Token}`,
+          'Idempotency-Key': 'pi_idem_shared_key_01',
+        },
+        body: JSON.stringify({
+          orderId: 'ord_bagour_8102',
+          provider: 'paymob',
+        }),
+      });
+      assert(res1.status === 200, `Expected 200 on first payment intent, got ${res1.status}`);
+      const json1 = await res1.json();
+      assert(json1.data.isIdempotentReplay === false, 'First call must have isIdempotentReplay === false');
+      const firstIntentId = json1.data.paymentIntentId;
+
+      // 2. Identical retry with same Idempotency-Key -> replays same paymentIntentId
+      const res2 = await fetch(`${baseUrl}/payments/intents`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${cust1Token}`,
+          'Idempotency-Key': 'pi_idem_shared_key_01',
+        },
+        body: JSON.stringify({
+          orderId: 'ord_bagour_8102',
+          provider: 'paymob',
+        }),
+      });
+      assert(res2.status === 200, `Expected 200 on idempotent replay, got ${res2.status}`);
+      const json2 = await res2.json();
+      assert(json2.data.isIdempotentReplay === true, 'Replay must have isIdempotentReplay === true');
+      assert(json2.data.paymentIntentId === firstIntentId, 'Replay must return identical paymentIntentId');
+
+      // 3. Same customer reuses same Idempotency-Key with different provider -> 409 IDEMPOTENCY_PAYLOAD_MISMATCH
+      const resMismatch = await fetch(`${baseUrl}/payments/intents`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${cust1Token}`,
+          'Idempotency-Key': 'pi_idem_shared_key_01',
+        },
+        body: JSON.stringify({
+          orderId: 'ord_bagour_8102',
+          provider: 'fawry',
+        }),
+      });
+      assert(resMismatch.status === 409, `Expected 409 on payload mismatch, got ${resMismatch.status}`);
+      const jsonMismatch = await resMismatch.json();
+      assert(
+        jsonMismatch.error?.code === 'IDEMPOTENCY_PAYLOAD_MISMATCH',
+        `Expected IDEMPOTENCY_PAYLOAD_MISMATCH, got ${jsonMismatch.error?.code}`
+      );
+
+      // 4. Different customer uses the exact same Idempotency-Key on their own order -> isolated & succeeds
+      const resCust2 = await fetch(`${baseUrl}/payments/intents`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${cust2Token}`,
+          'Idempotency-Key': 'pi_idem_shared_key_01',
+        },
+        body: JSON.stringify({
+          orderId: 'ord_bagour_8103',
+          provider: 'paymob',
+        }),
+      });
+      assert(resCust2.status === 200, `Expected 200 for second customer with same key string, got ${resCust2.status}`);
+      const jsonCust2 = await resCust2.json();
+      assert(jsonCust2.data.orderId === 'ord_bagour_8103', 'Second customer must receive intent for their own order');
+      assert(jsonCust2.data.paymentIntentId !== firstIntentId, 'Second customer must not receive first customer intent');
+    } finally {
+      server.close();
+    }
+  });
+
+  await runTest('WebhookHardening', 'Rejects payment webhooks with mismatched amount (422), cancelled order (409), or mismatched provider (400), and fails closed in production when secret is missing', async () => {
+    resetTestDatabases();
+    const app = createServer();
+    const server = app.listen(0);
+    const address = server.address() as { port: number };
+    const baseUrl = `http://127.0.0.1:${address.port}/api/v1`;
+
+    try {
+      // 1. Amount mismatch on ord_bagour_8102 (authoritative fare is 3500, webhook claims 100)
+      const underpaidPayload = {
+        provider: 'paymob' as const,
+        eventId: 'evt_underpaid_01',
+        eventType: 'TRANSACTION_SUCCESS' as const,
+        orderId: 'ord_bagour_8102',
+        amountPiasters: 100,
+        currency: 'EGP' as const,
+        transactionReference: 'TX_UNDER_01',
+        timestamp: new Date().toISOString(),
+      };
+      const rawUnderpaid = JSON.stringify(underpaidPayload);
+      const sigUnderpaid = WebhookService.generateSignature(rawUnderpaid, 'paymob');
+
+      const resUnderpaid = await fetch(`${baseUrl}/webhooks/payments/paymob`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-provider-signature': sigUnderpaid,
+        },
+        body: rawUnderpaid,
+      });
+      assert(resUnderpaid.status === 422, `Expected 422 for webhook amount mismatch, got ${resUnderpaid.status}`);
+      const jsonUnderpaid = await resUnderpaid.json();
+      assert(jsonUnderpaid.code === 'WEBHOOK_AMOUNT_MISMATCH', 'Must return WEBHOOK_AMOUNT_MISMATCH');
+      assert(PersistentStore.getOrderById('ord_bagour_8102')?.isPaid === false, 'Order must remain unpaid');
+
+      // 2. Cancelled order ord_bagour_8104 cannot be marked paid via webhook
+      const cancelledPayload = {
+        provider: 'paymob' as const,
+        eventId: 'evt_cancelled_01',
+        eventType: 'TRANSACTION_SUCCESS' as const,
+        orderId: 'ord_bagour_8104',
+        amountPiasters: 1700,
+        currency: 'EGP' as const,
+        transactionReference: 'TX_CANC_01',
+        timestamp: new Date().toISOString(),
+      };
+      const rawCancelled = JSON.stringify(cancelledPayload);
+      const sigCancelled = WebhookService.generateSignature(rawCancelled, 'paymob');
+
+      const resCancelled = await fetch(`${baseUrl}/webhooks/payments/paymob`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-provider-signature': sigCancelled,
+        },
+        body: rawCancelled,
+      });
+      assert(resCancelled.status === 409, `Expected 409 for cancelled order webhook, got ${resCancelled.status}`);
+      const jsonCancelled = await resCancelled.json();
+      assert(jsonCancelled.code === 'ORDER_CANCELLED_CANNOT_MARK_PAID', 'Must return ORDER_CANCELLED_CANNOT_MARK_PAID');
+
+      // 3. Production fail-closed when PAYMOB_HMAC_SECRET / PAYMENT_WEBHOOK_SECRET is missing
+      const prevEnv = process.env.NODE_ENV;
+      const prevPaymob = process.env.PAYMOB_HMAC_SECRET;
+      const prevWebhook = process.env.PAYMENT_WEBHOOK_SECRET;
+      try {
+        process.env.NODE_ENV = 'production';
+        delete process.env.PAYMOB_HMAC_SECRET;
+        delete process.env.PAYMENT_WEBHOOK_SECRET;
+
+        let threwConfigMissing = false;
+        try {
+          WebhookService.verifySignature(rawUnderpaid, sigUnderpaid, 'paymob');
+        } catch (err: any) {
+          threwConfigMissing = err.code === 'WEBHOOK_CONFIG_MISSING' && err.statusCode === 500;
+        }
+        assert(threwConfigMissing, 'WebhookService.verifySignature must fail closed with 500 WEBHOOK_CONFIG_MISSING in production when secret is unset');
+      } finally {
+        process.env.NODE_ENV = prevEnv;
+        if (prevPaymob !== undefined) process.env.PAYMOB_HMAC_SECRET = prevPaymob;
+        if (prevWebhook !== undefined) process.env.PAYMENT_WEBHOOK_SECRET = prevWebhook;
+      }
+    } finally {
+      server.close();
+    }
+  });
+
+  await runTest('OrderFSM', 'Records acceptedAt ISO timestamp when order transitions to accepted_by_store or captain_assigned', () => {
+    const baseOrder = PersistentStore.getAllOrders()[0];
+    const newOrder: Order = {
+      ...baseOrder,
+      id: 'ord_test_accepted_ts_01',
+      merchantUserId: 'usr_merch_01',
+      status: 'created',
+      acceptedAt: undefined,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+
+    assert(newOrder.acceptedAt === undefined, 'Initial order should not have acceptedAt');
+
+    const s1 = OrderFsm.transition(newOrder, {
+      targetStatus: 'accepted_by_store',
+      actorId: 'usr_merch_01',
+      actorRole: 'merchant',
+    });
+
+    assert(typeof s1.order.acceptedAt === 'string' && s1.order.acceptedAt.length > 10, 'Order must record acceptedAt ISO timestamp upon acceptance');
+    const firstAcceptedAt = s1.order.acceptedAt;
+
+    const s2 = OrderFsm.transition(s1.order, {
+      targetStatus: 'preparing',
+      actorId: 'usr_merch_01',
+      actorRole: 'merchant',
+    });
+    assert(s2.order.acceptedAt === firstAcceptedAt, 'Subsequent transitions must preserve original acceptedAt timestamp');
+  });
+
   const total = results.length;
   const passed = results.filter((r) => r.passed).length;
   const failed = results.filter((r) => !r.passed).length;

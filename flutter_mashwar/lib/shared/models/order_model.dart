@@ -32,6 +32,7 @@ class OrderModel {
   final String? captainPhone;
   final String? captainVehicle;
   final DateTime createdAt;
+  final DateTime? acceptedAt;
   final String? notes;
 
   const OrderModel({
@@ -49,8 +50,29 @@ class OrderModel {
     this.captainPhone,
     this.captainVehicle,
     required this.createdAt,
+    this.acceptedAt,
     this.notes,
   });
+
+  /// Returns a human-readable Arabic timestamp for when the order was accepted.
+  String? get formattedAcceptedAtAr {
+    if (acceptedAt == null) return null;
+    final dt = acceptedAt!;
+    final hour12 = dt.hour % 12 == 0 ? 12 : dt.hour % 12;
+    final period = dt.hour >= 12 ? 'م' : 'ص';
+    final minStr = dt.minute.toString().padLeft(2, '0');
+    final diffMins = DateTime.now().difference(dt).inMinutes;
+    final relativeStr = diffMins <= 0
+        ? 'الآن'
+        : diffMins == 1
+            ? 'منذ دقيقة واحدة'
+            : diffMins == 2
+                ? 'منذ دقيقتين'
+                : diffMins <= 10
+                    ? 'منذ $diffMins دقائق'
+                    : 'منذ $diffMins دقيقة';
+    return '$hour12:$minStr $period ($relativeStr)';
+  }
 
   OrderModel copyWith({
     String? id,
@@ -67,6 +89,7 @@ class OrderModel {
     String? captainPhone,
     String? captainVehicle,
     DateTime? createdAt,
+    DateTime? acceptedAt,
     String? notes,
   }) {
     return OrderModel(
@@ -84,6 +107,7 @@ class OrderModel {
       captainPhone: captainPhone ?? this.captainPhone,
       captainVehicle: captainVehicle ?? this.captainVehicle,
       createdAt: createdAt ?? this.createdAt,
+      acceptedAt: acceptedAt ?? this.acceptedAt,
       notes: notes ?? this.notes,
     );
   }
@@ -104,6 +128,7 @@ class OrderModel {
       'captainPhone': captainPhone,
       'captainVehicle': captainVehicle,
       'createdAt': createdAt.toIso8601String(),
+      'acceptedAt': acceptedAt?.toIso8601String(),
       'notes': notes,
     };
   }

@@ -1,41 +1,21 @@
-import React, { createContext, useContext, useState, useEffect, ReactNode } from 'react';
+import React, { createContext, useContext, useState, useEffect } from 'react';
 
-// Real generated assets
-export const RESTAURANT_IMG = '/src/assets/images/mashwar_restaurant_grill_1792637801314.jpg';
-export const PHARMACY_IMG = '/src/assets/images/mashwar_pharmacy_wellness_1792637802286.jpg';
-export const SUPERMARKET_IMG = '/src/assets/images/mashwar_grocery_supermarket_1792637803087.jpg';
+// ============================================================================
+// 1. TYPES & INTERFACES
+// ============================================================================
 
-export type UserRole = 'customer' | 'captain' | 'merchant' | 'operations';
+export type PersonaRole = 'customer' | 'captain' | 'merchant' | 'operations';
 
 export interface DemoUser {
   id: string;
   name: string;
   phone: string;
-  role: UserRole;
-  avatar: string;
+  role: PersonaRole;
   roleBadgeAr: string;
-  merchantId?: string; // If role === 'merchant'
+  avatar: string;
+  merchantId?: string; // If role === 'merchant', links strictly to their specific store
   vehicleInfo?: string; // If role === 'captain'
-}
-
-export interface StoreItem {
-  id: string;
-  nameAr: string;
-  category: 'restaurant' | 'supermarket' | 'pharmacy' | 'other';
-  categoryAr: string;
-  ownerName: string;
-  phone: string;
-  address: string;
-  distanceKm: number;
-  rating: number;
-  reviewsCount: number;
-  deliveryTimeEst: string;
-  minOrderEgp: number;
-  isOpen: boolean;
-  image: string;
-  descriptionAr: string;
-  subscriptionPlan: 'gold' | 'silver';
-  commissionRate: number; // 0% flat invariant
+  captainRecordId?: string; // Links to FleetCaptainItem
 }
 
 export interface ProductItem {
@@ -49,390 +29,778 @@ export interface ProductItem {
   unit: string;
 }
 
+export interface StoreItem {
+  id: string;
+  nameAr: string;
+  category: 'restaurant' | 'pharmacy' | 'supermarket';
+  categoryAr: string;
+  ownerName: string;
+  phone: string;
+  address: string;
+  landmark: string;
+  rating: number;
+  reviewsCount: number;
+  deliveryTimeEst: string;
+  deliveryFeeEgp: number;
+  minOrderEgp: number;
+  isOpen: boolean;
+  distanceKm: number;
+  badgeAr?: string;
+  image: string;
+}
+
 export interface CartItem {
   product: ProductItem;
   quantity: number;
+  notes?: string;
 }
 
 export type OrderStatus =
-  | 'created' // Placed by customer, pending merchant acceptance
-  | 'merchant_accepted' // Merchant is preparing the order
-  | 'ready_for_pickup' // Merchant finished, waiting for captain dispatch
-  | 'captain_assigned' // Captain accepted delivery
-  | 'at_pickup' // Captain arrived at the merchant store
-  | 'in_transit' // Captain picked up and is heading to customer
-  | 'delivered' // Completed and cash collected
-  | 'cancelled';
+  | 'created' // بانتظار قبول المتجر
+  | 'searching_captain' // جاري البحث عن أقرب كابتن بالباجور
+  | 'merchant_accepted' // المتجر يجهز الطلب
+  | 'ready_for_pickup' // جاهز للاستلام من الكابتن
+  | 'captain_assigned' // الكابتن في الطريق للاستلام
+  | 'at_pickup' // الكابتن وصل لنقطة الاستلام
+  | 'in_transit' // الكابتن في الطريق للعميل
+  | 'delivered' // تم التسليم وتحصيل الكاش
+  | 'cancelled'; // ملغي
+
+export type OrderServiceType = 'restaurant_store' | 'package' | 'errand';
 
 export interface MarketplaceOrder {
   id: string;
   orderNumber: string;
+  serviceType: OrderServiceType;
+  serviceTypeAr: string;
+  vehicleCategory?: 'scooter' | 'motorcycle' | 'van';
   storeId: string;
   storeName: string;
   storeAddress: string;
+  pickupAddress: string;
+  deliveryAddress: string;
+  distanceKm: number;
+  estimatedMinutes: string;
+  isRural: boolean;
   customerId: string;
   customerName: string;
   customerPhone: string;
-  deliveryAddress: string;
-  items: Array<{
+  items: {
     productId: string;
     productName: string;
-    unitPriceEgp: number;
     quantity: number;
-  }>;
+    unitPriceEgp: number;
+  }[];
+  itemDescription: string;
   subtotalEgp: number;
   deliveryFeeEgp: number;
   platformFeeEgp: number;
+  ruralSurchargeEgp: number;
   totalEgp: number;
-  paymentMethod: 'cash' | 'instapay' | 'vodafone_cash';
+  totalFarePiasters: number;
+  paymentMethod: 'cash' | 'instapay' | 'vodafone_cash' | 'wallet';
   status: OrderStatus;
-  createdAt: string;
-  createdAtDate: Date;
-  notes?: string;
   assignedCaptainId?: string;
   assignedCaptainName?: string;
   assignedCaptainPhone?: string;
-  cashCollected?: boolean;
+  assignedCaptainVehicle?: string;
+  assignedCaptainRating?: number;
+  createdAt: string;
+  createdAtDate: Date;
+  acceptedAt?: string;
+  acceptedAtIso?: string;
+  pickedUpAt?: string;
+  deliveredAt?: string;
+  quoteId?: string;
+  quoteSignature?: string;
+  notes?: string;
 }
 
 export interface ChatMessage {
   id: string;
   orderId: string;
-  senderRole: 'customer' | 'captain';
+  senderRole: 'customer' | 'captain' | 'merchant';
   senderName: string;
   text: string;
   time: string;
 }
 
-// Pre-configured Demo Accounts
+export interface WalletTransaction {
+  id: string;
+  titleAr: string;
+  type: 'credit' | 'debit';
+  amountEgp: number;
+  methodAr: string;
+  timestampAr: string;
+  orderNumber?: string;
+}
+
+export interface AppNotification {
+  id: string;
+  recipientRole: PersonaRole | 'all';
+  titleAr: string;
+  bodyAr: string;
+  timeAr: string;
+  orderNumber?: string;
+  isRead: boolean;
+}
+
+export interface SupportComplaint {
+  id: string;
+  ticketNumber: string;
+  orderNumber?: string;
+  customerName: string;
+  customerPhone: string;
+  categoryAr: string;
+  subjectAr: string;
+  descriptionAr: string;
+  status: 'open' | 'under_review' | 'resolved';
+  createdAtAr: string;
+  resolutionNotesAr?: string;
+}
+
+export type FleetSubscriptionStatus = 'active' | 'grace_period' | 'expired' | 'suspended';
+
+export interface FleetCaptainItem {
+  id: string;
+  userId: string;
+  name: string;
+  phone: string;
+  vehicleType: string;
+  plateNumber: string;
+  status: FleetSubscriptionStatus;
+  statusAr: string;
+  daysRemaining: number;
+  cashHoldingPiasters: number;
+  cashCeilingPiasters: number;
+  rating: number;
+  isOnline: boolean;
+  completedToday: number;
+}
+
+export interface PlatformSystemSettings {
+  baseFarePiasters: number; // 1500 = 15 EGP
+  ratePerKmPiasters: number; // 400 = 4 EGP
+  ruralSurchargePiasters: number; // 500 = 5 EGP
+  platformFeePiasters: number; // 200 = 2 EGP
+  cashCeilingPiasters: number; // 100000 = 1000 EGP
+  gracePeriodHours: number; // 72 hours
+  passengerLockEnabled: boolean; // Always true per Law No. 73 of 2018
+}
+
+export interface PlatformAuditLog {
+  id: string;
+  timestamp: string;
+  actorName: string;
+  actorRole: string;
+  actionType: string;
+  target: string;
+  descriptionAr: string;
+}
+
+// ============================================================================
+// 2. TIME FORMATTING HELPERS (HUMAN-READABLE ARABIC TIMESTAMPS)
+// ============================================================================
+
+export function formatArabicClockTime(date: Date): string {
+  return date.toLocaleTimeString('ar-EG', {
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+}
+
+export function formatHumanReadableAcceptedTimestamp(
+  acceptedAtIso?: string,
+  acceptedAtLabel?: string
+): string | null {
+  if (!acceptedAtIso && !acceptedAtLabel) return null;
+  if (!acceptedAtIso) return acceptedAtLabel || null;
+
+  const dt = new Date(acceptedAtIso);
+  if (isNaN(dt.getTime())) return acceptedAtLabel || null;
+
+  const clockStr = formatArabicClockTime(dt);
+  const diffMs = Date.now() - dt.getTime();
+  const diffMins = Math.max(0, Math.floor(diffMs / 60000));
+
+  let relativeStr = 'الآن';
+  if (diffMins === 1) {
+    relativeStr = 'منذ دقيقة واحدة';
+  } else if (diffMins === 2) {
+    relativeStr = 'منذ دقيقتين';
+  } else if (diffMins >= 3 && diffMins <= 10) {
+    relativeStr = `منذ ${diffMins.toLocaleString('ar-EG')} دقائق`;
+  } else if (diffMins > 10 && diffMins < 60) {
+    relativeStr = `منذ ${diffMins.toLocaleString('ar-EG')} دقيقة`;
+  } else if (diffMins >= 60) {
+    const hours = Math.floor(diffMins / 60);
+    relativeStr = hours === 1 ? 'منذ ساعة' : hours === 2 ? 'منذ ساعتين' : `منذ ${hours.toLocaleString('ar-EG')} ساعات`;
+  }
+
+  return `الساعة ${clockStr} (${relativeStr})`;
+}
+
+// ============================================================================
+// 3. REALISTIC SEED DATA (EL BAGOUR, MENOUFIA)
+// ============================================================================
+
+export const EL_BAGOUR_LANDMARKS_LIST: {
+  id: string;
+  nameAr: string;
+  areaAr: string;
+  isRural: boolean;
+  distanceFromCenterKm: number;
+}[] = [
+  { id: 'lm_station', nameAr: 'ميدان المحطة - وسط الباجور', areaAr: 'وسط المدينة', isRural: false, distanceFromCenterKm: 0.5 },
+  { id: 'lm_shorouk', nameAr: 'شارع الجيش - برج الشروق', areaAr: 'حي وسط التجاري', isRural: false, distanceFromCenterKm: 1.4 },
+  { id: 'lm_hospital', nameAr: 'مستشفى الباجور العام', areaAr: 'شارع المستشفى', isRural: false, distanceFromCenterKm: 2.1 },
+  { id: 'lm_council', nameAr: 'مجلس مدينة الباجور', areaAr: 'شارع الجمهورية', isRural: false, distanceFromCenterKm: 1.2 },
+  { id: 'lm_banque_misr', nameAr: 'شارع الجمهورية - أمام بنك مصر', areaAr: 'وسط البلد', isRural: false, distanceFromCenterKm: 1.6 },
+  { id: 'lm_masaken', nameAr: 'منطقة المساكن الشعبية', areaAr: 'شرق الباجور', isRural: false, distanceFromCenterKm: 2.4 },
+  { id: 'lm_mawqaf', nameAr: 'مجمع مواقف الباجور الجديد', areaAr: 'مدخل المدينة', isRural: false, distanceFromCenterKm: 2.0 },
+  { id: 'lm_kafr_bagour', nameAr: 'قرية كفر الباجور', areaAr: 'القرى الجنوبية', isRural: true, distanceFromCenterKm: 3.2 },
+  { id: 'lm_shantana', nameAr: 'قرية شنتنا الحجر', areaAr: 'القرى الشمالية', isRural: true, distanceFromCenterKm: 5.2 },
+  { id: 'lm_grawan', nameAr: 'قرية جروان', areaAr: 'القرى الجنوبية', isRural: true, distanceFromCenterKm: 4.5 },
+  { id: 'lm_meet_afif', nameAr: 'قرية ميت عفيف', areaAr: 'القرى الشمالية', isRural: true, distanceFromCenterKm: 6.0 },
+];
+
 export const DEMO_PERSONAS: DemoUser[] = [
   {
-    id: 'user_cust_01',
-    name: 'أحمد مصطفى',
+    id: 'usr_cust_1',
+    name: 'أحمد سعيد المنوفي',
     phone: '01012345678',
     role: 'customer',
+    roleBadgeAr: 'عميل مشوار',
     avatar: '👨‍💼',
-    roleBadgeAr: 'عميل (الباجور)',
   },
   {
-    id: 'user_capt_01',
-    name: 'محمود الصياد',
+    id: 'usr_capt_1',
+    name: 'كابتن محمود الصياد',
     phone: '01198765432',
     role: 'captain',
+    roleBadgeAr: 'كابتن توصيل ومشاوير',
     avatar: '🛵',
-    roleBadgeAr: 'كابتن معتمد (سكوتر)',
-    vehicleInfo: 'سكوتر بينيلي أسود (٥٨٢٤ م ن و)',
+    vehicleInfo: 'سكوتر بينيلي أسود • م ن ف ٤٩٢١',
+    captainRecordId: 'cpt_02',
   },
   {
-    id: 'user_merch_basha',
-    name: 'الحاج رأفت الباشا',
+    id: 'usr_merch_basha',
+    name: 'الحاج سعيد الباشا',
     phone: '01233445566',
     role: 'merchant',
-    merchantId: 'merchant_basha',
-    avatar: '👨‍🍳',
     roleBadgeAr: 'تاجر (مطعم ومشاوي الباشا)',
+    avatar: '🍖',
+    merchantId: 'merchant_basha',
   },
   {
-    id: 'user_merch_amana',
-    name: 'د. سحر عبد الحميد',
-    phone: '01044556677',
+    id: 'usr_merch_amana',
+    name: 'د. مريم عبد الرحمن',
+    phone: '01099887766',
     role: 'merchant',
-    merchantId: 'merchant_amana',
+    roleBadgeAr: 'تاجر (صيدلية الأمانة الكبرى)',
     avatar: '💊',
-    roleBadgeAr: 'تاجر (صيدلية الأمانة)',
+    merchantId: 'merchant_amana',
   },
   {
-    id: 'user_merch_khairat',
-    name: 'كمال النجار',
-    phone: '01155667788',
+    id: 'usr_merch_khairat',
+    name: 'أستاذ طارق الشاذلي',
+    phone: '01555667788',
     role: 'merchant',
-    merchantId: 'merchant_khairat',
+    roleBadgeAr: 'تاجر (سوبرماركت خيرات الباجور)',
     avatar: '🛒',
-    roleBadgeAr: 'تاجر (سوبرماركت الخيرات)',
+    merchantId: 'merchant_khairat',
   },
   {
-    id: 'user_admin_01',
-    name: 'أحمد المنوفي',
-    phone: '01500000001',
+    id: 'usr_ops_admin',
+    name: 'د. علاء (غرفة العمليات)',
+    phone: '01000000001',
     role: 'operations',
+    roleBadgeAr: 'إدارة العمليات المركزية',
     avatar: '🛡️',
-    roleBadgeAr: 'مدير عمليات الباجور',
   },
 ];
 
-// Initial Stores Data
 const INITIAL_STORES: StoreItem[] = [
   {
     id: 'merchant_basha',
     nameAr: 'مطعم ومشاوي الباشا',
     category: 'restaurant',
-    categoryAr: 'مطاعم ومشويات',
-    ownerName: 'الحاج رأفت الباشا',
+    categoryAr: 'مشويات وفطائر شرقية',
+    ownerName: 'الحاج سعيد الباشا',
     phone: '01233445566',
     address: 'شارع الجمهورية - أمام بنك مصر، الباجور',
-    distanceKm: 1.2,
-    rating: 4.85,
-    reviewsCount: 312,
-    deliveryTimeEst: '20-30 دقيقة',
-    minOrderEgp: 40,
+    landmark: 'أمام بنك مصر',
+    rating: 4.9,
+    reviewsCount: 342,
+    deliveryTimeEst: '٢٠ - ٣٠ دقيقة',
+    deliveryFeeEgp: 15,
+    minOrderEgp: 50,
     isOpen: true,
-    image: RESTAURANT_IMG,
-    descriptionAr: 'مشويات طازجة على الفحم، كباب وكفتة بلدي، طواجن وحواوشي مخصوص على الطريقة المصرية الأصيلة.',
-    subscriptionPlan: 'gold',
-    commissionRate: 0,
+    distanceKm: 1.4,
+    badgeAr: 'الأكثر طلباً بالباجور',
+    image: 'https://images.unsplash.com/photo-1555939594-58d7cb561ad1?auto=format&fit=crop&w=600&q=80',
   },
   {
     id: 'merchant_amana',
-    nameAr: 'صيدلية الأمانة المركزية',
+    nameAr: 'صيدلية الأمانة الكبرى',
     category: 'pharmacy',
-    categoryAr: 'صيدليات ومستلزمات',
-    ownerName: 'د. سحر عبد الحميد',
-    phone: '01044556677',
-    address: 'ميدان المحطة - بجوار المستشفى العام، الباجور',
-    distanceKm: 0.8,
-    rating: 4.92,
-    reviewsCount: 198,
-    deliveryTimeEst: '10-20 دقيقة',
-    minOrderEgp: 20,
+    categoryAr: 'أدوية ومستلزمات طبية وعناية',
+    ownerName: 'د. مريم عبد الرحمن',
+    phone: '01099887766',
+    address: 'ميدان المحطة - بجوار مستشفى الباجور العام',
+    landmark: 'ميدان المحطة',
+    rating: 4.95,
+    reviewsCount: 518,
+    deliveryTimeEst: '١٠ - ٢٠ دقيقة',
+    deliveryFeeEgp: 15,
+    minOrderEgp: 25,
     isOpen: true,
-    image: PHARMACY_IMG,
-    descriptionAr: 'خدمة دوائية على مدار الساعة، مستلزمات طبية، أجهزة قياس، مكملات غذائية وفيتامينات أصلية مصرحة.',
-    subscriptionPlan: 'gold',
-    commissionRate: 0,
+    distanceKm: 1.1,
+    badgeAr: 'توصيل فوري ٢٤ ساعة',
+    image: 'https://images.unsplash.com/photo-1586015555751-63bb77f4322a?auto=format&fit=crop&w=600&q=80',
   },
   {
     id: 'merchant_khairat',
-    nameAr: 'سوبرماركت الخيرات والبركة',
+    nameAr: 'سوبرماركت خيرات الباجور',
     category: 'supermarket',
-    categoryAr: 'سوبرماركت وبقالة',
-    ownerName: 'كمال النجار',
-    phone: '01155667788',
+    categoryAr: 'بقالة، ألبان، خضروات ومجمدات',
+    ownerName: 'أستاذ طارق الشاذلي',
+    phone: '01555667788',
     address: 'شارع الجيش - برج الشروق، الباجور',
-    distanceKm: 1.5,
-    rating: 4.74,
-    reviewsCount: 145,
-    deliveryTimeEst: '15-25 دقيقة',
-    minOrderEgp: 30,
+    landmark: 'برج الشروق',
+    rating: 4.8,
+    reviewsCount: 215,
+    deliveryTimeEst: '١٥ - ٢٥ دقيقة',
+    deliveryFeeEgp: 15,
+    minOrderEgp: 40,
     isOpen: true,
-    image: SUPERMARKET_IMG,
-    descriptionAr: 'كافة متطلبات المنزل، ألبان وأجبان طازجة يومياً، معلبات، زيوت، حبوب ومنظفات بأسعار الجملة.',
-    subscriptionPlan: 'silver',
-    commissionRate: 0,
+    distanceKm: 0.9,
+    badgeAr: 'أسعار الجملة',
+    image: 'https://images.unsplash.com/photo-1542838132-92c53300491e?auto=format&fit=crop&w=600&q=80',
   },
 ];
 
-// Initial Products Catalog
 const INITIAL_PRODUCTS: ProductItem[] = [
-  // Merchant Basha (Grills)
+  // 1. مطعم ومشاوي الباشا (merchant_basha)
   {
-    id: 'prod_basha_01',
+    id: 'prod_basha_1',
     storeId: 'merchant_basha',
-    nameAr: 'طبق كباب وكفتة مشكل على الفحم (نصف كيلو)',
-    descriptionAr: 'كفتة لحم بلدي متبلة مع كباب بتلو مشوي على الفحم، يقدم مع طحينة وعيش بلدي وسلطة بلدي خضراء.',
-    priceEgp: 195,
-    categoryName: 'مشويات الفحم',
-    isAvailable: true,
-    unit: 'طبق',
-  },
-  {
-    id: 'prod_basha_02',
-    storeId: 'merchant_basha',
-    nameAr: 'وجبة ربع فرقة مشوية مع أرز وسلطات',
-    descriptionAr: 'ربع دجاجة متبلة مشوية مع أرز بسمتي مصري، بطاطس محمرة، سلطة طحينة وخبز طازج.',
-    priceEgp: 85,
-    categoryName: 'وجبات فردية',
+    nameAr: 'وجبة نصف فرخة مشوية على الفحم',
+    descriptionAr: 'تقدم مع أرز بسمتي بالمكسرات، سلطة خضراء، طحينة وعيش بلدي ساخن',
+    priceEgp: 145,
+    categoryName: 'المشويات',
     isAvailable: true,
     unit: 'وجبة',
   },
   {
-    id: 'prod_basha_03',
+    id: 'prod_basha_2',
     storeId: 'merchant_basha',
-    nameAr: 'حواوشي بلدي مخصوص بالجبنة الموزاريلا',
-    descriptionAr: 'رغيف بلدي محشو باللحم المفروم المتبل مع خلطة الباشا والجبنة الموزاريلا السايحة.',
-    priceEgp: 45,
-    categoryName: 'ساندوتشات ومقبلات',
+    nameAr: 'طبق كباب وكفتة ضاني (ربع كيلو)',
+    descriptionAr: 'كباب وكفتة ضاني بلدي مشوية على الفحم مع بطاطس محمرة وسلطات',
+    priceEgp: 175,
+    categoryName: 'المشويات',
     isAvailable: true,
-    unit: 'ساندوتش',
+    unit: 'طبق',
   },
   {
-    id: 'prod_basha_04',
+    id: 'prod_basha_3',
     storeId: 'merchant_basha',
-    nameAr: 'طاجن لحمة بلدي بالبصل القاورما',
-    descriptionAr: 'طاجن فخار بالفرن بقطع لحم الكندوز مع البصل المكرمل وصوص بهارات الشرق.',
-    priceEgp: 140,
-    categoryName: 'طواجن الفرن',
+    nameAr: 'فطيرة مشلتت فلاحي بالسمن البلدي',
+    descriptionAr: 'فطير فلاحي مورق مخبوز طازجاً يقدم مع عسل أسود وجبنة قديمة وقشطة',
+    priceEgp: 110,
+    categoryName: 'الفطائر الشرقية',
     isAvailable: true,
-    unit: 'طاجن',
+    unit: 'فطيرة وسط',
   },
   {
-    id: 'prod_basha_05',
+    id: 'prod_basha_4',
     storeId: 'merchant_basha',
-    nameAr: 'لتر بيبسي عائلي مشبر',
-    descriptionAr: 'مشروب غازي بارد منعش في عبوة بلاستيكية 1 لتر.',
-    priceEgp: 25,
-    categoryName: 'مشروبات باردة',
+    nameAr: 'حواوشي الباشا المخصوص بالجبنة الموتزاريلا',
+    descriptionAr: 'رغيف حواوشي لحم بلدي متبل بالخلطة السرية والجبنة الموتزاريلا',
+    priceEgp: 75,
+    categoryName: 'السندوتشات',
     isAvailable: true,
-    unit: 'زجاجة',
+    unit: 'رغيف كبير',
   },
 
-  // Merchant Amana (Pharmacy)
+  // 2. صيدلية الأمانة الكبرى (merchant_amana)
   {
-    id: 'prod_amana_01',
+    id: 'prod_amana_1',
     storeId: 'merchant_amana',
-    nameAr: 'بنادول إكسترا أحمر (علبة ٢ شريط)',
-    descriptionAr: 'مسكن للصداع والآلام وخافض للحرارة مع الكافيين لزيادة الفعالية.',
-    priceEgp: 42,
-    categoryName: 'أدوية ومسكنات',
+    nameAr: 'بانادول إكسترا (Panadol Extra)',
+    descriptionAr: 'مسكن فعال للصداع والآلام وخافض للحرارة - علبة ٢٤ قرص',
+    priceEgp: 55,
+    categoryName: 'مسكنات وعناية',
     isAvailable: true,
     unit: 'علبة',
   },
   {
-    id: 'prod_amana_02',
+    id: 'prod_amana_2',
     storeId: 'merchant_amana',
-    nameAr: 'فيتامين سي ١٠٠٠ ملغ فوار (أنابيب)',
-    descriptionAr: 'أقراص فوارة بنكهة البرتقال الطبيعي لتعزيز المناعة ومقاومة نزلات البرد.',
+    nameAr: 'فيتامين سي فوار ١٠٠٠ مجم (C-Retard)',
+    descriptionAr: 'مكمل غذائي لدعم المناعة ونزلات البرد',
     priceEgp: 65,
-    categoryName: 'فيتامينات ومقويات',
+    categoryName: 'فيتامينات',
     isAvailable: true,
     unit: 'أنبوبة',
   },
   {
-    id: 'prod_amana_03',
+    id: 'prod_amana_3',
     storeId: 'merchant_amana',
-    nameAr: 'كمامات طبية ٣ طبقات دعامة أنف (علبة ٥٠ قطعة)',
-    descriptionAr: 'كمامات طبية ثلاثية الطبقات معقمة بحلقات مطاطية مريحة ودعامة أنفية مرنة.',
-    priceEgp: 50,
-    categoryName: 'مستلزمات وقاية',
-    isAvailable: true,
-    unit: 'علبة',
-  },
-  {
-    id: 'prod_amana_04',
-    storeId: 'merchant_amana',
-    nameAr: 'مقياس حرارة رقمي ديجيتال سريع',
-    descriptionAr: 'ترمومتر رقمي دقيق لقياس درجة الحرارة مع شاشة LCD وتنبيه صوتي.',
-    priceEgp: 95,
-    categoryName: 'أجهزة طبية',
-    isAvailable: true,
-    unit: 'جهاز',
-  },
-  {
-    id: 'prod_amana_05',
-    storeId: 'merchant_amana',
-    nameAr: 'كريم مرطب وملطف طبي بانثينول',
-    descriptionAr: 'كريم مرطب طبي غني بفيتامين B5 لتجديد وترطيب البشرة وتلطيف الحروق البسيطة.',
-    priceEgp: 35,
-    categoryName: 'عناية وصحة',
-    isAvailable: true,
-    unit: 'أنبوبة',
-  },
-
-  // Merchant Khairat (Supermarket)
-  {
-    id: 'prod_khairat_01',
-    storeId: 'merchant_khairat',
-    nameAr: 'كرتونة بيض مزارع طازج (٣٠ بيضة)',
-    descriptionAr: 'بيض مزارع أبيض طازج مفحوص ومغلف بعناية لضمان أعلى جودة.',
-    priceEgp: 165,
-    categoryName: 'ألبان وبيض',
-    isAvailable: true,
-    unit: 'كرتونة',
-  },
-  {
-    id: 'prod_khairat_02',
-    storeId: 'merchant_khairat',
-    nameAr: 'جبن رومي مصري بطارخ قديم (ربع كيلو)',
-    descriptionAr: 'جبن رومي بلدي معتق ذو نكهة قوية وجودة فاخرة، مقطع شرائح.',
-    priceEgp: 90,
-    categoryName: 'أجبان وبقالة',
-    isAvailable: true,
-    unit: '٢٥٠ جم',
-  },
-  {
-    id: 'prod_khairat_03',
-    storeId: 'merchant_khairat',
-    nameAr: 'أرز مصري أبيض رفيع ممتاز (كيس ١ كجم)',
-    descriptionAr: 'أرز مصري منقى ومغسول ومعبأ آلياً خالي من الشوائب والكسر.',
-    priceEgp: 32,
-    categoryName: 'حبوب وتموين',
-    isAvailable: true,
-    unit: 'كيس',
-  },
-  {
-    id: 'prod_khairat_04',
-    storeId: 'merchant_khairat',
-    nameAr: 'زيت دوار الشمس عافية نقي (عبوة ٨٠٠ مل)',
-    descriptionAr: 'زيت دوار شمس صافي مكرر خفيف على المعدة ومثالي للطهي والقلي الخفيف.',
-    priceEgp: 78,
-    categoryName: 'زيوت ومواد طهي',
-    isAvailable: true,
-    unit: 'زجاجة',
-  },
-  {
-    id: 'prod_khairat_05',
-    storeId: 'merchant_khairat',
-    nameAr: 'حليب كامل الدسم مبستر طبيعي (١ لتر)',
-    descriptionAr: 'لبن حليب طبيعي معقم طويل الأجل، غني بالكالسيوم والفيتامينات.',
-    priceEgp: 44,
-    categoryName: 'ألبان وبيض',
+    nameAr: 'حفاضات أطفال بيبي جوي مقاس ٤ (عبوة التوفير)',
+    descriptionAr: 'حفاضات أطفال فائقة الامتصاص - عبوة ٤٠ قطعة',
+    priceEgp: 260,
+    categoryName: 'عناية الطفل',
     isAvailable: true,
     unit: 'عبوة',
   },
-];
-
-// Initial Seed Orders
-const INITIAL_ORDERS: MarketplaceOrder[] = [
   {
-    id: 'ord_init_01',
-    orderNumber: 'MSH-9401',
-    storeId: 'merchant_basha',
-    storeName: 'مطعم ومشاوي الباشا',
-    storeAddress: 'شارع الجمهورية - أمام بنك مصر، الباجور',
-    customerId: 'user_cust_01',
-    customerName: 'أحمد مصطفى',
-    customerPhone: '01012345678',
-    deliveryAddress: 'شارع الجيش - برج الشروق، الباجور',
-    items: [
-      {
-        productId: 'prod_basha_02',
-        productName: 'وجبة ربع فرقة مشوية مع أرز وسلطات',
-        unitPriceEgp: 85,
-        quantity: 1,
-      },
-      {
-        productId: 'prod_basha_03',
-        productName: 'حواوشي بلدي مخصوص بالجبنة الموزاريلا',
-        unitPriceEgp: 45,
-        quantity: 2,
-      },
-    ],
-    subtotalEgp: 175,
-    deliveryFeeEgp: 15,
-    platformFeeEgp: 2,
-    totalEgp: 192,
-    paymentMethod: 'cash',
-    status: 'created',
-    createdAt: 'منذ 5 دقائق',
-    createdAtDate: new Date(Date.now() - 5 * 60 * 1000),
-    notes: 'يرجى زيادة سلطة الطحينة والخبز سخن',
+    id: 'prod_amana_4',
+    storeId: 'merchant_amana',
+    nameAr: 'حقيبة إسعافات أولية منزلية متكاملة',
+    descriptionAr: 'شاش طبي، مطهر بيتادين، قطن، لاصق جروح، ومقياس حرارة رقمي',
+    priceEgp: 190,
+    categoryName: 'مستلزمات طبية',
+    isAvailable: true,
+    unit: 'حقيبة',
+  },
+
+  // 3. سوبرماركت خيرات الباجور (merchant_khairat)
+  {
+    id: 'prod_khairat_1',
+    storeId: 'merchant_khairat',
+    nameAr: 'كرتونة بيض أحمر مزارع طازج (٣٠ بيضة)',
+    descriptionAr: 'بيض مزارع طازج إنتاج اليوم مفروز بعناية',
+    priceEgp: 155,
+    categoryName: 'الألبان والبيض',
+    isAvailable: true,
+    unit: 'طبق ٣٠ بيضة',
+  },
+  {
+    id: 'prod_khairat_2',
+    storeId: 'merchant_khairat',
+    nameAr: 'أرز مصري فاخر عريض الحبة (شيكارة ٥ كجم)',
+    descriptionAr: 'أرز مصري أبيض نقي درجة أولى خالي من الكسر',
+    priceEgp: 165,
+    categoryName: 'البقالة الجافة',
+    isAvailable: true,
+    unit: 'شيكارة ٥ كجم',
+  },
+  {
+    id: 'prod_khairat_3',
+    storeId: 'merchant_khairat',
+    nameAr: 'جبنة براميلي دمياطي بالقشطة (نصف كيلو)',
+    descriptionAr: 'جبنة بيضاء طبيعية ١٠٠٪ بخير مزارع المنوفية',
+    priceEgp: 95,
+    categoryName: 'الألبان والجبن',
+    isAvailable: true,
+    unit: '٥٠٠ جرام',
+  },
+  {
+    id: 'prod_khairat_4',
+    storeId: 'merchant_khairat',
+    nameAr: 'زيت عباد الشمس نقي للقلي والطبخ (٢.٢ لتر)',
+    descriptionAr: 'زيت عباد شمس صافي خفيف وصحي للأسرة',
+    priceEgp: 185,
+    categoryName: 'الزيوت والسمن',
+    isAvailable: true,
+    unit: 'زجاجة عائلية',
   },
 ];
 
+const INITIAL_CAPTAINS: FleetCaptainItem[] = [
+  {
+    id: 'cpt_01',
+    userId: 'usr_cpt_01',
+    name: 'أحمد فتحي الديب',
+    phone: '01012345671',
+    vehicleType: 'موتوسيكل هوجان ١٥٠',
+    plateNumber: 'م ن ف ٤٨١٢',
+    status: 'active',
+    statusAr: 'اشتراك نشط',
+    daysRemaining: 18,
+    cashHoldingPiasters: 25000, // 250.00 EGP
+    cashCeilingPiasters: 100000, // 1,000.00 EGP
+    rating: 4.9,
+    isOnline: true,
+    completedToday: 6,
+  },
+  {
+    id: 'cpt_02',
+    userId: 'usr_capt_1',
+    name: 'كابتن محمود الصياد',
+    phone: '01198765432',
+    vehicleType: 'سكوتر بينيلي أسود',
+    plateNumber: 'م ن ف ٤٩٢١',
+    status: 'grace_period',
+    statusAr: 'مهلة سماح (٦٠ ساعة)',
+    daysRemaining: 2,
+    cashHoldingPiasters: 45000, // 450.00 EGP
+    cashCeilingPiasters: 100000,
+    rating: 4.92,
+    isOnline: true,
+    completedToday: 4,
+  },
+  {
+    id: 'cpt_03',
+    userId: 'usr_cpt_03',
+    name: 'طارق عبد المنعم الشيخ',
+    phone: '01234567893',
+    vehicleType: 'سيارة سوزوكي فان بضائع',
+    plateNumber: 'م ن ف ٧٢١٤',
+    status: 'expired',
+    statusAr: 'اشتراك منتهي (الرادار معلق)',
+    daysRemaining: 0,
+    cashHoldingPiasters: 12000, // 120.00 EGP
+    cashCeilingPiasters: 100000,
+    rating: 4.6,
+    isOnline: false,
+    completedToday: 0,
+  },
+  {
+    id: 'cpt_04',
+    userId: 'usr_cpt_04',
+    name: 'مصطفى كمال النجار',
+    phone: '01098765434',
+    vehicleType: 'موتوسيكل بوكسر',
+    plateNumber: 'م ن ف ٦٣٢٨',
+    status: 'suspended',
+    statusAr: 'موقوف لتجاوز سقف النقدية',
+    daysRemaining: 20,
+    cashHoldingPiasters: 102000, // 1,020.00 EGP > 1,000.00 EGP ceiling
+    cashCeilingPiasters: 100000,
+    rating: 4.8,
+    isOnline: false,
+    completedToday: 8,
+  },
+];
+
+const INITIAL_ORDERS: MarketplaceOrder[] = [
+  {
+    id: 'ord_seed_1',
+    orderNumber: 'MSH-9401',
+    serviceType: 'restaurant_store',
+    serviceTypeAr: 'طلبات مطاعم ومتاجر',
+    vehicleCategory: 'scooter',
+    storeId: 'merchant_basha',
+    storeName: 'مطعم ومشاوي الباشا',
+    storeAddress: 'شارع الجمهورية - أمام بنك مصر، الباجور',
+    pickupAddress: 'شارع الجمهورية - أمام بنك مصر، الباجور',
+    deliveryAddress: 'شارع الجيش - برج الشروق، الدور الرابع، الباجور',
+    distanceKm: 1.8,
+    estimatedMinutes: '١٨ - ٢٢ دقيقة',
+    isRural: false,
+    customerId: 'usr_cust_1',
+    customerName: 'أحمد سعيد المنوفي',
+    customerPhone: '01012345678',
+    items: [
+      {
+        productId: 'prod_basha_1',
+        productName: 'وجبة نصف فرخة مشوية على الفحم',
+        quantity: 1,
+        unitPriceEgp: 145,
+      },
+      {
+        productId: 'prod_basha_4',
+        productName: 'حواوشي الباشا المخصوص بالجبنة الموتزاريلا',
+        quantity: 2,
+        unitPriceEgp: 75,
+      },
+    ],
+    itemDescription: '١× وجبة نصف فرخة مشوية + ٢× حواوشي الباشا المخصوص',
+    subtotalEgp: 295,
+    deliveryFeeEgp: 15,
+    platformFeeEgp: 2,
+    ruralSurchargeEgp: 0,
+    totalEgp: 312,
+    totalFarePiasters: 31200,
+    paymentMethod: 'cash',
+    status: 'merchant_accepted',
+    assignedCaptainId: 'usr_capt_1',
+    assignedCaptainName: 'كابتن محمود الصياد',
+    assignedCaptainPhone: '01198765432',
+    assignedCaptainVehicle: 'سكوتر بينيلي أسود • م ن ف ٤٩٢١',
+    assignedCaptainRating: 4.92,
+    createdAt: formatArabicClockTime(new Date(Date.now() - 8 * 60 * 1000)),
+    createdAtDate: new Date(Date.now() - 8 * 60 * 1000),
+    acceptedAt: formatArabicClockTime(new Date(Date.now() - 5 * 60 * 1000)),
+    acceptedAtIso: new Date(Date.now() - 5 * 60 * 1000).toISOString(),
+    notes: 'يرجى زيادة الطحينة والخبز الساخن',
+  },
+  {
+    id: 'ord_bagour_8102',
+    orderNumber: 'MSH-8102',
+    serviceType: 'package',
+    serviceTypeAr: 'توصيل طرد وأمانات',
+    vehicleCategory: 'motorcycle',
+    storeId: 'direct_package',
+    storeName: 'مشوار طرود وأمانات مباشر',
+    storeAddress: 'مستشفى الباجور العام - قسم الاستقبال',
+    pickupAddress: 'مستشفى الباجور العام - قسم الاستقبال',
+    deliveryAddress: 'قرية شنتنا الحجر - المدخل القبلي',
+    distanceKm: 4.8,
+    estimatedMinutes: '١٥ - ٢٠ دقيقة',
+    isRural: true,
+    customerId: 'usr_cust_02',
+    customerName: 'د. سحر عبد الحميد',
+    customerPhone: '01244455582',
+    items: [
+      {
+        productId: 'pkg_medical',
+        productName: 'حقيبة مستلزمات وأدوية طبية عاجلة',
+        quantity: 1,
+        unitPriceEgp: 0,
+      },
+    ],
+    itemDescription: 'مستلزمات وأدوية عاجلة إلى شنتنا الحجر',
+    subtotalEgp: 0,
+    deliveryFeeEgp: 28,
+    platformFeeEgp: 2,
+    ruralSurchargeEgp: 5,
+    totalEgp: 35,
+    totalFarePiasters: 3500,
+    paymentMethod: 'cash',
+    status: 'in_transit',
+    assignedCaptainId: 'cpt_01',
+    assignedCaptainName: 'أحمد فتحي الديب',
+    assignedCaptainPhone: '01012345671',
+    assignedCaptainVehicle: 'موتوسيكل هوجان ١٥٠ • م ن ف ٤٨١٢',
+    assignedCaptainRating: 4.9,
+    createdAt: formatArabicClockTime(new Date(Date.now() - 35 * 60 * 1000)),
+    createdAtDate: new Date(Date.now() - 35 * 60 * 1000),
+    acceptedAt: formatArabicClockTime(new Date(Date.now() - 28 * 60 * 1000)),
+    acceptedAtIso: new Date(Date.now() - 28 * 60 * 1000).toISOString(),
+    pickedUpAt: formatArabicClockTime(new Date(Date.now() - 15 * 60 * 1000)),
+    notes: 'تسليم عاجل للصيدلي المناوب في شنتنا الحجر',
+  },
+  {
+    id: 'ord_bagour_8103',
+    orderNumber: 'MSH-8103',
+    serviceType: 'errand',
+    serviceTypeAr: 'مشوار خاص وتخليص فوري',
+    vehicleCategory: 'scooter',
+    storeId: 'direct_errand',
+    storeName: 'مشوار خاص سريع بالباجور',
+    storeAddress: 'ميدان المحطة - وسط الباجور',
+    pickupAddress: 'ميدان المحطة - وسط الباجور',
+    deliveryAddress: 'شارع الجيش - برج الشروق، الباجور',
+    distanceKm: 1.5,
+    estimatedMinutes: '١٠ - ١٤ دقيقة',
+    isRural: false,
+    customerId: 'usr_cust_03',
+    customerName: 'م. إسلام عاشور',
+    customerPhone: '01133344493',
+    items: [
+      {
+        productId: 'errand_item',
+        productName: 'استلام مظروف مستندات هندسية وتوصيله لبرج الشروق',
+        quantity: 1,
+        unitPriceEgp: 0,
+      },
+    ],
+    itemDescription: 'استلام مظروف مستندات هندسية وتوصيله لبرج الشروق',
+    subtotalEgp: 0,
+    deliveryFeeEgp: 15,
+    platformFeeEgp: 2,
+    ruralSurchargeEgp: 0,
+    totalEgp: 17,
+    totalFarePiasters: 1700,
+    paymentMethod: 'cash',
+    status: 'searching_captain',
+    createdAt: formatArabicClockTime(new Date(Date.now() - 6 * 60 * 1000)),
+    createdAtDate: new Date(Date.now() - 6 * 60 * 1000),
+    notes: 'بانتظار أقرب كابتن في ميدان المحطة',
+  },
+  {
+    id: 'ord_bagour_8101',
+    orderNumber: 'MSH-8101',
+    serviceType: 'package',
+    serviceTypeAr: 'توصيل طرد وأمانات',
+    vehicleCategory: 'motorcycle',
+    storeId: 'direct_package',
+    storeName: 'مشوار طرود وأمانات مباشر',
+    storeAddress: 'ميدان المحطة - وسط الباجور',
+    pickupAddress: 'ميدان المحطة - وسط الباجور',
+    deliveryAddress: 'قرية كفر الباجور - بجوار المسجد الكبير',
+    distanceKm: 3.2,
+    estimatedMinutes: '١٥ - ٢٠ دقيقة',
+    isRural: true,
+    customerId: 'usr_cust_1',
+    customerName: 'أحمد سعيد المنوفي',
+    customerPhone: '01012345678',
+    items: [
+      {
+        productId: 'pkg_docs',
+        productName: 'طرد أوراق رسمية وعقود موثقة',
+        quantity: 1,
+        unitPriceEgp: 0,
+      },
+    ],
+    itemDescription: 'طرد أوراق رسمية وعقود موثقة إلى كفر الباجور',
+    subtotalEgp: 0,
+    deliveryFeeEgp: 23,
+    platformFeeEgp: 2,
+    ruralSurchargeEgp: 5,
+    totalEgp: 30,
+    totalFarePiasters: 3000,
+    paymentMethod: 'cash',
+    status: 'delivered',
+    assignedCaptainId: 'usr_capt_1',
+    assignedCaptainName: 'كابتن محمود الصياد',
+    assignedCaptainPhone: '01198765432',
+    assignedCaptainVehicle: 'سكوتر بينيلي أسود • م ن ف ٤٩٢١',
+    assignedCaptainRating: 4.92,
+    createdAt: '٠٩:١٥ ص',
+    createdAtDate: new Date(Date.now() - 120 * 60 * 1000),
+    acceptedAt: '٠٩:١٧ ص',
+    acceptedAtIso: new Date(Date.now() - 118 * 60 * 1000).toISOString(),
+    deliveredAt: '٠٩:٣٦ ص',
+    notes: 'تم التسليم والتحصيل كاش بنجاح',
+  },
+];
+
+// ============================================================================
+// 4. CONTEXT DEFINITION
+// ============================================================================
+
+interface SubmitRideOrPackageInput {
+  serviceType: 'errand' | 'package';
+  vehicleCategory: 'scooter' | 'motorcycle' | 'van';
+  pickupAddress: string;
+  deliveryAddress: string;
+  distanceKm: number;
+  isRural: boolean;
+  itemDescription: string;
+  recipientPhone: string;
+  paymentMethod: 'cash' | 'instapay' | 'vodafone_cash' | 'wallet';
+  notes?: string;
+  quoteData?: {
+    quoteId: string;
+    signature: string;
+    baseFarePiasters: number;
+    distanceFarePiasters: number;
+    ruralSurchargePiasters: number;
+    platformFeePiasters: number;
+    totalFarePiasters: number;
+    estimatedDurationMinutes: string;
+  };
+}
+
 interface MarketplaceContextType {
-  // Authentication & Persona state
+  // Active Auth Persona
   currentUser: DemoUser;
   switchDemoUser: (user: DemoUser) => void;
   isAuthModalOpen: boolean;
   setIsAuthModalOpen: (open: boolean) => void;
 
-  // Stores & Catalog
+  // Stores & Products
   stores: StoreItem[];
   toggleStoreStatus: (storeId: string) => void;
   products: ProductItem[];
   toggleProductAvailability: (productId: string) => void;
   updateProductPrice: (productId: string, newPriceEgp: number) => void;
 
-  // Single-Store Cart
+  // Customer Cart (Single-Store Constraint)
   cartItems: CartItem[];
   cartStoreId: string | null;
   addToCart: (product: ProductItem, store: StoreItem) => { success: boolean; conflictStore?: string };
@@ -445,106 +813,265 @@ interface MarketplaceContextType {
   cartPlatformFeeEgp: number;
   cartTotalEgp: number;
 
-  // Orders Management & Synchronized Flow
+  // Orders & Lifecycle Progression
   orders: MarketplaceOrder[];
   submitNewOrder: (params: {
     deliveryAddress: string;
-    paymentMethod: 'cash' | 'instapay' | 'vodafone_cash';
+    paymentMethod: 'cash' | 'instapay' | 'vodafone_cash' | 'wallet';
     notes?: string;
   }) => MarketplaceOrder | null;
+  submitRideOrPackageOrder: (params: SubmitRideOrPackageInput) => MarketplaceOrder;
+  simulateInstantCaptainAccept: (orderId: string) => void;
+  customerCancelOrder: (orderId: string, reason?: string) => void;
+
+  // Merchant Actions
   merchantAcceptOrder: (orderId: string) => void;
   merchantMarkReady: (orderId: string) => void;
   merchantRejectOrder: (orderId: string, reason?: string) => void;
-  captainAcceptDelivery: (orderId: string) => void;
-  captainUpdateStep: (orderId: string, step: 'at_pickup' | 'in_transit' | 'delivered') => void;
-  captainConfirmCashCollection: (orderId: string) => void;
 
-  // Captain Specific State
+  // Captain State & Actions
   isCaptainOnline: boolean;
   setIsCaptainOnline: (online: boolean) => void;
   captainEarningsEgp: number;
   captainCompletedDeliveries: number;
   captainCashHoldingEgp: number;
+  captainAcceptDelivery: (orderId: string) => void;
+  captainUpdateStep: (orderId: string, nextStatus: 'at_pickup' | 'in_transit' | 'delivered') => void;
+  captainConfirmCashCollection: (orderId: string) => void;
 
-  // Chat Simulation
+  // Customer Wallet & Transactions
+  customerWalletBalanceEgp: number;
+  walletTransactions: WalletTransaction[];
+  topUpCustomerWallet: (amountEgp: number, methodAr: string) => void;
+
+  // Notifications & Support Complaints
+  notifications: AppNotification[];
+  markAllNotificationsRead: () => void;
+  complaints: SupportComplaint[];
+  submitComplaint: (input: {
+    orderNumber?: string;
+    categoryAr: string;
+    subjectAr: string;
+    descriptionAr: string;
+  }) => SupportComplaint;
+
+  // Unified Fleet Captains, System Settings & Audit Logs (Shared with Operations Dashboard)
+  captains: FleetCaptainItem[];
+  systemSettings: PlatformSystemSettings;
+  auditLogs: PlatformAuditLog[];
+  adminAssignCaptain: (orderId: string, captainId: string, actorName: string, actorRole: string) => { success: boolean; message: string };
+  adminEmergencyCancelOrder: (orderId: string, reason: string, actorName: string, actorRole: string) => void;
+  adminSettleCaptainCash: (captainId: string, amountPiasters: number, actorName: string, actorRole: string) => void;
+  adminRenewCaptainSubscription: (captainId: string, actorName: string, actorRole: string) => void;
+  adminUpdateSettings: (newSettings: PlatformSystemSettings, actorName: string, actorRole: string) => void;
+
+  // Chat Messages
   chatMessages: ChatMessage[];
   sendChatMessage: (orderId: string, text: string) => void;
 
-  // View Helpers
+  // Active Customer Order Shortcut
   activeCustomerOrder: MarketplaceOrder | null;
-  activeCaptainOrder: MarketplaceOrder | null;
-  selectedStoreForBrowsing: StoreItem | null;
-  setSelectedStoreForBrowsing: (store: StoreItem | null) => void;
 }
 
 const MarketplaceContext = createContext<MarketplaceContextType | undefined>(undefined);
 
-export const MarketplaceProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
-  // Current logged in demo persona
+export const MarketplaceProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [currentUser, setCurrentUser] = useState<DemoUser>(DEMO_PERSONAS[0]);
   const [isAuthModalOpen, setIsAuthModalOpen] = useState<boolean>(false);
 
-  // Stores
   const [stores, setStores] = useState<StoreItem[]>(INITIAL_STORES);
-  const [selectedStoreForBrowsing, setSelectedStoreForBrowsing] = useState<StoreItem | null>(null);
-
-  // Products
   const [products, setProducts] = useState<ProductItem[]>(INITIAL_PRODUCTS);
+  const [orders, setOrders] = useState<MarketplaceOrder[]>(INITIAL_ORDERS);
 
-  // Cart (Strict Single-Store Enforcement)
+  // Cart state
   const [cartItems, setCartItems] = useState<CartItem[]>([]);
   const [cartStoreId, setCartStoreId] = useState<string | null>(null);
 
-  // Orders
-  const [orders, setOrders] = useState<MarketplaceOrder[]>(INITIAL_ORDERS);
+  // Captain operational metrics
+  const [isCaptainOnline, setIsCaptainOnlineState] = useState<boolean>(true);
+  const [captainEarningsEgp, setCaptainEarningsEgp] = useState<number>(195);
+  const [captainCompletedDeliveries, setCaptainCompletedDeliveries] = useState<number>(8);
+  const [captainCashHoldingEgp, setCaptainCashHoldingEgp] = useState<number>(450);
 
-  // Captain stats
-  const [isCaptainOnline, setIsCaptainOnline] = useState<boolean>(true);
-  const [captainEarningsEgp, setCaptainEarningsEgp] = useState<number>(340);
-  const [captainCompletedDeliveries, setCaptainCompletedDeliveries] = useState<number>(7);
-  const [captainCashHoldingEgp, setCaptainCashHoldingEgp] = useState<number>(510);
-
-  // Chat
-  const [chatMessages, setChatMessages] = useState<ChatMessage[]>([
+  // Customer Wallet State
+  const [customerWalletBalanceEgp, setCustomerWalletBalanceEgp] = useState<number>(245);
+  const [walletTransactions, setWalletTransactions] = useState<WalletTransaction[]>([
     {
-      id: 'msg_01',
-      orderId: 'ord_init_01',
-      senderRole: 'captain',
-      senderName: 'محمود الصياد',
-      text: 'مساء الخير، أنا في طريقي لاستلام الطلب من المطعم.',
-      time: '10:40 ص',
+      id: 'wtx_1',
+      titleAr: 'شحن رصيد المحفظة عبر إنستاباي (InstaPay)',
+      type: 'credit',
+      amountEgp: 200,
+      methodAr: 'إنستاباي',
+      timestampAr: 'أمس • ٠٨:٣٠ م',
     },
     {
-      id: 'msg_02',
-      orderId: 'ord_init_01',
-      senderRole: 'customer',
-      senderName: 'أحمد مصطفى',
-      text: 'أهلاً يا كابتن، في انتظارك عند مدخل برج الشروق.',
-      time: '10:41 ص',
+      id: 'wtx_2',
+      titleAr: 'رصيد ترحيبي لعملاء مركز الباجور',
+      type: 'credit',
+      amountEgp: 75,
+      methodAr: 'مكافأة مشوار',
+      timestampAr: 'منذ ٣ أيام',
+    },
+    {
+      id: 'wtx_3',
+      titleAr: 'سداد مشوار توصيل طرد #MSH-8101',
+      type: 'debit',
+      amountEgp: 30,
+      methodAr: 'خصم محفظة',
+      timestampAr: 'اليوم • ٠٩:٣٦ ص',
+      orderNumber: 'MSH-8101',
     },
   ]);
 
-  // Switch persona
+  // Notifications
+  const [notifications, setNotifications] = useState<AppNotification[]>([
+    {
+      id: 'ntf_1',
+      recipientRole: 'customer',
+      titleAr: 'تم قبول طلبك #MSH-9401 من مطعم ومشاوي الباشا',
+      bodyAr: 'بدأ المتجر في تجهيز طلبك وتم إسناد الكابتن محمود الصياد للاستلام.',
+      timeAr: 'منذ ٥ دقائق',
+      orderNumber: 'MSH-9401',
+      isRead: false,
+    },
+    {
+      id: 'ntf_2',
+      recipientRole: 'captain',
+      titleAr: 'طلب مشوار خاص جديد #MSH-8103 في ميدان المحطة',
+      bodyAr: 'مشوار سريع من ميدان المحطة إلى برج الشروق بقيمة ١٧.٠٠ ج.م (٠٪ عمولة).',
+      timeAr: 'منذ ٤ دقائق',
+      orderNumber: 'MSH-8103',
+      isRead: false,
+    },
+  ]);
+
+  // Complaints
+  const [complaints, setComplaints] = useState<SupportComplaint[]>([
+    {
+      id: 'cmp_1001',
+      ticketNumber: 'TKT-1001',
+      orderNumber: 'MSH-8102',
+      customerName: 'د. سحر عبد الحميد',
+      customerPhone: '01244455582',
+      categoryAr: 'تأخر أو متابعة خط سير',
+      subjectAr: 'متابعة موعد وصول مستلزمات شنتنا الحجر',
+      descriptionAr: 'يرجى التأكيد على الكابتن بسلوك طريق بنها الزراعي لسرعة الوصول.',
+      status: 'under_review',
+      createdAtAr: 'منذ ٢٠ دقيقة',
+      resolutionNotesAr: 'تم التواصل مع الكابتن أحمد فتحي وهو على مسافة أقل من ٥ دقائق من الوجهة.',
+    },
+  ]);
+
+  // Captains Fleet, System Settings & Audit Logs
+  const [captains, setCaptains] = useState<FleetCaptainItem[]>(INITIAL_CAPTAINS);
+  const [systemSettings, setSystemSettings] = useState<PlatformSystemSettings>({
+    baseFarePiasters: 1500,
+    ratePerKmPiasters: 400,
+    ruralSurchargePiasters: 500,
+    platformFeePiasters: 200,
+    cashCeilingPiasters: 100000,
+    gracePeriodHours: 72,
+    passengerLockEnabled: true,
+  });
+
+  const [auditLogs, setAuditLogs] = useState<PlatformAuditLog[]>([
+    {
+      id: 'aud_01',
+      timestamp: 'اليوم ١٠:٠٠ ص',
+      actorName: 'د. علاء',
+      actorRole: 'owner',
+      actionType: 'SYSTEM_SETTINGS_UPDATED',
+      target: 'إعدادات المنظومة',
+      descriptionAr: 'اعتماد تسعيرة الانطلاق لمركز الباجور وقفل نقل الركاب طبقاً للقانون رقم ٧٣ لسنة ٢٠١٨.',
+    },
+    {
+      id: 'aud_02',
+      timestamp: 'اليوم ١٠:٢٥ ص',
+      actorName: 'أحمد المنوفي',
+      actorRole: 'operations_dispatcher',
+      actionType: 'MANUAL_DISPATCH_ASSIGNMENT',
+      target: 'طلب MSH-8102',
+      descriptionAr: 'تعيين الكابتن أحمد فتحي الديب لنقل شحنة مستلزمات طبية عاجلة إلى شنتنا الحجر.',
+    },
+  ]);
+
+  const [chatMessages, setChatMessages] = useState<ChatMessage[]>([
+    {
+      id: 'msg_1',
+      orderId: 'ord_seed_1',
+      senderRole: 'customer',
+      senderName: 'أحمد سعيد المنوفي',
+      text: 'يا كابتن محمود، أنا في برج الشروق بجوار صيدلية الشفاء الدور الرابع.',
+      time: '١٠:٤٠ ص',
+    },
+    {
+      id: 'msg_2',
+      orderId: 'ord_seed_1',
+      senderRole: 'captain',
+      senderName: 'كابتن محمود الصياد',
+      text: 'تمام يا أستاذ أحمد، المطعم بيقفل التغليف وخلال دقائق هكون عندك إن شاء الله.',
+      time: '١٠:٤١ ص',
+    },
+  ]);
+
+  // Sync live store open status from backend /api/v1/stores on initial mount
+  useEffect(() => {
+    fetch('/api/v1/stores')
+      .then((r) => r.json())
+      .then((res) => {
+        if (res?.success && Array.isArray(res.data?.stores)) {
+          const backendStores = res.data.stores;
+          setStores((prev) =>
+            prev.map((s) => {
+              const found = backendStores.find((bs: any) => bs.id === s.id);
+              return found ? { ...s, isOpen: found.isOpen } : s;
+            })
+          );
+        }
+      })
+      .catch(() => {
+        // Keep local seed if offline
+      });
+  }, []);
+
+  const pushNotification = (notif: Omit<AppNotification, 'id' | 'timeAr' | 'isRead'>) => {
+    setNotifications((prev) => [
+      {
+        ...notif,
+        id: `ntf_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+        timeAr: 'الآن',
+        isRead: false,
+      },
+      ...prev,
+    ]);
+  };
+
+  const setIsCaptainOnline = (online: boolean) => {
+    setIsCaptainOnlineState(online);
+    setCaptains((prev) =>
+      prev.map((c) => (c.id === 'cpt_02' ? { ...c, isOnline: online } : c))
+    );
+  };
+
+  // Switch active user
   const switchDemoUser = (user: DemoUser) => {
     setCurrentUser(user);
     setIsAuthModalOpen(false);
   };
 
-  // Toggle store open/closed
+  // Store management
   const toggleStoreStatus = (storeId: string) => {
     setStores((prev) =>
       prev.map((s) => (s.id === storeId ? { ...s, isOpen: !s.isOpen } : s))
     );
   };
 
-  // Product availability
   const toggleProductAvailability = (productId: string) => {
     setProducts((prev) =>
       prev.map((p) => (p.id === productId ? { ...p, isAvailable: !p.isAvailable } : p))
     );
   };
 
-  // Product price update
   const updateProductPrice = (productId: string, newPriceEgp: number) => {
     if (newPriceEgp <= 0) return;
     setProducts((prev) =>
@@ -552,21 +1079,22 @@ export const MarketplaceProvider: React.FC<{ children: ReactNode }> = ({ childre
     );
   };
 
-  // Cart operations
-  const addToCart = (product: ProductItem, store: StoreItem) => {
+  // Cart Operations (Single-store enforcement)
+  const addToCart = (product: ProductItem, store: StoreItem): { success: boolean; conflictStore?: string } => {
     if (cartStoreId && cartStoreId !== store.id && cartItems.length > 0) {
       const currentStore = stores.find((s) => s.id === cartStoreId);
-      return { success: false, conflictStore: currentStore?.nameAr || 'متجر آخر' };
+      return {
+        success: false,
+        conflictStore: currentStore ? currentStore.nameAr : 'متجر آخر',
+      };
     }
 
     setCartStoreId(store.id);
     setCartItems((prev) => {
-      const existing = prev.find((item) => item.product.id === product.id);
+      const existing = prev.find((i) => i.product.id === product.id);
       if (existing) {
-        return prev.map((item) =>
-          item.product.id === product.id
-            ? { ...item, quantity: item.quantity + 1 }
-            : item
+        return prev.map((i) =>
+          i.product.id === product.id ? { ...i, quantity: i.quantity + 1 } : i
         );
       }
       return [...prev, { product, quantity: 1 }];
@@ -582,9 +1110,9 @@ export const MarketplaceProvider: React.FC<{ children: ReactNode }> = ({ childre
 
   const removeFromCart = (productId: string) => {
     setCartItems((prev) => {
-      const next = prev.filter((item) => item.product.id !== productId);
-      if (next.length === 0) setCartStoreId(null);
-      return next;
+      const updated = prev.filter((i) => i.product.id !== productId);
+      if (updated.length === 0) setCartStoreId(null);
+      return updated;
     });
   };
 
@@ -594,9 +1122,7 @@ export const MarketplaceProvider: React.FC<{ children: ReactNode }> = ({ childre
       return;
     }
     setCartItems((prev) =>
-      prev.map((item) =>
-        item.product.id === productId ? { ...item, quantity: qty } : item
-      )
+      prev.map((i) => (i.product.id === productId ? { ...i, quantity: qty } : i))
     );
   };
 
@@ -605,183 +1131,669 @@ export const MarketplaceProvider: React.FC<{ children: ReactNode }> = ({ childre
     setCartStoreId(null);
   };
 
+  // Cart Calculations
   const cartSubtotalEgp = cartItems.reduce(
     (sum, item) => sum + item.product.priceEgp * item.quantity,
     0
   );
-  const cartDeliveryFeeEgp = cartItems.length > 0 ? 15 : 0;
-  const cartPlatformFeeEgp = cartItems.length > 0 ? 2 : 0;
+  const activeCartStore = stores.find((s) => s.id === cartStoreId);
+  const cartDeliveryFeeEgp = cartItems.length > 0 ? (activeCartStore?.deliveryFeeEgp ?? 15) : 0;
+  const cartPlatformFeeEgp = cartItems.length > 0 ? Math.round(systemSettings.platformFeePiasters / 100) : 0;
   const cartTotalEgp = cartSubtotalEgp + cartDeliveryFeeEgp + cartPlatformFeeEgp;
 
-  // Submit Order from Customer (Requests authoritative quote from /api/v1/quotes in background)
+  // Submit new Store Order from Customer Cart
   const submitNewOrder = (params: {
     deliveryAddress: string;
-    paymentMethod: 'cash' | 'instapay' | 'vodafone_cash';
+    paymentMethod: 'cash' | 'instapay' | 'vodafone_cash' | 'wallet';
     notes?: string;
   }): MarketplaceOrder | null => {
-    if (cartItems.length === 0 || !cartStoreId) return null;
-    const store = stores.find((s) => s.id === cartStoreId);
-    if (!store) return null;
+    if (cartItems.length === 0 || !activeCartStore) return null;
 
-    const orderNum = `MSH-${Math.floor(1000 + Math.random() * 9000)}`;
+    const orderNum = `MSH-${Math.floor(9402 + Math.random() * 500)}`;
+    const now = new Date();
+    const timeStr = formatArabicClockTime(now);
+    const itemsSummary = cartItems
+      .map((ci) => `${ci.quantity}× ${ci.product.nameAr}`)
+      .join(' + ');
+
+    if (params.paymentMethod === 'wallet' && customerWalletBalanceEgp >= cartTotalEgp) {
+      setCustomerWalletBalanceEgp((prev) => prev - cartTotalEgp);
+      setWalletTransactions((prev) => [
+        {
+          id: `wtx_${Date.now()}`,
+          titleAr: `سداد طلب متجر ${activeCartStore.nameAr} (${orderNum})`,
+          type: 'debit',
+          amountEgp: cartTotalEgp,
+          methodAr: 'خصم محفظة مشوار',
+          timestampAr: `اليوم • ${timeStr}`,
+          orderNumber: orderNum,
+        },
+        ...prev,
+      ]);
+    }
+
     const newOrder: MarketplaceOrder = {
       id: `ord_${Date.now()}`,
       orderNumber: orderNum,
-      storeId: store.id,
-      storeName: store.nameAr,
-      storeAddress: store.address,
-      customerId: currentUser.id,
-      customerName: currentUser.name,
-      customerPhone: currentUser.phone,
-      deliveryAddress: params.deliveryAddress || 'شارع الجيش - برج الشروق، الباجور',
+      serviceType: 'restaurant_store',
+      serviceTypeAr: 'طلبات مطاعم ومتاجر',
+      vehicleCategory: 'scooter',
+      storeId: activeCartStore.id,
+      storeName: activeCartStore.nameAr,
+      storeAddress: activeCartStore.address,
+      pickupAddress: activeCartStore.address,
+      deliveryAddress: params.deliveryAddress,
+      distanceKm: activeCartStore.distanceKm,
+      estimatedMinutes: activeCartStore.deliveryTimeEst,
+      isRural: params.deliveryAddress.includes('قرية'),
+      customerId: currentUser.role === 'customer' ? currentUser.id : 'usr_cust_1',
+      customerName: currentUser.role === 'customer' ? currentUser.name : 'أحمد سعيد المنوفي',
+      customerPhone: currentUser.role === 'customer' ? currentUser.phone : '01012345678',
       items: cartItems.map((ci) => ({
         productId: ci.product.id,
         productName: ci.product.nameAr,
-        unitPriceEgp: ci.product.priceEgp,
         quantity: ci.quantity,
+        unitPriceEgp: ci.product.priceEgp,
       })),
+      itemDescription: itemsSummary,
       subtotalEgp: cartSubtotalEgp,
       deliveryFeeEgp: cartDeliveryFeeEgp,
       platformFeeEgp: cartPlatformFeeEgp,
+      ruralSurchargeEgp: 0,
       totalEgp: cartTotalEgp,
+      totalFarePiasters: cartTotalEgp * 100,
       paymentMethod: params.paymentMethod,
       status: 'created',
-      createdAt: 'الآن',
-      createdAtDate: new Date(),
-      notes: params.notes || '',
+      createdAt: timeStr,
+      createdAtDate: now,
+      notes: params.notes,
     };
-
-    // Trigger real backend quote verification against /api/v1/quotes
-    fetch('/api/v1/quotes', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        serviceTypeId: 'restaurant_store',
-        distanceKm: store.distanceKm || 1.5,
-        zoneId: 'zone_bagour_center',
-        itemsSubtotalPiasters: Math.round(cartSubtotalEgp * 100),
-        pickupLandmark: store.address,
-        dropoffLandmark: params.deliveryAddress,
-      }),
-    }).catch(() => {
-      // Non-blocking fallback if offline
-    });
 
     setOrders((prev) => [newOrder, ...prev]);
     clearCart();
+
+    pushNotification({
+      recipientRole: 'merchant',
+      titleAr: `طلب جديد وارد #${orderNum} لـ ${activeCartStore.nameAr}`,
+      bodyAr: `${itemsSummary} • الإجمالي ${cartTotalEgp} ج.م`,
+      orderNumber: orderNum,
+    });
+
     return newOrder;
   };
 
-  // Merchant actions
-  const merchantAcceptOrder = (orderId: string) => {
-    setOrders((prev) =>
-      prev.map((o) => (o.id === orderId ? { ...o, status: 'merchant_accepted' } : o))
-    );
+  // Submit Direct Ride / Special Errand / Package Order
+  const submitRideOrPackageOrder = (params: SubmitRideOrPackageInput): MarketplaceOrder => {
+    const orderNum = `MSH-${Math.floor(8200 + Math.random() * 799)}`;
+    const now = new Date();
+    const timeStr = formatArabicClockTime(now);
+
+    const baseFareEgp = params.quoteData
+      ? Math.round(params.quoteData.baseFarePiasters / 100)
+      : Math.round(systemSettings.baseFarePiasters / 100);
+    const distFareEgp = params.quoteData
+      ? Math.round(params.quoteData.distanceFarePiasters / 100)
+      : Math.round(Math.max(0, params.distanceKm - 1.5) * (systemSettings.ratePerKmPiasters / 100));
+    const ruralEgp = params.quoteData
+      ? Math.round(params.quoteData.ruralSurchargePiasters / 100)
+      : params.isRural
+      ? Math.round(systemSettings.ruralSurchargePiasters / 100)
+      : 0;
+    const platformEgp = params.quoteData
+      ? Math.round(params.quoteData.platformFeePiasters / 100)
+      : Math.round(systemSettings.platformFeePiasters / 100);
+    const vehicleExtraEgp = params.vehicleCategory === 'van' ? 10 : 0;
+
+    const deliveryFeeEgp = baseFareEgp + distFareEgp + ruralEgp + vehicleExtraEgp;
+    const totalEgp = deliveryFeeEgp + platformEgp;
+    const totalFarePiasters = totalEgp * 100;
+
+    if (params.paymentMethod === 'wallet' && customerWalletBalanceEgp >= totalEgp) {
+      setCustomerWalletBalanceEgp((prev) => prev - totalEgp);
+      setWalletTransactions((prev) => [
+        {
+          id: `wtx_${Date.now()}`,
+          titleAr: `سداد ${params.serviceType === 'errand' ? 'مشوار خاص' : 'توصيل طرد'} (${orderNum})`,
+          type: 'debit',
+          amountEgp: totalEgp,
+          methodAr: 'خصم محفظة مشوار',
+          timestampAr: `اليوم • ${timeStr}`,
+          orderNumber: orderNum,
+        },
+        ...prev,
+      ]);
+    }
+
+    const serviceLabel =
+      params.serviceType === 'errand'
+        ? 'مشوار خاص وتخليص فوري'
+        : 'توصيل طرد وأمانات';
+
+    const newOrder: MarketplaceOrder = {
+      id: `ord_ride_${Date.now()}`,
+      orderNumber: orderNum,
+      serviceType: params.serviceType,
+      serviceTypeAr: serviceLabel,
+      vehicleCategory: params.vehicleCategory,
+      storeId: params.serviceType === 'errand' ? 'direct_errand' : 'direct_package',
+      storeName: serviceLabel,
+      storeAddress: params.pickupAddress,
+      pickupAddress: params.pickupAddress,
+      deliveryAddress: params.deliveryAddress,
+      distanceKm: params.distanceKm,
+      estimatedMinutes: params.quoteData?.estimatedDurationMinutes
+        ? `${params.quoteData.estimatedDurationMinutes} دقيقة`
+        : params.isRural
+        ? '١٨ - ٢٤ دقيقة'
+        : '١٠ - ١٥ دقيقة',
+      isRural: params.isRural,
+      customerId: currentUser.role === 'customer' ? currentUser.id : 'usr_cust_1',
+      customerName: currentUser.role === 'customer' ? currentUser.name : 'أحمد سعيد المنوفي',
+      customerPhone: params.recipientPhone || currentUser.phone || '01012345678',
+      items: [
+        {
+          productId: `srv_${params.serviceType}`,
+          productName: params.itemDescription || serviceLabel,
+          quantity: 1,
+          unitPriceEgp: 0,
+        },
+      ],
+      itemDescription: params.itemDescription || serviceLabel,
+      subtotalEgp: 0,
+      deliveryFeeEgp,
+      platformFeeEgp: platformEgp,
+      ruralSurchargeEgp: ruralEgp,
+      totalEgp,
+      totalFarePiasters,
+      paymentMethod: params.paymentMethod,
+      status: 'searching_captain',
+      createdAt: timeStr,
+      createdAtDate: now,
+      quoteId: params.quoteData?.quoteId,
+      quoteSignature: params.quoteData?.signature,
+      notes: params.notes,
+    };
+
+    setOrders((prev) => [newOrder, ...prev]);
+
+    pushNotification({
+      recipientRole: 'captain',
+      titleAr: `طلب ${serviceLabel} جديد #${orderNum}`,
+      bodyAr: `من ${params.pickupAddress} إلى ${params.deliveryAddress} • الأجرة ${totalEgp} ج.م`,
+      orderNumber: orderNum,
+    });
+
+    return newOrder;
   };
 
-  const merchantMarkReady = (orderId: string) => {
-    setOrders((prev) =>
-      prev.map((o) => (o.id === orderId ? { ...o, status: 'ready_for_pickup' } : o))
-    );
-  };
+  // Simulate immediate captain acceptance (for smooth 1-click customer testing)
+  const simulateInstantCaptainAccept = (orderId: string) => {
+    const now = new Date();
+    const nowIso = now.toISOString();
+    const nowTimeAr = formatArabicClockTime(now);
 
-  const merchantRejectOrder = (orderId: string, reason?: string) => {
-    setOrders((prev) =>
-      prev.map((o) =>
-        o.id === orderId
-          ? { ...o, status: 'cancelled', notes: reason ? `[مرفوض من المتجر: ${reason}]` : '[مرفوض من المتجر]' }
-          : o
-      )
-    );
-  };
-
-  // Captain actions
-  const captainAcceptDelivery = (orderId: string) => {
-    const captainUser = DEMO_PERSONAS.find((p) => p.role === 'captain');
     setOrders((prev) =>
       prev.map((o) =>
         o.id === orderId
           ? {
               ...o,
               status: 'captain_assigned',
-              assignedCaptainId: captainUser?.id || 'user_capt_01',
-              assignedCaptainName: captainUser?.name || 'محمود الصياد',
-              assignedCaptainPhone: captainUser?.phone || '01198765432',
+              assignedCaptainId: 'usr_capt_1',
+              assignedCaptainName: 'كابتن محمود الصياد',
+              assignedCaptainPhone: '01198765432',
+              assignedCaptainVehicle: 'سكوتر بينيلي أسود • م ن ف ٤٩٢١',
+              assignedCaptainRating: 4.92,
+              acceptedAt: o.acceptedAt || nowTimeAr,
+              acceptedAtIso: o.acceptedAtIso || nowIso,
+            }
+          : o
+      )
+    );
+
+    const targetOrder = orders.find((o) => o.id === orderId);
+    if (targetOrder) {
+      pushNotification({
+        recipientRole: 'customer',
+        titleAr: `وافق الكابتن محمود الصياد على طلبك #${targetOrder.orderNumber}`,
+        bodyAr: `وقت القبول: ${nowTimeAr} • الكابتن في طريقه لنقطة الانطلاق الآن.`,
+        orderNumber: targetOrder.orderNumber,
+      });
+    }
+  };
+
+  // Customer cancels own order while in created or searching_captain
+  const customerCancelOrder = (orderId: string, reason: string = 'إلغاء بناءً على رغبة العميل') => {
+    setOrders((prev) =>
+      prev.map((o) =>
+        o.id === orderId && (o.status === 'created' || o.status === 'searching_captain')
+          ? { ...o, status: 'cancelled', notes: `${o.notes ? o.notes + ' | ' : ''}[ملغي: ${reason}]` }
+          : o
+      )
+    );
+  };
+
+  // Merchant Transitions
+  const merchantAcceptOrder = (orderId: string) => {
+    const now = new Date();
+    const nowIso = now.toISOString();
+    const nowTimeAr = formatArabicClockTime(now);
+
+    setOrders((prev) =>
+      prev.map((o) =>
+        o.id === orderId
+          ? {
+              ...o,
+              status: 'merchant_accepted',
+              acceptedAt: o.acceptedAt || nowTimeAr,
+              acceptedAtIso: o.acceptedAtIso || nowIso,
+            }
+          : o
+      )
+    );
+
+    const ord = orders.find((o) => o.id === orderId);
+    if (ord) {
+      pushNotification({
+        recipientRole: 'customer',
+        titleAr: `قبل المتجر (${ord.storeName}) طلبك #${ord.orderNumber}`,
+        bodyAr: `وقت القبول: ${nowTimeAr} • جاري تحضير الأصناف الآن.`,
+        orderNumber: ord.orderNumber,
+      });
+    }
+  };
+
+  const merchantMarkReady = (orderId: string) => {
+    setOrders((prev) =>
+      prev.map((o) =>
+        o.id === orderId ? { ...o, status: 'ready_for_pickup' } : o
+      )
+    );
+    const ord = orders.find((o) => o.id === orderId);
+    if (ord) {
+      pushNotification({
+        recipientRole: 'captain',
+        titleAr: `طلب جاهز للاستلام الفوري #${ord.orderNumber}`,
+        bodyAr: `المتجر: ${ord.storeName} • الأجرة للكابتن: +${ord.deliveryFeeEgp} ج.م`,
+        orderNumber: ord.orderNumber,
+      });
+    }
+  };
+
+  const merchantRejectOrder = (orderId: string, reason?: string) => {
+    setOrders((prev) =>
+      prev.map((o) =>
+        o.id === orderId
+          ? { ...o, status: 'cancelled', notes: reason ? `سبب الإلغاء: ${reason}` : o.notes }
+          : o
+      )
+    );
+  };
+
+  // Captain Transitions
+  const captainAcceptDelivery = (orderId: string) => {
+    const now = new Date();
+    const nowIso = now.toISOString();
+    const nowTimeAr = formatArabicClockTime(now);
+
+    setOrders((prev) =>
+      prev.map((o) =>
+        o.id === orderId
+          ? {
+              ...o,
+              status: 'captain_assigned',
+              assignedCaptainId: currentUser.role === 'captain' ? currentUser.id : 'usr_capt_1',
+              assignedCaptainName: currentUser.role === 'captain' ? currentUser.name : 'كابتن محمود الصياد',
+              assignedCaptainPhone: currentUser.role === 'captain' ? currentUser.phone : '01198765432',
+              assignedCaptainVehicle: currentUser.vehicleInfo || 'سكوتر بينيلي أسود • م ن ف ٤٩٢١',
+              assignedCaptainRating: 4.92,
+              acceptedAt: o.acceptedAt || nowTimeAr,
+              acceptedAtIso: o.acceptedAtIso || nowIso,
+            }
+          : o
+      )
+    );
+
+    const ord = orders.find((o) => o.id === orderId);
+    if (ord) {
+      pushNotification({
+        recipientRole: 'customer',
+        titleAr: `تم تعيين الكابتن لطلبك #${ord.orderNumber}`,
+        bodyAr: `وقت القبول: ${nowTimeAr} • الكابتن في الطريق للاستلام.`,
+        orderNumber: ord.orderNumber,
+      });
+    }
+  };
+
+  const captainUpdateStep = (
+    orderId: string,
+    nextStatus: 'at_pickup' | 'in_transit' | 'delivered'
+  ) => {
+    const nowTimeAr = formatArabicClockTime(new Date());
+    setOrders((prev) =>
+      prev.map((o) =>
+        o.id === orderId
+          ? {
+              ...o,
+              status: nextStatus,
+              pickedUpAt: nextStatus === 'in_transit' ? nowTimeAr : o.pickedUpAt,
+              deliveredAt: nextStatus === 'delivered' ? nowTimeAr : o.deliveredAt,
             }
           : o
       )
     );
   };
 
-  const captainUpdateStep = (orderId: string, step: 'at_pickup' | 'in_transit' | 'delivered') => {
+  const captainConfirmCashCollection = (orderId: string) => {
+    const targetOrder = orders.find((o) => o.id === orderId);
+    if (!targetOrder) return;
+    const nowTimeAr = formatArabicClockTime(new Date());
+
     setOrders((prev) =>
-      prev.map((o) => {
-        if (o.id === orderId) {
-          if (step === 'delivered') {
-            setCaptainEarningsEgp((e) => e + o.deliveryFeeEgp);
-            setCaptainCompletedDeliveries((c) => c + 1);
-            if (o.paymentMethod === 'cash') {
-              setCaptainCashHoldingEgp((h) => h + o.totalEgp);
+      prev.map((o) =>
+        o.id === orderId ? { ...o, status: 'delivered', deliveredAt: nowTimeAr } : o
+      )
+    );
+
+    // 100% of delivery fee goes to captain (0% commission invariant)
+    setCaptainEarningsEgp((prev) => prev + targetOrder.deliveryFeeEgp);
+    setCaptainCompletedDeliveries((prev) => prev + 1);
+    setCaptainCashHoldingEgp((prev) => prev + targetOrder.totalEgp);
+
+    // Also synchronize with the Fleet Captains table in Operations Dashboard
+    setCaptains((prev) =>
+      prev.map((c) =>
+        c.id === 'cpt_02' || c.userId === targetOrder.assignedCaptainId
+          ? {
+              ...c,
+              cashHoldingPiasters: c.cashHoldingPiasters + targetOrder.totalEgp * 100,
+              completedToday: c.completedToday + 1,
             }
-            return { ...o, status: 'delivered', cashCollected: true };
-          }
-          return { ...o, status: step };
+          : c
+      )
+    );
+
+    pushNotification({
+      recipientRole: 'customer',
+      titleAr: `تم تسليم طلبك #${targetOrder.orderNumber} بنجاح`,
+      bodyAr: `شكراً لاستخدامك مشوار الباجور! تم تحصيل ${targetOrder.totalEgp}.00 ج.م.`,
+      orderNumber: targetOrder.orderNumber,
+    });
+  };
+
+  // Customer Wallet Top-up
+  const topUpCustomerWallet = (amountEgp: number, methodAr: string) => {
+    if (amountEgp <= 0) return;
+    const nowTimeAr = formatArabicClockTime(new Date());
+    setCustomerWalletBalanceEgp((prev) => prev + amountEgp);
+    setWalletTransactions((prev) => [
+      {
+        id: `wtx_${Date.now()}`,
+        titleAr: `شحن رصيد المحفظة (${methodAr})`,
+        type: 'credit',
+        amountEgp,
+        methodAr,
+        timestampAr: `اليوم • ${nowTimeAr}`,
+      },
+      ...prev,
+    ]);
+  };
+
+  const markAllNotificationsRead = () => {
+    setNotifications((prev) => prev.map((n) => ({ ...n, isRead: true })));
+  };
+
+  const submitComplaint = (input: {
+    orderNumber?: string;
+    categoryAr: string;
+    subjectAr: string;
+    descriptionAr: string;
+  }): SupportComplaint => {
+    const newTicket: SupportComplaint = {
+      id: `cmp_${Date.now()}`,
+      ticketNumber: `TKT-${Math.floor(1002 + Math.random() * 899)}`,
+      orderNumber: input.orderNumber,
+      customerName: currentUser.name,
+      customerPhone: currentUser.phone,
+      categoryAr: input.categoryAr,
+      subjectAr: input.subjectAr,
+      descriptionAr: input.descriptionAr,
+      status: 'open',
+      createdAtAr: 'الآن',
+    };
+    setComplaints((prev) => [newTicket, ...prev]);
+
+    // Also send to real backend /api/v1/complaints if available
+    fetch('/api/v1/complaints', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        category: 'other',
+        subjectAr: input.subjectAr,
+        descriptionAr: input.descriptionAr,
+      }),
+    }).catch(() => {
+      // Keep local state synchronized
+    });
+
+    return newTicket;
+  };
+
+  // Operations / Admin Actions (Synchronized with Mobile Preview)
+  const adminAssignCaptain = (
+    orderId: string,
+    captainId: string,
+    actorName: string,
+    actorRole: string
+  ): { success: boolean; message: string } => {
+    const captain = captains.find((c) => c.id === captainId);
+    const targetOrder = orders.find((o) => o.id === orderId);
+    if (!captain || !targetOrder) {
+      return { success: false, message: 'الكابتن أو الطلب غير موجود.' };
+    }
+    if (captain.status === 'expired' || captain.status === 'suspended') {
+      return {
+        success: false,
+        message: `عذراً: الكابتن غير مؤهل لاستلام الطلبات حالياً (${captain.statusAr}).`,
+      };
+    }
+
+    const now = new Date();
+    const nowIso = now.toISOString();
+    const nowTimeAr = formatArabicClockTime(now);
+
+    setOrders((prev) =>
+      prev.map((o) =>
+        o.id === orderId
+          ? {
+              ...o,
+              status: 'captain_assigned',
+              assignedCaptainId: captain.userId || captain.id,
+              assignedCaptainName: captain.name,
+              assignedCaptainPhone: captain.phone,
+              assignedCaptainVehicle: `${captain.vehicleType} • ${captain.plateNumber}`,
+              assignedCaptainRating: captain.rating,
+              acceptedAt: o.acceptedAt || nowTimeAr,
+              acceptedAtIso: o.acceptedAtIso || nowIso,
+            }
+          : o
+      )
+    );
+
+    setAuditLogs((prev) => [
+      {
+        id: `aud_${Date.now()}`,
+        timestamp: 'الآن',
+        actorName,
+        actorRole,
+        actionType: 'MANUAL_DISPATCH_ASSIGNMENT',
+        target: `طلب ${targetOrder.orderNumber}`,
+        descriptionAr: `تدخل يدوي من العمليات: تعيين الكابتن ${captain.name} للطلب ${targetOrder.orderNumber}.`,
+      },
+      ...prev,
+    ]);
+
+    return {
+      success: true,
+      message: `تم تعيين الكابتن ${captain.name} للطلب ${targetOrder.orderNumber} بنجاح.`,
+    };
+  };
+
+  const adminEmergencyCancelOrder = (
+    orderId: string,
+    reason: string,
+    actorName: string,
+    actorRole: string
+  ) => {
+    const targetOrder = orders.find((o) => o.id === orderId);
+    if (!targetOrder) return;
+
+    setOrders((prev) =>
+      prev.map((o) =>
+        o.id === orderId
+          ? { ...o, status: 'cancelled', notes: `[إلغاء إداري: ${reason}]` }
+          : o
+      )
+    );
+
+    setAuditLogs((prev) => [
+      {
+        id: `aud_${Date.now()}`,
+        timestamp: 'الآن',
+        actorName,
+        actorRole,
+        actionType: 'ORDER_EMERGENCY_CANCELLED',
+        target: `طلب ${targetOrder.orderNumber}`,
+        descriptionAr: `إلغاء إداري للطلب ${targetOrder.orderNumber}. السبب: ${reason}.`,
+      },
+      ...prev,
+    ]);
+  };
+
+  const adminSettleCaptainCash = (
+    captainId: string,
+    amountPiasters: number,
+    actorName: string,
+    actorRole: string
+  ) => {
+    const captain = captains.find((c) => c.id === captainId);
+    if (!captain || amountPiasters <= 0) return;
+
+    setCaptains((prev) =>
+      prev.map((c) => {
+        if (c.id === captainId) {
+          const newHolding = Math.max(0, c.cashHoldingPiasters - amountPiasters);
+          const newStatus =
+            c.status === 'suspended' && newHolding < c.cashCeilingPiasters
+              ? 'active'
+              : c.status;
+          return {
+            ...c,
+            cashHoldingPiasters: newHolding,
+            status: newStatus,
+            statusAr: newStatus === 'active' ? 'اشتراك نشط' : c.statusAr,
+          };
         }
-        return o;
+        return c;
       })
     );
+
+    if (captain.id === 'cpt_02') {
+      setCaptainCashHoldingEgp((prev) => Math.max(0, prev - Math.round(amountPiasters / 100)));
+    }
+
+    setAuditLogs((prev) => [
+      {
+        id: `aud_${Date.now()}`,
+        timestamp: 'الآن',
+        actorName,
+        actorRole,
+        actionType: 'CAPTAIN_CASH_SETTLED',
+        target: `كابتن ${captain.name}`,
+        descriptionAr: `توريد وتسوية نقدية بمبلغ ${(amountPiasters / 100).toFixed(2)} ج.م للكابتن ${captain.name}. تم إيداع المبلغ بخزينة مركز الباجور.`,
+      },
+      ...prev,
+    ]);
   };
 
-  const captainConfirmCashCollection = (orderId: string) => {
-    captainUpdateStep(orderId, 'delivered');
+  const adminRenewCaptainSubscription = (
+    captainId: string,
+    actorName: string,
+    actorRole: string
+  ) => {
+    const captain = captains.find((c) => c.id === captainId);
+    if (!captain) return;
+
+    setCaptains((prev) =>
+      prev.map((c) =>
+        c.id === captainId
+          ? {
+              ...c,
+              status: 'active',
+              statusAr: 'اشتراك نشط',
+              daysRemaining: 30,
+            }
+          : c
+      )
+    );
+
+    setAuditLogs((prev) => [
+      {
+        id: `aud_${Date.now()}`,
+        timestamp: 'الآن',
+        actorName,
+        actorRole,
+        actionType: 'CAPTAIN_SUBSCRIPTION_RENEWED',
+        target: `كابتن ${captain.name}`,
+        descriptionAr: `تجديد الاشتراك الشهري للكابتن ${captain.name} لمدة ٣٠ يوماً (بنسبة ٠٪ عمولة على الرحلات).`,
+      },
+      ...prev,
+    ]);
   };
 
-  // Chat
+  const adminUpdateSettings = (
+    newSettings: PlatformSystemSettings,
+    actorName: string,
+    actorRole: string
+  ) => {
+    setSystemSettings({ ...newSettings, passengerLockEnabled: true });
+    setAuditLogs((prev) => [
+      {
+        id: `aud_${Date.now()}`,
+        timestamp: 'الآن',
+        actorName,
+        actorRole,
+        actionType: 'PRICING_CONFIG_UPDATED',
+        target: 'تعريفة مركز الباجور',
+        descriptionAr: `تعديل معايير التسعيرة: الأجرة الأساسية ${(newSettings.baseFarePiasters / 100).toFixed(2)} ج.م، الكيلومتر ${(newSettings.ratePerKmPiasters / 100).toFixed(2)} ج.م، بدل القرى ${(newSettings.ruralSurchargePiasters / 100).toFixed(2)} ج.م.`,
+      },
+      ...prev,
+    ]);
+  };
+
   const sendChatMessage = (orderId: string, text: string) => {
     if (!text.trim()) return;
+    const nowStr = formatArabicClockTime(new Date());
     const newMsg: ChatMessage = {
       id: `msg_${Date.now()}`,
       orderId,
-      senderRole: currentUser.role === 'captain' ? 'captain' : 'customer',
+      senderRole:
+        currentUser.role === 'captain'
+          ? 'captain'
+          : currentUser.role === 'merchant'
+          ? 'merchant'
+          : 'customer',
       senderName: currentUser.name,
       text: text.trim(),
-      time: new Date().toLocaleTimeString('ar-EG', { hour: '2-digit', minute: '2-digit' }),
+      time: nowStr,
     };
-
     setChatMessages((prev) => [...prev, newMsg]);
-
-    // Simulated reply from the opposite party after 1.5 seconds if sent by customer
-    if (currentUser.role === 'customer') {
-      setTimeout(() => {
-        setChatMessages((prev) => [
-          ...prev,
-          {
-            id: `msg_reply_${Date.now()}`,
-            orderId,
-            senderRole: 'captain',
-            senderName: 'محمود الصياد',
-            text: 'تمام يا فندم، الطلب معايا وفي الطريق إليك حالياً.',
-            time: new Date().toLocaleTimeString('ar-EG', { hour: '2-digit', minute: '2-digit' }),
-          },
-        ]);
-      }, 1500);
-    }
   };
 
-  // Find active orders
+  // Active order for current customer
   const activeCustomerOrder =
     orders.find(
       (o) =>
-        o.customerId === currentUser.id &&
-        o.status !== 'delivered' &&
-        o.status !== 'cancelled'
-    ) || null;
-
-  const activeCaptainOrder =
-    orders.find(
-      (o) =>
-        (o.assignedCaptainId === currentUser.id ||
-          (currentUser.role === 'captain' && o.status === 'ready_for_pickup')) &&
+        (o.customerId === currentUser.id || o.customerId === 'usr_cust_1') &&
         o.status !== 'delivered' &&
         o.status !== 'cancelled'
     ) || null;
@@ -811,23 +1823,38 @@ export const MarketplaceProvider: React.FC<{ children: ReactNode }> = ({ childre
         cartTotalEgp,
         orders,
         submitNewOrder,
+        submitRideOrPackageOrder,
+        simulateInstantCaptainAccept,
+        customerCancelOrder,
         merchantAcceptOrder,
         merchantMarkReady,
         merchantRejectOrder,
-        captainAcceptDelivery,
-        captainUpdateStep,
-        captainConfirmCashCollection,
         isCaptainOnline,
         setIsCaptainOnline,
         captainEarningsEgp,
         captainCompletedDeliveries,
         captainCashHoldingEgp,
+        captainAcceptDelivery,
+        captainUpdateStep,
+        captainConfirmCashCollection,
+        customerWalletBalanceEgp,
+        walletTransactions,
+        topUpCustomerWallet,
+        notifications,
+        markAllNotificationsRead,
+        complaints,
+        submitComplaint,
+        captains,
+        systemSettings,
+        auditLogs,
+        adminAssignCaptain,
+        adminEmergencyCancelOrder,
+        adminSettleCaptainCash,
+        adminRenewCaptainSubscription,
+        adminUpdateSettings,
         chatMessages,
         sendChatMessage,
         activeCustomerOrder,
-        activeCaptainOrder,
-        selectedStoreForBrowsing,
-        setSelectedStoreForBrowsing,
       }}
     >
       {children}
@@ -836,9 +1863,9 @@ export const MarketplaceProvider: React.FC<{ children: ReactNode }> = ({ childre
 };
 
 export const useMarketplace = (): MarketplaceContextType => {
-  const context = useContext(MarketplaceContext);
-  if (!context) {
+  const ctx = useContext(MarketplaceContext);
+  if (!ctx) {
     throw new Error('useMarketplace must be used within a MarketplaceProvider');
   }
-  return context;
+  return ctx;
 };

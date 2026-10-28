@@ -699,10 +699,10 @@ export default function App() {
                 >
                   <ShieldCheck className="w-3.5 h-3.5" />
                   <span>Backend Tests</span>
-                  <span className="px-1.5 py-0.5 rounded-full bg-emerald-950 text-emerald-300 text-[10px] font-bold">27/27</span>
+                  <span className="px-1.5 py-0.5 rounded-full bg-emerald-950 text-emerald-300 text-[10px] font-bold">83/83</span>
                 </button>
                 <button
-                  onClick={() => setActiveTab('simulator')}
+                  onClick={() => setWorkspaceMode('mobile')}
                   className={`px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-all ${
                     activeTab === 'simulator' ? 'bg-amber-500 text-slate-950 shadow' : 'text-slate-300 hover:text-white'
                   }`}
@@ -788,7 +788,7 @@ export default function App() {
                   <div className="flex items-center gap-2 mb-2">
                     <span className="px-2.5 py-1 rounded-full bg-emerald-500/20 text-emerald-400 border border-emerald-500/40 text-xs font-bold flex items-center gap-1.5">
                       <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
-                      <span>١٩ من ١٩ اختبار تكامل ناجح (100% Passed)</span>
+                      <span>٨٣ من ٨٣ اختبار تكامل وأمان ناجح (100% Passed)</span>
                     </span>
                     <span className="px-2.5 py-1 rounded-full bg-amber-500/20 text-amber-300 border border-amber-500/40 text-xs font-bold">
                       مركز الباجور • المنوفية
@@ -1758,7 +1758,7 @@ export default function App() {
                                 </div>
                                 <div>
                                   <span className="text-xs font-bold block">تم قبول الطلب وتعيين الكابتن</span>
-                                  <span className="text-[10px] text-slate-400">19:28</span>
+                                  <span className="text-[10px] text-emerald-400 font-bold">وقت قبول الطلب: 07:28 م (منذ 6 دقائق)</span>
                                 </div>
                               </div>
 

@@ -246,9 +246,12 @@ export class OrderFsm {
 
     // Prepare updated order object
     const nowIso = new Date().toISOString();
+    const isAcceptanceTransition =
+      targetStatus === 'accepted_by_store' || targetStatus === 'captain_assigned';
     const updatedOrder: Order = {
       ...order,
       status: targetStatus,
+      acceptedAt: isAcceptanceTransition ? order.acceptedAt || nowIso : order.acceptedAt,
       cashCollectedPiasters: updatedCashCollected,
       isPaid: updatedIsPaid,
       specialInstructions: cancellationReason

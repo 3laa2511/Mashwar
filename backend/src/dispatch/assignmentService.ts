@@ -100,6 +100,7 @@ export class AssignmentService {
       const updatedOrder: Order = {
         ...currentOrder,
         status: 'captain_assigned',
+        acceptedAt: currentOrder.acceptedAt || nowIso,
         assignedCaptainId: captain.id,
         captainName: captain.fullName,
         captainPhone: captain.phone,

@@ -336,6 +336,19 @@ class _CustomerHomeScreenState extends ConsumerState<CustomerHomeScreen> {
                             ],
                           ),
                           const Divider(height: 20),
+                          if (order.formattedAcceptedAtAr != null) ...[
+                            Row(
+                              children: [
+                                const Icon(Icons.check_circle_outline_rounded, size: 14, color: AppColors.secondary),
+                                const SizedBox(width: 6),
+                                Text(
+                                  'وقت قبول الطلب: ${order.formattedAcceptedAtAr}',
+                                  style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: AppColors.secondaryDark),
+                                ),
+                              ],
+                            ),
+                            const SizedBox(height: 6),
+                          ],
                           Row(
                             mainAxisAlignment: MainAxisAlignment.spaceBetween,
                             children: [

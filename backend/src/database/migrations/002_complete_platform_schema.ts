@@ -312,9 +312,38 @@ export async function up(db: Kysely<any>): Promise<void> {
     .addColumn('is_read', 'boolean', (col) => col.notNull().defaultTo(false))
     .addColumn('created_at', 'timestamp', (col) => col.defaultTo(sql`CURRENT_TIMESTAMP`).notNull())
     .execute();
+
+  // 15. Align orders & captains tables with Phase 2 multi-zone and marketplace store columns
+  await sql`
+    ALTER TABLE orders
+      ADD COLUMN IF NOT EXISTS city_id varchar(64),
+      ADD COLUMN IF NOT EXISTS zone_id varchar(64),
+      ADD COLUMN IF NOT EXISTS store_id varchar(64),
+      ADD COLUMN IF NOT EXISTS store_name varchar(160),
+      ADD COLUMN IF NOT EXISTS merchant_user_id varchar(64),
+      ADD COLUMN IF NOT EXISTS items_subtotal_piasters integer,
+      ADD COLUMN IF NOT EXISTS delivery_fee_piasters integer,
+      ADD COLUMN IF NOT EXISTS platform_fee_piasters integer
+  `.execute(db);
+
+  await sql`
+    ALTER TABLE captains
+      ADD COLUMN IF NOT EXISTS city_id varchar(64),
+      ADD COLUMN IF NOT EXISTS active_zone_id varchar(64)
+  `.execute(db);
+
+  // 16. Enforce database-level uniqueness of one cash collection per order
+  await db.schema
+    .createIndex('idx_cash_collections_order_id_unique')
+    .ifNotExists()
+    .unique()
+    .on('cash_collections')
+    .column('order_id')
+    .execute();
 }
 
 export async function down(db: Kysely<any>): Promise<void> {
+  await db.schema.dropIndex('idx_cash_collections_order_id_unique').ifExists().execute();
   await db.schema.dropTable('notifications').ifExists().execute();
   await db.schema.dropTable('complaint_events').ifExists().execute();
   await db.schema.dropTable('complaints').ifExists().execute();

@@ -33,6 +33,7 @@ class MockDataRepository {
         captainPhone: '01198765432',
         captainVehicle: 'دراجة نارية هوجان سوداء (رقم: ٤٣٢١ م ن)',
         createdAt: DateTime.now().subtract(const Duration(minutes: 18)),
+        acceptedAt: DateTime.now().subtract(const Duration(minutes: 14)),
         notes: 'يرجى التسليم لمكتب الاستقبال الدور الثاني',
       ),
       OrderModel(
@@ -50,6 +51,7 @@ class MockDataRepository {
         captainPhone: '01055566677',
         captainVehicle: 'سكوتر بينيلي أحمر (رقم: ٨٧٦٥ م ن)',
         createdAt: DateTime.now().subtract(const Duration(minutes: 32)),
+        acceptedAt: DateTime.now().subtract(const Duration(minutes: 25)),
         notes: 'الطلب مدفوع ومجهز في المطعم',
       ),
       OrderModel(
@@ -67,6 +69,7 @@ class MockDataRepository {
         captainPhone: '01222334455',
         captainVehicle: 'دراجة نارية دايون فضية',
         createdAt: DateTime.now().subtract(const Duration(hours: 2, minutes: 15)),
+        acceptedAt: DateTime.now().subtract(const Duration(hours: 2, minutes: 10)),
         notes: 'تم التسليم والتحصيل كاش بالكامل',
       ),
     ];

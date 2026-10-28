@@ -228,6 +228,7 @@ export interface Order {
   captainPhone?: string;
   captainVehicle?: string;
   cashCollectedPiasters?: number;
+  acceptedAt?: string;
   createdAt: string;
   updatedAt: string;
 }

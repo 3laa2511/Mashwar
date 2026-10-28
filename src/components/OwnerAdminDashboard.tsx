@@ -117,7 +117,21 @@ interface AuditLog {
   descriptionAr: string;
 }
 
+import { useMarketplace } from '../store/marketplaceStore';
+
 export function OwnerAdminDashboard() {
+  const {
+    orders: marketplaceOrders,
+    captains,
+    systemSettings: settings,
+    auditLogs,
+    adminAssignCaptain,
+    adminEmergencyCancelOrder,
+    adminSettleCaptainCash,
+    adminRenewCaptainSubscription,
+    adminUpdateSettings,
+  } = useMarketplace();
+
   // Current active admin persona (RBAC demonstration)
   const [currentAdmin, setCurrentAdmin] = useState<AdminUser>(ADMIN_PERSONAS[0]);
 
@@ -126,178 +140,50 @@ export function OwnerAdminDashboard() {
     'overview'
   );
 
-  // System Settings state
-  const [settings, setSettings] = useState({
-    hubName: 'مركز عمليات الباجور - المنوفية',
-    baseFarePiasters: 1500, // 15.00 EGP
-    ratePerKmPiasters: 400, // 4.00 EGP
-    ruralSurchargePiasters: 500, // 5.00 EGP
-    platformFeePiasters: 200, // 2.00 EGP
-    cashCeilingPiasters: 100000, // 1,000.00 EGP
-    gracePeriodHours: 72,
-    monthlySubscriptionPiasters: 30000, // 300.00 EGP
-    passengerMobilityLocked: true,
-  });
-
   const [settingsFeedback, setSettingsFeedback] = useState<string | null>(null);
 
-  // Orders State
-  const [orders, setOrders] = useState<OrderItem[]>([
-    {
-      id: 'ord_bagour_8101',
-      orderNumber: 'MSH-8101',
-      customerName: 'الحاج عاطف رضوان',
-      customerPhone: '01055566671',
-      serviceType: 'package',
-      serviceTypeAr: 'توصيل مستندات وطرود',
-      status: 'delivered',
-      pickup: 'ميدان المحطة - وسط الباجور',
-      dropoff: 'قرية كفر الباجور',
-      isRural: true,
-      totalFarePiasters: 3000, // 30.00 EGP
-      codCollected: true,
-      assignedCaptainId: 'cpt_01',
-      assignedCaptainName: 'أحمد فتحي الديب',
-      createdAt: 'منذ ساعتين',
-      specialInstructions: 'أوراق رسمية هامة ومختومة',
-    },
-    {
-      id: 'ord_bagour_8102',
-      orderNumber: 'MSH-8102',
-      customerName: 'د. سحر عبد الحميد',
-      customerPhone: '01244455582',
-      serviceType: 'package',
-      serviceTypeAr: 'مستلزمات صيدلية',
-      status: 'in_transit',
-      pickup: 'مستشفى الباجور العام',
-      dropoff: 'قرية شنتنا الحجر',
-      isRural: true,
-      totalFarePiasters: 3500, // 35.00 EGP
-      codCollected: false,
-      assignedCaptainId: 'cpt_01',
-      assignedCaptainName: 'أحمد فتحي الديب',
-      createdAt: 'منذ 35 دقيقة',
-      specialInstructions: 'أدوية عاجلة تحفظ مبردة',
-    },
-    {
-      id: 'ord_bagour_8103',
-      orderNumber: 'MSH-8103',
-      customerName: 'م. إسلام عاشور',
-      customerPhone: '01133344493',
-      serviceType: 'restaurant_store',
-      serviceTypeAr: 'طلب مطاعم ومتاجر',
-      status: 'searching_captain',
-      pickup: 'شارع الجيش - برج الشروق',
-      dropoff: 'شارع الجمهورية - أمام بنك مصر',
-      isRural: false,
-      totalFarePiasters: 1700, // 17.00 EGP
-      codCollected: false,
-      createdAt: 'منذ 10 دقائق',
-      specialInstructions: 'وجبة عائلية ساخنة',
-    },
-    {
-      id: 'ord_bagour_8104',
-      orderNumber: 'MSH-8104',
-      customerName: 'كريم ممدوح',
-      customerPhone: '01566677704',
-      serviceType: 'errand',
-      serviceTypeAr: 'شراء مشاوير وقضاء حاجة',
-      status: 'cancelled',
-      pickup: 'مجلس مدينة الباجور',
-      dropoff: 'ميدان المحطة - وسط الباجور',
-      isRural: false,
-      totalFarePiasters: 1700,
-      codCollected: false,
-      createdAt: 'منذ 4 ساعات',
-      specialInstructions: 'تصوير خرائط هندسية (ألغاه العميل قبل التعيين)',
-    },
-  ]);
+  const setSettings = (updater: typeof settings | ((prev: typeof settings) => typeof settings)) => {
+    const next = typeof updater === 'function' ? updater(settings) : updater;
+    adminUpdateSettings(next, currentAdmin.name, currentAdmin.role);
+  };
 
-  // Captains State
-  const [captains, setCaptains] = useState<CaptainItem[]>([
-    {
-      id: 'cpt_01',
-      name: 'أحمد فتحي الديب',
-      phone: '01012345671',
-      vehicleType: 'موتوسيكل دايون ٤',
-      plateNumber: 'م ن ف ٤٨١٢',
-      status: 'active',
-      statusAr: 'اشتراك نشط',
-      daysRemaining: 18,
-      cashHoldingPiasters: 25000, // 250.00 EGP
-      cashCeilingPiasters: 100000, // 1,000.00 EGP
-      rating: 4.9,
-      isOnline: true,
-      completedToday: 6,
-    },
-    {
-      id: 'cpt_02',
-      name: 'محمود إبراهيم خطاب',
-      phone: '01123456782',
-      vehicleType: 'سكوتر حوا مارينو',
-      plateNumber: 'م ن ف ٩١٥٣',
-      status: 'grace_period',
-      statusAr: 'فترة سماح (مهلة ٧٢ ساعة)',
-      daysRemaining: 2,
-      cashHoldingPiasters: 45000, // 450.00 EGP
-      cashCeilingPiasters: 100000,
-      rating: 4.75,
-      isOnline: true,
-      completedToday: 4,
-    },
-    {
-      id: 'cpt_03',
-      name: 'طارق عبد المنعم الشيخ',
-      phone: '01234567893',
-      vehicleType: 'سيارة سوزوكي فان بضائع',
-      plateNumber: 'م ن ف ٧٢١٤',
-      status: 'expired',
-      statusAr: 'اشتراك منتهي (الرادار معلق)',
-      daysRemaining: 0,
-      cashHoldingPiasters: 12000, // 120.00 EGP
-      cashCeilingPiasters: 100000,
-      rating: 4.6,
-      isOnline: false,
-      completedToday: 0,
-    },
-    {
-      id: 'cpt_04',
-      name: 'مصطفى كمال النجار',
-      phone: '01098765434',
-      vehicleType: 'موتوسيكل بوكسر',
-      plateNumber: 'م ن ف ٦٣٢٨',
-      status: 'suspended',
-      statusAr: 'موقوف لتجاوز سقف النقدية',
-      daysRemaining: 20,
-      cashHoldingPiasters: 102000, // 1,020.00 EGP > 1,000.00 EGP ceiling
-      cashCeilingPiasters: 100000,
-      rating: 4.8,
-      isOnline: false,
-      completedToday: 8,
-    },
-  ]);
+  // Derive unified OrderItem[] directly from the live marketplaceOrders store
+  const orders: OrderItem[] = marketplaceOrders.map((o) => {
+    const mappedStatus: OrderItem['status'] =
+      o.status === 'delivered'
+        ? 'delivered'
+        : o.status === 'cancelled'
+        ? 'cancelled'
+        : o.status === 'in_transit' || o.status === 'at_pickup'
+        ? 'in_transit'
+        : o.status === 'captain_assigned'
+        ? 'captain_assigned'
+        : 'searching_captain';
 
-  // Audit Logs State
-  const [auditLogs, setAuditLogs] = useState<AuditLog[]>([
-    {
-      id: 'aud_01',
-      timestamp: 'اليوم ١٠:٠٠ ص',
-      actorName: 'د. علاء',
-      actorRole: 'owner',
-      actionType: 'SYSTEM_SETTINGS_UPDATED',
-      target: 'إعدادات المنظومة',
-      descriptionAr: 'اعتماد تسعيرة الانطلاق لمركز الباجور وقفل نقل الركاب طبقاً للقانون رقم ٧٣ لسنة ٢٠١٨.',
-    },
-    {
-      id: 'aud_02',
-      timestamp: 'اليوم ١١:١٥ ص',
-      actorName: 'أحمد المنوفي',
-      actorRole: 'operations_dispatcher',
-      actionType: 'MANUAL_DISPATCH_ASSIGNMENT',
-      target: 'طلب MSH-8102',
-      descriptionAr: 'تعيين الكابتن أحمد فتحي الديب لنقل شحنة مستلزمات طبية عاجلة إلى شنتنا الحجر.',
-    },
-  ]);
+    return {
+      id: o.id,
+      orderNumber: o.orderNumber.replace(/^#/, ''),
+      customerName: o.customerName,
+      customerPhone: o.customerPhone,
+      serviceType: o.serviceType || 'restaurant_store',
+      serviceTypeAr:
+        o.serviceType === 'errand'
+          ? 'مشوار خاص سريع'
+          : o.serviceType === 'package'
+          ? 'توصيل مستندات وطرود'
+          : `طلب متجر (${o.storeName})`,
+      status: mappedStatus,
+      pickup: o.storeAddress,
+      dropoff: o.deliveryAddress,
+      isRural: o.deliveryAddress.includes('قرية') || o.storeAddress.includes('قرية'),
+      totalFarePiasters: o.totalEgp * 100,
+      codCollected: o.status === 'delivered',
+      assignedCaptainId: o.assignedCaptainId,
+      assignedCaptainName: o.assignedCaptainName,
+      createdAt: o.acceptedAt ? `${o.createdAt} • قُبل ${o.acceptedAt}` : o.createdAt,
+      specialInstructions: o.notes || o.itemDescription,
+    };
+  });
 
   // Modals state
   const [selectedOrderForDispatch, setSelectedOrderForDispatch] = useState<OrderItem | null>(null);
@@ -351,30 +237,8 @@ export function OwnerAdminDashboard() {
       return;
     }
 
-    setOrders((prev) =>
-      prev.map((o) =>
-        o.id === selectedOrderForDispatch.id
-          ? {
-              ...o,
-              status: 'captain_assigned',
-              assignedCaptainId: captain.id,
-              assignedCaptainName: captain.name,
-            }
-          : o
-      )
-    );
-
-    const newLog: AuditLog = {
-      id: `aud_${Date.now()}`,
-      timestamp: 'الآن',
-      actorName: currentAdmin.name,
-      actorRole: currentAdmin.role,
-      actionType: 'MANUAL_DISPATCH_ASSIGNMENT',
-      target: `طلب ${selectedOrderForDispatch.orderNumber}`,
-      descriptionAr: `تدخل يدوي من العمليات: تعيين الكابتن ${captain.name} للطلب ${selectedOrderForDispatch.orderNumber}.`,
-    };
-    setAuditLogs((prev) => [newLog, ...prev]);
-    showInlineMessage('success', `تم تعيين الكابتن ${captain.name} للطلب ${selectedOrderForDispatch.orderNumber} بنجاح.`);
+    adminAssignCaptain(selectedOrderForDispatch.id, captainId, currentAdmin.name, currentAdmin.role);
+    showInlineMessage('success', `تم تعيين الكابتن ${captain.name} للطلب ${selectedOrderForDispatch.orderNumber} بنجاح وتحديث شاشة العميل والكابتن فوراً.`);
     setSelectedOrderForDispatch(null);
   };
 
@@ -382,25 +246,8 @@ export function OwnerAdminDashboard() {
   const handleEmergencyCancel = () => {
     if (!cancelOrderModal || !cancellationReason.trim()) return;
 
-    setOrders((prev) =>
-      prev.map((o) =>
-        o.id === cancelOrderModal.id
-          ? { ...o, status: 'cancelled', specialInstructions: `[إلغاء إداري: ${cancellationReason}]` }
-          : o
-      )
-    );
-
-    const newLog: AuditLog = {
-      id: `aud_${Date.now()}`,
-      timestamp: 'الآن',
-      actorName: currentAdmin.name,
-      actorRole: currentAdmin.role,
-      actionType: 'ORDER_EMERGENCY_CANCELLED',
-      target: `طلب ${cancelOrderModal.orderNumber}`,
-      descriptionAr: `إلغاء إداري للطلب ${cancelOrderModal.orderNumber}. السبب: ${cancellationReason}.`,
-    };
-    setAuditLogs((prev) => [newLog, ...prev]);
-    showInlineMessage('success', `تم إلغاء الطلب ${cancelOrderModal.orderNumber} وتوثيق السبب في سجل العمليات.`);
+    adminEmergencyCancelOrder(cancelOrderModal.id, cancellationReason, currentAdmin.name, currentAdmin.role);
+    showInlineMessage('success', `تم إلغاء الطلب ${cancelOrderModal.orderNumber} وتوثيق السبب في سجل العمليات الموحد.`);
 
     setCancelOrderModal(null);
     setCancellationReason('');
@@ -417,35 +264,7 @@ export function OwnerAdminDashboard() {
       return;
     }
 
-    setCaptains((prev) =>
-      prev.map((c) => {
-        if (c.id === selectedCaptainForSettle.id) {
-          const newHolding = Math.max(0, c.cashHoldingPiasters - amountPiasters);
-          const newStatus =
-            c.status === 'suspended' && newHolding < c.cashCeilingPiasters
-              ? 'active'
-              : c.status;
-          return {
-            ...c,
-            cashHoldingPiasters: newHolding,
-            status: newStatus,
-            statusAr: newStatus === 'active' ? 'اشتراك نشط' : c.statusAr,
-          };
-        }
-        return c;
-      })
-    );
-
-    const newLog: AuditLog = {
-      id: `aud_${Date.now()}`,
-      timestamp: 'الآن',
-      actorName: currentAdmin.name,
-      actorRole: currentAdmin.role,
-      actionType: 'CAPTAIN_CASH_SETTLED',
-      target: `كابتن ${selectedCaptainForSettle.name}`,
-      descriptionAr: `توريد وتسوية نقدية بمبلغ ${amountEgp.toFixed(2)} ج.م للكابتن ${selectedCaptainForSettle.name}. تم إيداع المبلغ بخزينة مركز الباجور.`,
-    };
-    setAuditLogs((prev) => [newLog, ...prev]);
+    adminSettleCaptainCash(selectedCaptainForSettle.id, amountEgp, currentAdmin.name, currentAdmin.role);
     showInlineMessage('success', `تم توريد وتسوية ${amountEgp.toFixed(2)} ج.م للكابتن ${selectedCaptainForSettle.name}.`);
 
     setSelectedCaptainForSettle(null);
@@ -462,29 +281,7 @@ export function OwnerAdminDashboard() {
     const captain = captains.find((c) => c.id === captainId);
     if (!captain) return;
 
-    setCaptains((prev) =>
-      prev.map((c) =>
-        c.id === captainId
-          ? {
-              ...c,
-              status: 'active',
-              statusAr: 'اشتراك نشط',
-              daysRemaining: 30,
-            }
-          : c
-      )
-    );
-
-    const newLog: AuditLog = {
-      id: `aud_${Date.now()}`,
-      timestamp: 'الآن',
-      actorName: currentAdmin.name,
-      actorRole: currentAdmin.role,
-      actionType: 'CAPTAIN_SUBSCRIPTION_RENEWED',
-      target: `كابتن ${captain.name}`,
-      descriptionAr: `تجديد الاشتراك الشهري للكابتن ${captain.name} لمدة ٣٠ يوماً (بنسبة ٠٪ عمولة على الرحلات).`,
-    };
-    setAuditLogs((prev) => [newLog, ...prev]);
+    adminRenewCaptainSubscription(captainId, currentAdmin.name, currentAdmin.role);
     showInlineMessage('success', `تم تجديد اشتراك الكابتن ${captain.name} لمدة ٣٠ يوماً بنجاح.`);
   };
 
@@ -495,19 +292,9 @@ export function OwnerAdminDashboard() {
       return;
     }
 
+    adminUpdateSettings(settings, currentAdmin.name, currentAdmin.role);
     setSettingsFeedback('تم حفظ وتحديث إعدادات التسعيرة لمركز الباجور بنجاح.');
     setTimeout(() => setSettingsFeedback(null), 4000);
-
-    const newLog: AuditLog = {
-      id: `aud_${Date.now()}`,
-      timestamp: 'الآن',
-      actorName: currentAdmin.name,
-      actorRole: currentAdmin.role,
-      actionType: 'PRICING_CONFIG_UPDATED',
-      target: 'تعريفة مركز الباجور',
-      descriptionAr: `تعديل معايير التسعيرة: الأجرة الأساسية ${(settings.baseFarePiasters / 100).toFixed(2)} ج.م، الكيلومتر ${(settings.ratePerKmPiasters / 100).toFixed(2)} ج.م، بدل القرى ${(settings.ruralSurchargePiasters / 100).toFixed(2)} ج.م.`,
-    };
-    setAuditLogs((prev) => [newLog, ...prev]);
   };
 
   const filteredOrders = orders.filter((o) => {
