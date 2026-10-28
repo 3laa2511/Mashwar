@@ -24,10 +24,20 @@ export function getDb(): Kysely<Database> | null {
   }
 
   if (!dbInstance) {
+    const requiresTls =
+      process.env.NODE_ENV === 'production' ||
+      connectionString.toLowerCase().includes('supabase');
+    const ca = process.env.PG_SSL_CA;
+
     pgPoolInstance = new Pool({
       connectionString,
-      ssl: process.env.NODE_ENV === 'production' || connectionString.includes('supabase')
-        ? { rejectUnauthorized: false }
+      // Production and Supabase connections must validate the server certificate.
+      // Provide PG_SSL_CA when the provider uses a private/non-system CA.
+      ssl: requiresTls
+        ? {
+            rejectUnauthorized: true,
+            ...(ca ? { ca } : {}),
+          }
         : false,
       max: Number(process.env.PG_MAX_POOL || 20),
       idleTimeoutMillis: 30000,
