@@ -246,6 +246,7 @@ class HttpOrderRepository implements IOrderRepository {
       case 'passenger':
         return OrderServiceType.passengerRestricted;
       case 'package':
+        return OrderServiceType.package;
       default:
         return OrderServiceType.package;
     }
