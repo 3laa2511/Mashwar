@@ -352,9 +352,13 @@ class _CustomerHomeScreenState extends ConsumerState<CustomerHomeScreen> {
                           Row(
                             mainAxisAlignment: MainAxisAlignment.spaceBetween,
                             children: [
-                              Text(
-                                'من: ${order.pickupAddress} ➔ ${order.dropoffAddress}',
-                                style: const TextStyle(fontSize: 11, color: AppColors.slate600),
+                              Expanded(
+                                child: Text(
+                                  'من: ${order.pickupAddress} ➔ ${order.dropoffAddress}',
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: const TextStyle(fontSize: 11, color: AppColors.slate600),
+                                ),
                               ),
                               const Icon(Icons.arrow_forward_ios, size: 12, color: AppColors.slate400),
                             ],
