@@ -15,6 +15,7 @@ abstract class IOrderRepository {
     OrderModel newOrder, {
     String? quoteId,
     String? quoteSignature,
+    String? quoteExpiresAt,
   });
 
   /// Authoritatively transitions an order status in accordance with backend FSM rules.
