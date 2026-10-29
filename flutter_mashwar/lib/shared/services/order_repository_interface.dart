@@ -16,6 +16,7 @@ abstract class IOrderRepository {
     String? quoteId,
     String? quoteSignature,
     String? quoteExpiresAt,
+    int? totalFarePiasters,
   });
 
   /// Authoritatively transitions an order status in accordance with backend FSM rules.
@@ -37,5 +38,8 @@ abstract class IOrderRepository {
   Future<FareQuoteModel> getFareQuote({
     required double distanceKm,
     bool isRuralOrVillage = false,
+    String serviceTypeId = 'package',
+    String? cityId,
+    String? zoneId,
   });
 }
