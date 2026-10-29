@@ -155,7 +155,7 @@ export const EgyptianMapCanvas: React.FC<EgyptianMapCanvasProps> = ({
               strokeLinecap="round"
               strokeLinejoin="round"
             />
-            {/* Route Line */}
+            {/* Route Line with animated flow */}
             <path
               d="M 205 285 L 205 380 L 215 440 L 260 455"
               fill="none"
@@ -163,9 +163,24 @@ export const EgyptianMapCanvas: React.FC<EgyptianMapCanvasProps> = ({
               strokeWidth="5"
               strokeLinecap="round"
               strokeLinejoin="round"
-              strokeDasharray="8 3"
-              className="animate-pulse"
-            />
+              strokeDasharray="10 6"
+            >
+              <animate
+                attributeName="stroke-dashoffset"
+                from="32"
+                to="0"
+                dur="1.4s"
+                repeatCount="indefinite"
+              />
+            </path>
+            {/* Animated Live Captain Rider Marker moving along route */}
+            <circle r="6" fill="#047857" stroke="#ffffff" strokeWidth="2">
+              <animateMotion
+                path="M 205 285 L 205 380 L 215 440 L 260 455"
+                dur="4.5s"
+                repeatCount="indefinite"
+              />
+            </circle>
           </g>
         )}
       </svg>

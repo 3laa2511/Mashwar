@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   Search,
   MapPin,
@@ -10,6 +10,8 @@ import {
   ArrowRight,
   ShieldCheck,
   ChevronLeft,
+  ChevronDown,
+  ChevronUp,
   Navigation,
   Phone,
   MessageSquare,
@@ -30,13 +32,22 @@ import {
   ArrowUpDown,
   HeadphonesIcon,
   Zap,
-  Lock
+  Lock,
+  RefreshCw,
+  Share2,
+  Edit3,
+  FileText,
+  DollarSign,
+  Copy,
+  Check,
+  Activity
 } from 'lucide-react';
 import { EgyptianMapCanvas } from './EgyptianMapCanvas';
 import {
   useMarketplace,
   StoreItem,
   ProductItem,
+  MarketplaceOrder,
   EL_BAGOUR_LANDMARKS_LIST,
   formatHumanReadableAcceptedTimestamp
 } from '../../store/marketplaceStore';
@@ -83,6 +94,10 @@ export const CustomerMobileExperience: React.FC<CustomerMobileExperienceProps> =
     submitRideOrPackageOrder,
     simulateInstantCaptainAccept,
     customerCancelOrder,
+    rateOrderCaptain,
+    updateOrderNotes,
+    updateOrderFeedback,
+    refreshOrderStatus,
     activeCustomerOrder,
     chatMessages,
     sendChatMessage,
@@ -94,10 +109,21 @@ export const CustomerMobileExperience: React.FC<CustomerMobileExperienceProps> =
     markAllNotificationsRead,
     complaints,
     submitComplaint,
+    customerNavTab,
+    setCustomerNavTab,
   } = useMarketplace();
 
   // Navigation tab: home | ride_booking | stores | history | profile
-  const [activeTab, setActiveTab] = useState<'home' | 'ride_booking' | 'stores' | 'history' | 'profile'>('home');
+  const [activeTab, setActiveTabState] = useState<'home' | 'ride_booking' | 'stores' | 'history' | 'profile'>(customerNavTab);
+
+  useEffect(() => {
+    setActiveTabState(customerNavTab);
+  }, [customerNavTab]);
+
+  const setActiveTab = (tab: 'home' | 'ride_booking' | 'stores' | 'history' | 'profile') => {
+    setActiveTabState(tab);
+    setCustomerNavTab(tab);
+  };
 
   // Browsing & Store Views
   const [selectedStore, setSelectedStore] = useState<StoreItem | null>(null);
@@ -146,6 +172,151 @@ export const CustomerMobileExperience: React.FC<CustomerMobileExperienceProps> =
   // Chat modal state
   const [showChatModal, setShowChatModal] = useState(false);
   const [inputChatText, setInputChatText] = useState('');
+
+  // =========================================================================
+  // NEW INTEGRATED MOBILE TRACKING & ORDER HISTORY UX STATES
+  // =========================================================================
+  const [isTrackingSheetMinimized, setIsTrackingSheetMinimized] = useState(false);
+  const [activeInlineTool, setActiveInlineTool] = useState<'none' | 'notes' | 'tip' | 'share'>('none');
+  const [isVerticalTimelineExpanded, setIsVerticalTimelineExpanded] = useState(false);
+  const [isFareBreakdownOpen, setIsFareBreakdownOpen] = useState(false);
+
+  // Dynamic ETA Countdown Timer state inside mobile app
+  const activeDurationMinutes =
+    activeCustomerOrder?.estimatedDuration ??
+    activeCustomerOrder?.estimatedDurationMinutes ??
+    (activeCustomerOrder?.estimatedMinutes
+      ? parseInt(
+          String(activeCustomerOrder.estimatedMinutes)
+            .replace(/[٠-٩]/g, (d) => String('٠١٢٣٤٥٦٧٨٩'.indexOf(d)))
+            .match(/\d+/)?.[0] || '18',
+          10
+        )
+      : 18);
+  const [mobileEtaSeconds, setMobileEtaSeconds] = useState<number>(activeDurationMinutes * 60);
+
+  useEffect(() => {
+    setMobileEtaSeconds(activeDurationMinutes * 60);
+  }, [activeCustomerOrder?.id, activeDurationMinutes]);
+
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      setMobileEtaSeconds((prev) => (prev > 0 ? prev - 1 : 0));
+    }, 1000);
+    return () => window.clearInterval(timer);
+  }, []);
+
+  const formattedMobileEta = `${String(Math.floor(mobileEtaSeconds / 60)).padStart(2, '0')}:${String(
+    mobileEtaSeconds % 60
+  ).padStart(2, '0')}`;
+
+  // Manual Refresh with visual progress bar feedback inside mobile app
+  const [isRefreshingMobile, setIsRefreshingMobile] = useState(false);
+  const [mobileRefreshProgress, setMobileRefreshProgress] = useState(0);
+  const [mobileRefreshDone, setMobileRefreshDone] = useState(false);
+
+  const handleMobileManualRefresh = async () => {
+    if (isRefreshingMobile || !activeCustomerOrder) return;
+    setIsRefreshingMobile(true);
+    setMobileRefreshDone(false);
+    setMobileRefreshProgress(30);
+    await new Promise((r) => setTimeout(r, 120));
+    setMobileRefreshProgress(75);
+    await refreshOrderStatus(activeCustomerOrder.id);
+    setMobileRefreshProgress(100);
+    setIsRefreshingMobile(false);
+    setMobileRefreshDone(true);
+    setIsTimelinePulsingMobile(true);
+    setTimeout(() => {
+      setMobileRefreshProgress(0);
+      setMobileRefreshDone(false);
+    }, 1800);
+  };
+
+  // Subtle Pulse Animation on Status Timeline whenever order status changes
+  const [isTimelinePulsingMobile, setIsTimelinePulsingMobile] = useState(false);
+  const prevMobileStatusRef = useRef<string | undefined>(activeCustomerOrder?.status);
+
+  useEffect(() => {
+    if (
+      activeCustomerOrder?.status &&
+      prevMobileStatusRef.current &&
+      prevMobileStatusRef.current !== activeCustomerOrder.status
+    ) {
+      setIsTimelinePulsingMobile(true);
+    }
+    prevMobileStatusRef.current = activeCustomerOrder?.status;
+  }, [activeCustomerOrder?.status]);
+
+  useEffect(() => {
+    if (!isTimelinePulsingMobile) return;
+    const t = window.setTimeout(() => setIsTimelinePulsingMobile(false), 2200);
+    return () => window.clearTimeout(t);
+  }, [isTimelinePulsingMobile]);
+
+  // Inline Edit Order Notes state inside mobile app
+  const [mobileNotesDraft, setMobileNotesDraft] = useState<string>(
+    activeCustomerOrder?.orderNotes ?? activeCustomerOrder?.notes ?? ''
+  );
+  const [mobileNotesSaved, setMobileNotesSaved] = useState(false);
+
+  useEffect(() => {
+    setMobileNotesDraft(activeCustomerOrder?.orderNotes ?? activeCustomerOrder?.notes ?? '');
+  }, [activeCustomerOrder?.id, activeCustomerOrder?.orderNotes, activeCustomerOrder?.notes]);
+
+  const handleSaveMobileOrderNotes = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!activeCustomerOrder) return;
+    updateOrderNotes(activeCustomerOrder.id, mobileNotesDraft.trim());
+    setMobileNotesSaved(true);
+    setTimeout(() => setMobileNotesSaved(false), 2000);
+  };
+
+  // Add Tip (Captain Gratuity) state inside mobile app
+  const [mobileTipEgp, setMobileTipEgp] = useState<number>(0);
+  const [mobileCustomTipInput, setMobileCustomTipInput] = useState<string>('');
+
+  const handleSelectMobilePresetTip = (amount: number) => {
+    setMobileTipEgp(amount);
+    setMobileCustomTipInput(String(amount));
+    setIsFareBreakdownOpen(true);
+  };
+
+  const handleApplyMobileCustomTip = (e: React.FormEvent) => {
+    e.preventDefault();
+    const parsed = Math.max(0, Math.round(Number(mobileCustomTipInput) || 0));
+    setMobileTipEgp(parsed);
+    setIsFareBreakdownOpen(true);
+  };
+
+  // Share Live Link state inside mobile app
+  const [mobileLiveLinkCopied, setMobileLiveLinkCopied] = useState(false);
+  const mobileLiveTrackingUrl = activeCustomerOrder
+    ? `https://mashwar-bagour.eg/live/${encodeURIComponent(activeCustomerOrder.orderNumber)}?token=bagour_live`
+    : '';
+
+  const handleCopyMobileLiveLink = () => {
+    if (!mobileLiveTrackingUrl) return;
+    if (typeof navigator !== 'undefined' && navigator.clipboard?.writeText) {
+      navigator.clipboard.writeText(mobileLiveTrackingUrl).catch(() => {});
+    }
+    setMobileLiveLinkCopied(true);
+    setTimeout(() => setMobileLiveLinkCopied(false), 2000);
+  };
+
+  // Modals / Bottom Sheets inside mobile phone frame
+  const [showCaptainProfileModal, setShowCaptainProfileModal] = useState(false);
+  const [showCallCaptainModal, setShowCallCaptainModal] = useState(false);
+  const [copiedCaptainPhone, setCopiedCaptainPhone] = useState(false);
+  const [showCancelConfirmModal, setShowCancelConfirmModal] = useState(false);
+  const [showSosEmergencyModal, setShowSosEmergencyModal] = useState(false);
+  const [mobileSosLocationShared, setMobileSosLocationShared] = useState(false);
+  const [mobileSosCalledService, setMobileSosCalledService] = useState<string | null>(null);
+  const [summarySheetOrder, setSummarySheetOrder] = useState<MarketplaceOrder | null>(null);
+
+  // Order History Feedback drafts & saved indicators
+  const [historyFeedbackDrafts, setHistoryFeedbackDrafts] = useState<Record<string, string>>({});
+  const [historyFeedbackSavedMap, setHistoryFeedbackSavedMap] = useState<Record<string, boolean>>({});
 
   // Selected pickup & dropoff landmark objects
   const pickupLandmark = EL_BAGOUR_LANDMARKS_LIST.find((l) => l.id === pickupLandmarkId) || EL_BAGOUR_LANDMARKS_LIST[0];
@@ -526,10 +697,110 @@ export const CustomerMobileExperience: React.FC<CustomerMobileExperienceProps> =
               />
             </div>
 
-            {/* If there is an active order in progress: show Live Tracking Sheet */}
-            {activeCustomerOrder ? (
-              <div className="relative z-10 mt-auto bg-white rounded-t-3xl p-4 shadow-2xl border-t border-slate-100 flex flex-col gap-2.5 max-h-[88%] overflow-y-auto">
-                <div className="w-10 h-1 bg-slate-200 rounded-full mx-auto" />
+            {/* If there is an active order in progress AND sheet is minimized: show floating mini-tracker + full Home Service Hub */}
+            {activeCustomerOrder && isTrackingSheetMinimized && (
+              <div className="relative z-10 p-3 pb-0">
+                <div className="bg-slate-900/95 backdrop-blur-md text-white rounded-2xl p-3 shadow-xl border border-slate-800 flex items-center justify-between gap-2">
+                  <div className="flex items-center gap-2.5 min-w-0">
+                    <span className="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-ping shrink-0" />
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-1.5">
+                        <span className="font-extrabold text-xs text-white truncate">
+                          طلب نشط {activeCustomerOrder.orderNumber}
+                        </span>
+                        <span className="text-[10px] font-mono font-black text-amber-300 bg-amber-500/20 px-1.5 py-0.5 rounded-md border border-amber-400/30">
+                          ETA {formattedMobileEta}
+                        </span>
+                      </div>
+                      <p className="text-[10px] text-slate-300 truncate mt-0.5">
+                        {activeCustomerOrder.storeName} • {activeCustomerOrder.totalEgp + mobileTipEgp}.00 ج.م
+                      </p>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setIsTrackingSheetMinimized(false)}
+                    className="px-3 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-[11px] font-extrabold flex items-center gap-1 shrink-0 shadow-sm cursor-pointer"
+                  >
+                    <span>توسيع التتبع</span>
+                    <ChevronUp className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {/* If there is an active order in progress and not minimized: show Cohesive Live Tracking Sheet */}
+            {activeCustomerOrder && !isTrackingSheetMinimized ? (
+              <div className="relative z-10 mt-auto bg-white rounded-t-3xl p-3.5 shadow-2xl border-t border-slate-100 flex flex-col gap-2.5 max-h-[89%] overflow-y-auto">
+                {/* Sheet Top Bar: Drag Handle + Minimize Toggle + SOS & Refresh */}
+                <div className="flex items-center justify-between gap-2 pb-1 border-b border-slate-100">
+                  <button
+                    type="button"
+                    onClick={() => setIsTrackingSheetMinimized(true)}
+                    className="text-[10px] font-bold text-slate-500 hover:text-slate-800 bg-slate-100 hover:bg-slate-200/80 px-2 py-1 rounded-lg flex items-center gap-1 transition cursor-pointer"
+                    title="تصغير بطاقة التتبع لعرض الخريطة والخدمات"
+                  >
+                    <ChevronDown className="w-3 h-3" />
+                    <span>تصغير للخريطة</span>
+                  </button>
+
+                  <div className="w-10 h-1 bg-slate-300 rounded-full" />
+
+                  <div className="flex items-center gap-1.5">
+                    {/* Manual Refresh Button with Progress Bar */}
+                    <button
+                      type="button"
+                      onClick={handleMobileManualRefresh}
+                      disabled={isRefreshingMobile}
+                      className={`relative overflow-hidden px-2.5 py-1 rounded-lg border text-[10px] font-extrabold flex flex-col items-center justify-center transition cursor-pointer ${
+                        isRefreshingMobile
+                          ? 'bg-emerald-50 border-emerald-300 text-emerald-800'
+                          : mobileRefreshDone
+                          ? 'bg-emerald-50 border-emerald-300 text-emerald-800'
+                          : 'bg-slate-100 hover:bg-slate-200/80 border-slate-200 text-slate-700'
+                      }`}
+                    >
+                      <div className="flex items-center gap-1">
+                        <RefreshCw className={`w-3 h-3 text-emerald-700 ${isRefreshingMobile ? 'animate-spin' : ''}`} />
+                        <span>
+                          {isRefreshingMobile
+                            ? 'جاري التحديث...'
+                            : mobileRefreshDone
+                            ? 'تم التحديث ✓'
+                            : 'تحديث'}
+                        </span>
+                      </div>
+                      {(isRefreshingMobile || mobileRefreshProgress > 0) && (
+                        <div className="w-full h-0.5 bg-slate-200 rounded-full overflow-hidden mt-0.5">
+                          <div
+                            className={`h-full bg-emerald-600 transition-all duration-150 ${
+                              mobileRefreshProgress >= 100
+                                ? 'w-full'
+                                : mobileRefreshProgress >= 70
+                                ? 'w-3/4'
+                                : 'w-1/3'
+                            }`}
+                          />
+                        </div>
+                      )}
+                    </button>
+
+                    {/* SOS Emergency Assistance Button */}
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setMobileSosLocationShared(false);
+                        setMobileSosCalledService(null);
+                        setShowSosEmergencyModal(true);
+                      }}
+                      className="px-2.5 py-1 rounded-lg bg-rose-50 hover:bg-rose-100 border border-rose-200 text-rose-700 text-[10px] font-black flex items-center gap-1 transition cursor-pointer"
+                      title="طوارئ الباجور ومشاركة الموقع"
+                    >
+                      <ShieldCheck className="w-3 h-3 text-rose-600" />
+                      <span>SOS طوارئ</span>
+                    </button>
+                  </div>
+                </div>
 
                 {/* Status Header */}
                 <div className="flex items-center justify-between gap-2">
@@ -555,113 +826,248 @@ export const CustomerMobileExperience: React.FC<CustomerMobileExperienceProps> =
                   </span>
                 </div>
 
-                {/* PROMINENT HUMAN-READABLE ACCEPTED TIMESTAMP BADGE */}
-                {activeAcceptedTimestampText ? (
-                  <div
-                    data-testid="active-order-accepted-timestamp"
-                    className="px-3 py-2 rounded-xl bg-emerald-50/90 border border-emerald-200/90 flex items-center justify-between text-xs text-emerald-950 shadow-2xs"
-                  >
-                    <div className="flex items-center gap-1.5 font-extrabold">
-                      <Clock className="w-3.5 h-3.5 text-emerald-700 shrink-0" />
-                      <span>وقت قبول الطلب:</span>
+                {/* Dual Metric Strip: Accepted Timestamp + Dynamic ETA Countdown Timer */}
+                <div className="grid grid-cols-2 gap-2">
+                  {/* Accepted Timestamp Box */}
+                  {activeAcceptedTimestampText ? (
+                    <div
+                      data-testid="active-order-accepted-timestamp"
+                      className="p-2 rounded-xl bg-emerald-50/90 border border-emerald-200/90 flex flex-col justify-between text-[11px] text-emerald-950"
+                    >
+                      <div className="flex items-center gap-1 font-bold text-emerald-800">
+                        <Clock className="w-3 h-3 text-emerald-700 shrink-0" />
+                        <span>وقت قبول الطلب:</span>
+                      </div>
+                      <span className="font-black text-emerald-900 text-[11px] mt-0.5 truncate">
+                        {activeAcceptedTimestampText}
+                      </span>
                     </div>
-                    <span className="font-black text-emerald-800 dir-rtl">
-                      {activeAcceptedTimestampText}
-                    </span>
-                  </div>
-                ) : (
-                  <div
-                    data-testid="active-order-pending-timestamp"
-                    className="px-3 py-1.5 rounded-xl bg-amber-50 border border-amber-200/80 flex items-center justify-between text-[11px] text-amber-900"
-                  >
-                    <span className="font-bold flex items-center gap-1.5">
-                      <Clock className="w-3.5 h-3.5 text-amber-600 animate-spin" />
-                      <span>وقت إنشاء الطلب: {activeCustomerOrder.createdAt}</span>
-                    </span>
-                    <span className="font-extrabold text-amber-800">بانتظار تسجيل وقت القبول...</span>
-                  </div>
-                )}
+                  ) : (
+                    <div
+                      data-testid="active-order-pending-timestamp"
+                      className="p-2 rounded-xl bg-amber-50 border border-amber-200/80 flex flex-col justify-between text-[11px] text-amber-900"
+                    >
+                      <span className="font-bold flex items-center gap-1">
+                        <Clock className="w-3 h-3 text-amber-600 animate-spin" />
+                        <span>الإنشاء: {activeCustomerOrder.createdAt}</span>
+                      </span>
+                      <span className="font-extrabold text-amber-800 text-[10px] mt-0.5">بانتظار القبول...</span>
+                    </div>
+                  )}
 
-                {/* Progress Stepper (Adapts to Store Order vs Direct Ride/Package) */}
-                {activeCustomerOrder.serviceType === 'restaurant_store' ? (
-                  <div className="grid grid-cols-4 gap-1 text-center text-[9px] font-bold">
-                    <div
-                      className={`p-1.5 rounded-lg ${
-                        ['created', 'accepted_by_store', 'preparing', 'merchant_accepted', 'ready_for_pickup', 'captain_assigned', 'at_pickup', 'picked_up', 'in_transit', 'delivered'].includes(activeCustomerOrder.status)
-                          ? 'bg-emerald-700 text-white'
-                          : 'bg-slate-100 text-slate-400'
-                      }`}
-                    >
-                      ١. إرسال الطلب
+                  {/* Dynamic ETA Countdown Box */}
+                  <div className="p-2 rounded-xl bg-slate-900 text-white border border-slate-800 flex items-center justify-between">
+                    <div>
+                      <span className="text-[10px] text-slate-400 font-bold block">الوصول المتوقع (ETA)</span>
+                      <span className="font-mono font-black text-sm text-amber-400">
+                        {formattedMobileEta}
+                      </span>
                     </div>
-                    <div
-                      className={`p-1.5 rounded-lg ${
-                        ['accepted_by_store', 'preparing', 'merchant_accepted', 'ready_for_pickup', 'captain_assigned', 'at_pickup', 'picked_up', 'in_transit', 'delivered'].includes(activeCustomerOrder.status)
-                          ? 'bg-emerald-700 text-white'
-                          : 'bg-slate-100 text-slate-400'
-                      }`}
-                    >
-                      ٢. قبول وتجهيز
-                    </div>
-                    <div
-                      className={`p-1.5 rounded-lg ${
-                        ['ready_for_pickup', 'captain_assigned', 'at_pickup', 'picked_up', 'in_transit', 'delivered'].includes(activeCustomerOrder.status)
-                          ? 'bg-emerald-700 text-white'
-                          : 'bg-slate-100 text-slate-400'
-                      }`}
-                    >
-                      ٣. مع الكابتن
-                    </div>
-                    <div
-                      className={`p-1.5 rounded-lg ${
-                        activeCustomerOrder.status === 'delivered'
-                          ? 'bg-emerald-700 text-white'
-                          : 'bg-slate-100 text-slate-400'
-                      }`}
-                    >
-                      ٤. تم التسليم
-                    </div>
+                    <span className="text-[10px] font-bold text-emerald-300 bg-emerald-950/90 px-2 py-0.5 rounded-lg border border-emerald-800">
+                      ~{activeDurationMinutes} د
+                    </span>
                   </div>
-                ) : (
-                  <div className="grid grid-cols-4 gap-1 text-center text-[9px] font-bold">
-                    <div
-                      className={`p-1.5 rounded-lg ${
-                        ['searching_captain', 'captain_assigned', 'at_pickup', 'picked_up', 'in_transit', 'delivered'].includes(activeCustomerOrder.status)
-                          ? 'bg-emerald-700 text-white'
-                          : 'bg-slate-100 text-slate-400'
-                      }`}
-                    >
-                      ١. طلب كابتن
+                </div>
+
+                {/* Horizontal Stepper + Expandable Vertical Status Timeline (with Pulse Animation) */}
+                <div
+                  className={`flex flex-col gap-2 rounded-2xl transition-all duration-500 ${
+                    isTimelinePulsingMobile
+                      ? 'ring-2 ring-emerald-500/50 bg-emerald-50/50 p-2 animate-pulse'
+                      : ''
+                  }`}
+                >
+                  {activeCustomerOrder.serviceType === 'restaurant_store' ? (
+                    <div className="grid grid-cols-4 gap-1 text-center text-[9px] font-bold">
+                      <div
+                        className={`p-1.5 rounded-lg ${
+                          ['created', 'accepted_by_store', 'preparing', 'merchant_accepted', 'ready_for_pickup', 'captain_assigned', 'at_pickup', 'picked_up', 'in_transit', 'delivered'].includes(activeCustomerOrder.status)
+                            ? 'bg-emerald-700 text-white'
+                            : 'bg-slate-100 text-slate-400'
+                        }`}
+                      >
+                        ١. إرسال الطلب
+                      </div>
+                      <div
+                        className={`p-1.5 rounded-lg ${
+                          ['accepted_by_store', 'preparing', 'merchant_accepted', 'ready_for_pickup', 'captain_assigned', 'at_pickup', 'picked_up', 'in_transit', 'delivered'].includes(activeCustomerOrder.status)
+                            ? 'bg-emerald-700 text-white'
+                            : 'bg-slate-100 text-slate-400'
+                        }`}
+                      >
+                        ٢. قبول وتجهيز
+                      </div>
+                      <div
+                        className={`p-1.5 rounded-lg ${
+                          ['ready_for_pickup', 'captain_assigned', 'at_pickup', 'picked_up', 'in_transit', 'delivered'].includes(activeCustomerOrder.status)
+                            ? 'bg-emerald-700 text-white'
+                            : 'bg-slate-100 text-slate-400'
+                        }`}
+                      >
+                        ٣. مع الكابتن
+                      </div>
+                      <div
+                        className={`p-1.5 rounded-lg ${
+                          activeCustomerOrder.status === 'delivered'
+                            ? 'bg-emerald-700 text-white'
+                            : 'bg-slate-100 text-slate-400'
+                        }`}
+                      >
+                        ٤. تم التسليم
+                      </div>
                     </div>
-                    <div
-                      className={`p-1.5 rounded-lg ${
-                        ['captain_assigned', 'at_pickup', 'picked_up', 'in_transit', 'delivered'].includes(activeCustomerOrder.status)
-                          ? 'bg-emerald-700 text-white'
-                          : 'bg-slate-100 text-slate-400'
-                      }`}
-                    >
-                      ٢. قبول الكابتن
+                  ) : (
+                    <div className="grid grid-cols-4 gap-1 text-center text-[9px] font-bold">
+                      <div
+                        className={`p-1.5 rounded-lg ${
+                          ['searching_captain', 'captain_assigned', 'at_pickup', 'picked_up', 'in_transit', 'delivered'].includes(activeCustomerOrder.status)
+                            ? 'bg-emerald-700 text-white'
+                            : 'bg-slate-100 text-slate-400'
+                        }`}
+                      >
+                        ١. طلب كابتن
+                      </div>
+                      <div
+                        className={`p-1.5 rounded-lg ${
+                          ['captain_assigned', 'at_pickup', 'picked_up', 'in_transit', 'delivered'].includes(activeCustomerOrder.status)
+                            ? 'bg-emerald-700 text-white'
+                            : 'bg-slate-100 text-slate-400'
+                        }`}
+                      >
+                        ٢. قبول الكابتن
+                      </div>
+                      <div
+                        className={`p-1.5 rounded-lg ${
+                          ['at_pickup', 'picked_up', 'in_transit', 'delivered'].includes(activeCustomerOrder.status)
+                            ? 'bg-emerald-700 text-white'
+                            : 'bg-slate-100 text-slate-400'
+                        }`}
+                      >
+                        ٣. في الطريق
+                      </div>
+                      <div
+                        className={`p-1.5 rounded-lg ${
+                          activeCustomerOrder.status === 'delivered'
+                            ? 'bg-emerald-700 text-white'
+                            : 'bg-slate-100 text-slate-400'
+                        }`}
+                      >
+                        ٤. الوصول
+                      </div>
                     </div>
-                    <div
-                      className={`p-1.5 rounded-lg ${
-                        ['at_pickup', 'picked_up', 'in_transit', 'delivered'].includes(activeCustomerOrder.status)
-                          ? 'bg-emerald-700 text-white'
-                          : 'bg-slate-100 text-slate-400'
-                      }`}
+                  )}
+
+                  {/* Toggle for Detailed Vertical Status Timeline */}
+                  <div className="flex items-center justify-between px-1">
+                    <button
+                      type="button"
+                      onClick={() => setIsVerticalTimelineExpanded((prev) => !prev)}
+                      className="text-[10px] font-extrabold text-emerald-800 hover:text-emerald-950 flex items-center gap-1 cursor-pointer"
                     >
-                      ٣. في الطريق
-                    </div>
-                    <div
-                      className={`p-1.5 rounded-lg ${
-                        activeCustomerOrder.status === 'delivered'
-                          ? 'bg-emerald-700 text-white'
-                          : 'bg-slate-100 text-slate-400'
-                      }`}
-                    >
-                      ٤. الوصول
-                    </div>
+                      <Activity className="w-3 h-3 text-emerald-700" />
+                      <span>
+                        {isVerticalTimelineExpanded
+                          ? 'إخفاء التسلسل الزمني المفصل'
+                          : 'عرض التسلسل الزمني لحالات الطلب'}
+                      </span>
+                      {isVerticalTimelineExpanded ? (
+                        <ChevronUp className="w-3 h-3" />
+                      ) : (
+                        <ChevronDown className="w-3 h-3" />
+                      )}
+                    </button>
+                    {isTimelinePulsingMobile && (
+                      <span className="text-[10px] font-bold text-emerald-700 animate-pulse">
+                        • تحديث حي للحالة
+                      </span>
+                    )}
                   </div>
-                )}
+
+                  {/* Expanded Vertical Status Timeline */}
+                  {isVerticalTimelineExpanded && (
+                    <div className="bg-slate-50 rounded-xl p-2.5 border border-slate-200/80 flex flex-col gap-2">
+                      {[
+                        {
+                          key: 'created',
+                          title: 'تم إنشاء الطلب واستلامه',
+                          desc: `وقت الإنشاء: ${activeCustomerOrder.createdAt}`,
+                          done: true,
+                          active: activeCustomerOrder.status === 'created',
+                        },
+                        {
+                          key: 'searching',
+                          title: 'تأكيد المتجر وتوجيه أقرب كابتن بالباجور',
+                          desc: activeAcceptedTimestampText || 'جاري مطابقة أقرب كابتن في نطاق الباجور',
+                          done: ['accepted_by_store', 'preparing', 'merchant_accepted', 'ready_for_pickup', 'captain_assigned', 'at_pickup', 'picked_up', 'in_transit', 'delivered'].includes(activeCustomerOrder.status),
+                          active: ['searching_captain', 'accepted_by_store', 'preparing', 'ready_for_pickup'].includes(activeCustomerOrder.status),
+                        },
+                        {
+                          key: 'at_pickup',
+                          title: 'وصول الكابتن لنقطة الاستلام',
+                          desc: activeCustomerOrder.storeAddress,
+                          done: ['at_pickup', 'picked_up', 'in_transit', 'delivered'].includes(activeCustomerOrder.status),
+                          active: ['captain_assigned', 'at_pickup'].includes(activeCustomerOrder.status),
+                        },
+                        {
+                          key: 'in_transit',
+                          title: 'الكابتن في الطريق إليك الآن',
+                          desc: `الوجهة: ${activeCustomerOrder.deliveryAddress}`,
+                          done: ['in_transit', 'delivered'].includes(activeCustomerOrder.status),
+                          active: ['picked_up', 'in_transit'].includes(activeCustomerOrder.status),
+                        },
+                        {
+                          key: 'delivered',
+                          title: 'إتمام التسليم وتحصيل الحساب',
+                          desc: `${activeCustomerOrder.totalEgp + mobileTipEgp}.00 ج.م`,
+                          done: activeCustomerOrder.status === 'delivered',
+                          active: activeCustomerOrder.status === 'delivered',
+                        },
+                      ].map((step, idx, arr) => (
+                        <div key={step.key} className="relative flex items-start gap-2.5">
+                          {idx < arr.length - 1 && (
+                            <div
+                              className={`absolute right-[9px] top-5 bottom-[-10px] w-0.5 ${
+                                step.done ? 'bg-emerald-600' : 'bg-slate-200'
+                              }`}
+                            />
+                          )}
+                          <div
+                            className={`relative z-10 w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-black shrink-0 ${
+                              step.active
+                                ? 'bg-emerald-700 text-white ring-2 ring-emerald-200'
+                                : step.done
+                                ? 'bg-emerald-100 text-emerald-800 border border-emerald-300'
+                                : 'bg-white text-slate-400 border border-slate-200'
+                            }`}
+                          >
+                            {step.done ? '✓' : idx + 1}
+                          </div>
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-center justify-between">
+                              <span
+                                className={`text-[11px] font-extrabold ${
+                                  step.active
+                                    ? 'text-emerald-800'
+                                    : step.done
+                                    ? 'text-slate-900'
+                                    : 'text-slate-400'
+                                }`}
+                              >
+                                {step.title}
+                              </span>
+                              {step.active && (
+                                <span className="text-[9px] font-bold px-1.5 py-0.2 rounded bg-emerald-100 text-emerald-800">
+                                  الحالة الحالية
+                                </span>
+                              )}
+                            </div>
+                            <p className="text-[10px] text-slate-500 truncate">{step.desc}</p>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
 
                 {/* Searching Captain Instant Simulation & Cancel Actions */}
                 {(activeCustomerOrder.status === 'searching_captain' || activeCustomerOrder.status === 'created') && (
@@ -683,7 +1089,7 @@ export const CustomerMobileExperience: React.FC<CustomerMobileExperienceProps> =
                         محاكاة قبول الكابتن ⚡
                       </button>
                       <button
-                        onClick={() => customerCancelOrder(activeCustomerOrder.id)}
+                        onClick={() => setShowCancelConfirmModal(true)}
                         className="px-2 py-1.5 rounded-xl bg-rose-600/20 hover:bg-rose-600/40 text-rose-300 border border-rose-500/30 font-bold text-[10px] cursor-pointer"
                       >
                         إلغاء
@@ -692,7 +1098,266 @@ export const CustomerMobileExperience: React.FC<CustomerMobileExperienceProps> =
                   </div>
                 )}
 
-                {/* Order / Trip Details Card */}
+                {/* Captain Card if Assigned (with View Captain Profile, Call Dialer Sheet, and Chat Sheet) */}
+                {activeCustomerOrder.assignedCaptainName && (
+                  <div className="p-2.5 rounded-2xl bg-emerald-50/70 border border-emerald-200 flex items-center justify-between gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setShowCaptainProfileModal(true)}
+                      className="flex items-center gap-2.5 text-right flex-1 min-w-0 cursor-pointer group"
+                      title="عرض ملف الكابتن وتفاصيل المركبة"
+                    >
+                      <div className="w-10 h-10 rounded-full bg-slate-900 text-emerald-400 flex items-center justify-center font-bold text-base shadow-xs shrink-0 group-hover:scale-105 transition">
+                        🛵
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <div className="font-extrabold text-xs text-slate-900 flex items-center gap-1">
+                          <span className="truncate group-hover:text-emerald-800">
+                            {activeCustomerOrder.assignedCaptainName}
+                          </span>
+                          <span className="text-[10px] text-amber-600 font-bold shrink-0">★ 4.92</span>
+                        </div>
+                        <div className="text-[10px] text-slate-600 font-semibold truncate">
+                          {activeCustomerOrder.assignedCaptainVehicle || 'سكوتر بينيلي أسود • م ن ف ٤٩٢١'}
+                        </div>
+                        <div className="text-[9px] font-extrabold text-emerald-700 mt-0.5 flex items-center gap-0.5">
+                          <span>عرض ملف الكابتن والمركبة</span>
+                          <ChevronLeft className="w-3 h-3" />
+                        </div>
+                      </div>
+                    </button>
+
+                    <div className="flex items-center gap-1.5 shrink-0">
+                      <button
+                        type="button"
+                        onClick={() => setShowChatModal(true)}
+                        className="relative w-9 h-9 rounded-full bg-emerald-700 text-white flex items-center justify-center shadow-xs hover:bg-emerald-800 cursor-pointer"
+                        title="محادثة الكابتن (رسائل سريعة)"
+                      >
+                        <MessageSquare className="w-4 h-4" />
+                        {chatMessages.length > 0 && (
+                          <span className="absolute -top-1 -right-1 w-4 h-4 rounded-full bg-amber-400 text-slate-950 text-[9px] font-black flex items-center justify-center">
+                            {chatMessages.length}
+                          </span>
+                        )}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setShowCallCaptainModal(true)}
+                        className="w-9 h-9 rounded-full bg-slate-900 text-white flex items-center justify-center shadow-xs hover:bg-black cursor-pointer"
+                        title="اتصال هاتفي بالكابتن"
+                      >
+                        <Phone className="w-4 h-4" />
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                {/* Organized 4-Action Quick Control Bar (Same Mashwar Design Language) */}
+                <div className="grid grid-cols-4 gap-1.5">
+                  <button
+                    type="button"
+                    onClick={() => setSummarySheetOrder(activeCustomerOrder)}
+                    className="p-2 rounded-xl bg-slate-50 hover:bg-emerald-50 border border-slate-200/90 hover:border-emerald-200 flex flex-col items-center justify-center gap-1 text-slate-700 hover:text-emerald-900 transition cursor-pointer"
+                  >
+                    <Package className="w-3.5 h-3.5 text-emerald-700" />
+                    <span className="text-[10px] font-extrabold">ملخص الطلب</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setActiveInlineTool((prev) => (prev === 'notes' ? 'none' : 'notes'))
+                    }
+                    className={`p-2 rounded-xl border flex flex-col items-center justify-center gap-1 transition cursor-pointer ${
+                      activeInlineTool === 'notes'
+                        ? 'bg-emerald-700 text-white border-emerald-700'
+                        : 'bg-slate-50 hover:bg-emerald-50 border-slate-200/90 text-slate-700'
+                    }`}
+                  >
+                    <Edit3 className={`w-3.5 h-3.5 ${activeInlineTool === 'notes' ? 'text-white' : 'text-amber-600'}`} />
+                    <span className="text-[10px] font-extrabold">الملاحظات</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setActiveInlineTool((prev) => (prev === 'tip' ? 'none' : 'tip'))
+                    }
+                    className={`p-2 rounded-xl border flex flex-col items-center justify-center gap-1 transition cursor-pointer ${
+                      activeInlineTool === 'tip' || mobileTipEgp > 0
+                        ? 'bg-emerald-700 text-white border-emerald-700'
+                        : 'bg-slate-50 hover:bg-emerald-50 border-slate-200/90 text-slate-700'
+                    }`}
+                  >
+                    <DollarSign className={`w-3.5 h-3.5 ${activeInlineTool === 'tip' || mobileTipEgp > 0 ? 'text-white' : 'text-emerald-700'}`} />
+                    <span className="text-[10px] font-extrabold">
+                      {mobileTipEgp > 0 ? `إكرامية +${mobileTipEgp}` : 'إكرامية'}
+                    </span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setActiveInlineTool((prev) => (prev === 'share' ? 'none' : 'share'))
+                    }
+                    className={`p-2 rounded-xl border flex flex-col items-center justify-center gap-1 transition cursor-pointer ${
+                      activeInlineTool === 'share'
+                        ? 'bg-emerald-700 text-white border-emerald-700'
+                        : 'bg-slate-50 hover:bg-emerald-50 border-slate-200/90 text-slate-700'
+                    }`}
+                  >
+                    <Share2 className={`w-3.5 h-3.5 ${activeInlineTool === 'share' ? 'text-white' : 'text-slate-700'}`} />
+                    <span className="text-[10px] font-extrabold">مشاركة</span>
+                  </button>
+                </div>
+
+                {/* Inline Panel 1: Edit Order Notes */}
+                {activeInlineTool === 'notes' && (
+                  <form
+                    onSubmit={handleSaveMobileOrderNotes}
+                    className="p-2.5 rounded-2xl bg-amber-50/70 border border-amber-200 flex flex-col gap-2 text-xs"
+                  >
+                    <div className="flex items-center justify-between">
+                      <span className="font-extrabold text-[11px] text-amber-950 flex items-center gap-1">
+                        <Edit3 className="w-3.5 h-3.5 text-amber-700" />
+                        <span>ملاحظات الطلب للكابتن والمتجر:</span>
+                      </span>
+                      {mobileNotesSaved && (
+                        <span className="text-[10px] font-black text-emerald-700 bg-emerald-100 px-2 py-0.5 rounded-full">
+                          تم الحفظ ✓
+                        </span>
+                      )}
+                    </div>
+                    <div className="flex items-center gap-1.5">
+                      <input
+                        type="text"
+                        value={mobileNotesDraft}
+                        onChange={(e) => setMobileNotesDraft(e.target.value)}
+                        placeholder="أضف أو عدّل ملاحظات التوصيل..."
+                        className="flex-1 px-2.5 py-1.5 rounded-xl bg-white border border-amber-300 text-xs text-slate-900 focus:outline-hidden focus:border-emerald-600"
+                      />
+                      <button
+                        type="submit"
+                        className="px-3 py-1.5 rounded-xl bg-emerald-700 hover:bg-emerald-800 text-white text-[11px] font-extrabold shrink-0 cursor-pointer"
+                      >
+                        حفظ
+                      </button>
+                    </div>
+                  </form>
+                )}
+
+                {/* Inline Panel 2: Add Captain Tip (Gratuity) */}
+                {activeInlineTool === 'tip' && (
+                  <div className="p-2.5 rounded-2xl bg-emerald-50/70 border border-emerald-200 flex flex-col gap-2 text-xs">
+                    <div className="flex items-center justify-between">
+                      <span className="font-extrabold text-[11px] text-emerald-950">
+                        إكرامية الكابتن (١٠٠٪ للكابتن):
+                      </span>
+                      <span className="text-[10px] font-black text-emerald-800 bg-white px-2 py-0.5 rounded-full border border-emerald-200">
+                        +{mobileTipEgp} ج.م
+                      </span>
+                    </div>
+                    <div className="grid grid-cols-4 gap-1.5">
+                      {[5, 10, 15].map((amt) => (
+                        <button
+                          key={amt}
+                          type="button"
+                          onClick={() => handleSelectMobilePresetTip(amt)}
+                          className={`py-1.5 rounded-xl font-extrabold text-[11px] border transition cursor-pointer ${
+                            mobileTipEgp === amt
+                              ? 'bg-emerald-700 text-white border-emerald-700'
+                              : 'bg-white text-slate-800 border-slate-200 hover:bg-emerald-50'
+                          }`}
+                        >
+                          {amt} ج.م
+                        </button>
+                      ))}
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setMobileTipEgp(0);
+                          setMobileCustomTipInput('');
+                        }}
+                        className="py-1.5 rounded-xl font-bold text-[10px] bg-white text-slate-500 border border-slate-200 hover:bg-slate-100 cursor-pointer"
+                      >
+                        بدون
+                      </button>
+                    </div>
+                    <form onSubmit={handleApplyMobileCustomTip} className="flex items-center gap-1.5">
+                      <input
+                        type="number"
+                        min="0"
+                        step="1"
+                        value={mobileCustomTipInput}
+                        onChange={(e) => setMobileCustomTipInput(e.target.value)}
+                        placeholder="مبلغ مخصص بالجنيه..."
+                        className="flex-1 px-2.5 py-1.5 rounded-xl bg-white border border-emerald-200 text-xs text-slate-900 font-mono"
+                      />
+                      <button
+                        type="submit"
+                        className="px-3 py-1.5 rounded-xl bg-slate-900 text-white text-[11px] font-extrabold shrink-0 cursor-pointer"
+                      >
+                        تطبيق
+                      </button>
+                    </form>
+                  </div>
+                )}
+
+                {/* Inline Panel 3: Share Live Link */}
+                {activeInlineTool === 'share' && (
+                  <div className="p-2.5 rounded-2xl bg-slate-100 border border-slate-200 flex flex-col gap-2 text-xs">
+                    <div className="flex items-center justify-between">
+                      <span className="font-extrabold text-[11px] text-slate-900 flex items-center gap-1">
+                        <Share2 className="w-3.5 h-3.5 text-emerald-700" />
+                        <span>مشاركة رابط التتبع المباشر مع العائلة:</span>
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => setActiveInlineTool('none')}
+                        className="text-[10px] text-slate-500 hover:text-slate-800 cursor-pointer"
+                      >
+                        إغلاق ✕
+                      </button>
+                    </div>
+                    <div className="flex items-center gap-1.5">
+                      <input
+                        type="text"
+                        readOnly
+                        value={mobileLiveTrackingUrl}
+                        className="flex-1 px-2.5 py-1.5 rounded-xl bg-white border border-slate-200 text-[10px] font-mono text-slate-700"
+                      />
+                      <button
+                        type="button"
+                        onClick={handleCopyMobileLiveLink}
+                        className="px-2.5 py-1.5 rounded-xl bg-slate-900 text-white text-[10px] font-extrabold flex items-center gap-1 shrink-0 cursor-pointer"
+                      >
+                        {mobileLiveLinkCopied ? <Check className="w-3 h-3 text-emerald-400" /> : <Copy className="w-3 h-3" />}
+                        <span>{mobileLiveLinkCopied ? 'تم النسخ' : 'نسخ'}</span>
+                      </button>
+                    </div>
+                    <div className="grid grid-cols-2 gap-1.5">
+                      <a
+                        href={`https://wa.me/?text=${encodeURIComponent(
+                          `تابع مسار طلبي في مشوار الباجور (${activeCustomerOrder.orderNumber}): ${mobileLiveTrackingUrl}`
+                        )}`}
+                        className="py-1.5 rounded-xl bg-emerald-700 text-white text-[10px] font-extrabold text-center"
+                      >
+                        مشاركة عبر واتساب
+                      </a>
+                      <a
+                        href={`sms:?body=${encodeURIComponent(
+                          `تتبع طلبي في مشوار الباجور (${activeCustomerOrder.orderNumber}): ${mobileLiveTrackingUrl}`
+                        )}`}
+                        className="py-1.5 rounded-xl bg-slate-800 text-white text-[10px] font-extrabold text-center"
+                      >
+                        رسالة نصية SMS
+                      </a>
+                    </div>
+                  </div>
+                )}
+
+                {/* Order / Trip Details + Expandable Fare Breakdown Card */}
                 <div className="p-3 bg-slate-50 rounded-2xl border border-slate-200/80 flex flex-col gap-1.5 text-xs">
                   <div className="flex items-center justify-between border-b border-slate-200 pb-1.5">
                     <span className="font-extrabold text-slate-900 flex items-center gap-1.5">
@@ -705,8 +1370,68 @@ export const CustomerMobileExperience: React.FC<CustomerMobileExperienceProps> =
                       )}
                       <span>{activeCustomerOrder.storeName}</span>
                     </span>
-                    <span className="font-black text-emerald-800">{activeCustomerOrder.totalEgp}.00 ج.م</span>
+                    <button
+                      type="button"
+                      onClick={() => setIsFareBreakdownOpen((prev) => !prev)}
+                      className="font-black text-emerald-800 flex items-center gap-1 cursor-pointer hover:underline"
+                    >
+                      <span>{activeCustomerOrder.totalEgp + mobileTipEgp}.00 ج.م</span>
+                      {isFareBreakdownOpen ? (
+                        <ChevronUp className="w-3.5 h-3.5 text-slate-500" />
+                      ) : (
+                        <ChevronDown className="w-3.5 h-3.5 text-slate-500" />
+                      )}
+                    </button>
                   </div>
+
+                  {/* Expandable Fare Breakdown Details */}
+                  {isFareBreakdownOpen && (
+                    <div className="p-2 rounded-xl bg-white border border-slate-200/80 space-y-1 text-[10px] text-slate-600 my-0.5">
+                      <div className="font-extrabold text-slate-800 border-b border-slate-100 pb-1 mb-1">
+                        تفاصيل تكلفة المشوار والفاتورة:
+                      </div>
+                      {activeCustomerOrder.subtotalEgp > 0 && (
+                        <div className="flex justify-between">
+                          <span>قيمة الأصناف والمنتجات:</span>
+                          <span className="font-bold text-slate-900">{activeCustomerOrder.subtotalEgp}.00 ج.م</span>
+                        </div>
+                      )}
+                      <div className="flex justify-between">
+                        <span>فتحة العداد الأساسية (Base Fare):</span>
+                        <span className="font-bold text-slate-900">15.00 ج.م</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span>تكلفة المسافة ({activeCustomerOrder.distanceKm || 1.8} كم):</span>
+                        <span className="font-bold text-slate-900">
+                          {Math.max(0, (activeCustomerOrder.deliveryFeeEgp || 15) - 15)}.00 ج.م
+                        </span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span>بدل القرى والأطراف (Rural Surcharge):</span>
+                        <span className="font-bold text-amber-700">
+                          {activeCustomerOrder.ruralSurchargeEgp || 0}.00 ج.م
+                        </span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span>رسوم تشغيل المنصة (Platform Fee):</span>
+                        <span className="font-bold text-slate-900">
+                          {activeCustomerOrder.platformFeeEgp || 2}.00 ج.م
+                        </span>
+                      </div>
+                      {mobileTipEgp > 0 && (
+                        <div className="flex justify-between text-emerald-700 font-bold">
+                          <span>إكرامية الكابتن (Captain Tip):</span>
+                          <span>+{mobileTipEgp}.00 ج.م</span>
+                        </div>
+                      )}
+                      <div className="flex justify-between pt-1 border-t border-slate-100 font-black text-slate-900 text-[11px]">
+                        <span>الإجمالي الكلي المستحق:</span>
+                        <span className="text-emerald-800">
+                          {activeCustomerOrder.totalEgp + mobileTipEgp}.00 ج.م
+                        </span>
+                      </div>
+                    </div>
+                  )}
 
                   <div className="space-y-1 text-slate-600">
                     {activeCustomerOrder.items.map((item, idx) => (
@@ -716,6 +1441,22 @@ export const CustomerMobileExperience: React.FC<CustomerMobileExperienceProps> =
                       </div>
                     ))}
                   </div>
+
+                  {/* Persisted Notes Preview if present */}
+                  {(activeCustomerOrder.orderNotes || activeCustomerOrder.notes) && (
+                    <div className="text-[10px] text-amber-900 bg-amber-50/80 px-2 py-1 rounded-lg border border-amber-200/70 flex items-center justify-between">
+                      <span className="truncate">
+                        <strong>الملاحظات:</strong> {activeCustomerOrder.orderNotes || activeCustomerOrder.notes}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => setActiveInlineTool('notes')}
+                        className="text-[9px] font-extrabold text-amber-800 underline shrink-0 mr-1 cursor-pointer"
+                      >
+                        تعديل
+                      </button>
+                    </div>
+                  )}
 
                   <div className="text-[10px] text-slate-600 pt-1 border-t border-slate-200 space-y-0.5">
                     <div className="flex items-center justify-between">
@@ -738,67 +1479,49 @@ export const CustomerMobileExperience: React.FC<CustomerMobileExperienceProps> =
                   </div>
                 </div>
 
-                {/* Captain Card if Assigned */}
-                {activeCustomerOrder.assignedCaptainName && (
-                  <div className="p-3 rounded-2xl bg-emerald-50/70 border border-emerald-200 flex items-center justify-between">
-                    <div className="flex items-center gap-2.5">
-                      <div className="w-10 h-10 rounded-full bg-slate-900 text-emerald-400 flex items-center justify-center font-bold text-base shadow-xs">
-                        🛵
-                      </div>
-                      <div>
-                        <div className="font-extrabold text-xs text-slate-900 flex items-center gap-1">
-                          <span>{activeCustomerOrder.assignedCaptainName}</span>
-                          <span className="text-[10px] text-amber-600 font-bold">★ 4.92</span>
-                        </div>
-                        <div className="text-[10px] text-slate-600 font-semibold">
-                          {activeCustomerOrder.assignedCaptainVehicle || 'سكوتر بينيلي أسود • لوحة (م ن ف ٤٨٢١)'}
-                        </div>
-                      </div>
-                    </div>
-
-                    <div className="flex items-center gap-1.5">
-                      <button
-                        onClick={() => setShowChatModal(true)}
-                        className="w-9 h-9 rounded-full bg-emerald-700 text-white flex items-center justify-center shadow-xs hover:bg-emerald-800 cursor-pointer"
-                        title="محادثة الكابتن"
-                      >
-                        <MessageSquare className="w-4 h-4" />
-                      </button>
-                      <a
-                        href={`tel:${activeCustomerOrder.assignedCaptainPhone || '01099887766'}`}
-                        onClick={(e) => e.preventDefault()}
-                        className="w-9 h-9 rounded-full bg-slate-900 text-white flex items-center justify-center shadow-xs hover:bg-black"
-                        title="اتصال بالكابتن"
-                      >
-                        <Phone className="w-4 h-4" />
-                      </a>
-                    </div>
-                  </div>
-                )}
-
-                {/* Role Switcher Hint for Tester */}
-                <div className="p-2.5 rounded-xl bg-amber-50 border border-amber-200 text-[10px] text-amber-900 flex items-start gap-2">
-                  <Info className="w-4 h-4 text-amber-700 shrink-0 mt-0.5" />
-                  <div>
-                    <strong>التدفق التفاعلي المترابط:</strong>{' '}
-                    يمكنك التبديل إلى دور{' '}
+                {/* Bottom Action Row: Role Switcher Hint & Cancel Order Button */}
+                <div className="flex items-center justify-between gap-2 pt-0.5">
+                  <div className="text-[10px] text-slate-500 flex items-center gap-1">
+                    <Info className="w-3.5 h-3.5 text-emerald-700 shrink-0" />
+                    <span>جرب دور</span>
                     <button
+                      type="button"
                       onClick={() => {
                         if (onSwitchToCaptain) onSwitchToCaptain();
                         else setIsAuthModalOpen(true);
                       }}
                       className="font-extrabold underline text-emerald-800 cursor-pointer"
                     >
-                      الكابتن (محمود الصياد)
-                    </button>{' '}
-                    أو{' '}
+                      الكابتن
+                    </button>
+                    <span>أو</span>
                     <button
+                      type="button"
                       onClick={() => setIsAuthModalOpen(true)}
                       className="font-extrabold underline text-emerald-800 cursor-pointer"
                     >
                       التاجر
-                    </button>{' '}
-                    لإتمام مراحل الاستلام والتوصيل وتحصيل الكاش مباشرة.
+                    </button>
+                  </div>
+
+                  <div className="flex items-center gap-1.5">
+                    <button
+                      type="button"
+                      onClick={() => setActiveTab('history')}
+                      className="px-2.5 py-1 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-[10px] font-extrabold cursor-pointer"
+                    >
+                      سجل طلباتي
+                    </button>
+                    {activeCustomerOrder.status !== 'delivered' &&
+                      activeCustomerOrder.status !== 'cancelled' && (
+                        <button
+                          type="button"
+                          onClick={() => setShowCancelConfirmModal(true)}
+                          className="px-2.5 py-1 rounded-xl bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 text-[10px] font-extrabold cursor-pointer"
+                        >
+                          إلغاء الطلب
+                        </button>
+                      )}
                   </div>
                 </div>
               </div>
@@ -1477,13 +2200,18 @@ export const CustomerMobileExperience: React.FC<CustomerMobileExperienceProps> =
         )}
 
         {/* ========================================================
-            TAB 4: ORDER & TRIP HISTORY
+            TAB 4: ORDER & TRIP HISTORY (WITH 1-5 STAR RATING & FEEDBACK)
            ======================================================== */}
         {activeTab === 'history' && (
-          <div className="flex-1 p-4 overflow-y-auto flex flex-col gap-3">
+          <div className="flex-1 p-4 overflow-y-auto flex flex-col gap-3 pb-16">
             <div className="flex items-center justify-between">
-              <h2 className="font-extrabold text-base text-slate-900">سجل المشاوير والطلبات</h2>
-              <span className="text-[11px] font-bold text-slate-500">{customerOrders.length} طلبات</span>
+              <div>
+                <h2 className="font-extrabold text-base text-slate-900">سجل المشاوير والطلبات</h2>
+                <p className="text-[10px] text-slate-500">تقييم الكباتن ومراجعة الفواتير السابقة بالباجور</p>
+              </div>
+              <span className="text-[11px] font-bold text-emerald-800 bg-emerald-50 px-2.5 py-0.5 rounded-full border border-emerald-200">
+                {customerOrders.length} طلبات
+              </span>
             </div>
             {customerOrders.length === 0 ? (
               <div className="bg-white p-6 rounded-2xl border border-slate-100 text-center text-xs text-slate-500">
@@ -1493,10 +2221,17 @@ export const CustomerMobileExperience: React.FC<CustomerMobileExperienceProps> =
               <div className="flex flex-col gap-3">
                 {customerOrders.map((ord) => {
                   const acceptedText = formatHumanReadableAcceptedTimestamp(ord.acceptedAtIso, ord.acceptedAt);
+                  const currentRating = ord.customerRating ?? 0;
+                  const feedbackDraft =
+                    historyFeedbackDrafts[ord.id] ?? ord.orderFeedback ?? ord.customerFeedback ?? '';
+                  const isFeedbackSaved =
+                    Boolean(historyFeedbackSavedMap[ord.id]) ||
+                    Boolean(ord.orderFeedback || ord.customerFeedback);
+
                   return (
                     <div
                       key={ord.id}
-                      className="bg-white p-3.5 rounded-2xl border border-slate-200/80 shadow-2xs flex flex-col gap-2 text-xs"
+                      className="bg-white p-3.5 rounded-2xl border border-slate-200/80 shadow-2xs flex flex-col gap-2.5 text-xs"
                     >
                       <div className="flex items-center justify-between">
                         <span className="font-extrabold text-slate-900">
@@ -1507,21 +2242,30 @@ export const CustomerMobileExperience: React.FC<CustomerMobileExperienceProps> =
 
                       <div className="text-[11px] text-slate-500 flex items-center justify-between">
                         <span>الإنشاء: {ord.createdAt}</span>
-                        <span
-                          className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${
-                            ord.status === 'delivered'
-                              ? 'bg-emerald-50 text-emerald-700'
+                        <div className="flex items-center gap-1.5">
+                          <button
+                            type="button"
+                            onClick={() => setSummarySheetOrder(ord)}
+                            className="text-[10px] font-extrabold text-emerald-700 hover:underline px-2 py-0.5 rounded-lg bg-emerald-50 border border-emerald-200 cursor-pointer"
+                          >
+                            ملخص الطلب
+                          </button>
+                          <span
+                            className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${
+                              ord.status === 'delivered'
+                                ? 'bg-emerald-50 text-emerald-700'
+                                : ord.status === 'cancelled'
+                                ? 'bg-rose-50 text-rose-700'
+                                : 'bg-amber-50 text-amber-800'
+                            }`}
+                          >
+                            {ord.status === 'delivered'
+                              ? 'مكتمل بنجاح'
                               : ord.status === 'cancelled'
-                              ? 'bg-rose-50 text-rose-700'
-                              : 'bg-amber-50 text-amber-800'
-                          }`}
-                        >
-                          {ord.status === 'delivered'
-                            ? 'مكتمل بنجاح'
-                            : ord.status === 'cancelled'
-                            ? 'ملغي'
-                            : 'قيد التنفيذ'}
-                        </span>
+                              ? 'ملغي'
+                              : 'قيد التنفيذ'}
+                          </span>
+                        </div>
                       </div>
 
                       {acceptedText && (
@@ -1547,6 +2291,88 @@ export const CustomerMobileExperience: React.FC<CustomerMobileExperienceProps> =
                           </span>
                         )}
                       </div>
+
+                      {/* Post-Delivery 1-5 Star Rating System inside Mobile History */}
+                      <div className="pt-2 border-t border-slate-100 flex items-center justify-between gap-2">
+                        <div className="flex items-center gap-1">
+                          <span className="text-[11px] font-extrabold text-slate-700">تقييم الكابتن:</span>
+                          {currentRating > 0 && (
+                            <span className="text-[10px] font-black text-amber-700 bg-amber-50 px-1.5 py-0.5 rounded-full border border-amber-200">
+                              {currentRating}/5 ★
+                            </span>
+                          )}
+                        </div>
+                        <div className="flex items-center gap-1">
+                          {[1, 2, 3, 4, 5].map((starVal) => {
+                            const isFilled = starVal <= currentRating;
+                            return (
+                              <button
+                                key={starVal}
+                                type="button"
+                                onClick={() => rateOrderCaptain(ord.id, starVal)}
+                                className={`px-2 py-1 rounded-lg border text-[10px] font-extrabold flex items-center gap-0.5 transition cursor-pointer ${
+                                  isFilled
+                                    ? 'bg-amber-50 border-amber-300 text-amber-700'
+                                    : 'bg-slate-50 hover:bg-slate-100 border-slate-200 text-slate-400'
+                                }`}
+                              >
+                                <Star
+                                  className={`w-3 h-3 ${
+                                    isFilled ? 'text-amber-500 fill-amber-400' : 'text-slate-400'
+                                  }`}
+                                />
+                                <span>{starVal}</span>
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </div>
+
+                      {/* Order Feedback Textarea inside Mobile History */}
+                      <form
+                        onSubmit={(e) => {
+                          e.preventDefault();
+                          updateOrderFeedback(ord.id, feedbackDraft.trim());
+                          setHistoryFeedbackSavedMap((prev) => ({ ...prev, [ord.id]: true }));
+                        }}
+                        className="pt-2 border-t border-slate-100 flex flex-col gap-1.5"
+                      >
+                        <div className="flex items-center justify-between">
+                          <label className="text-[10px] font-extrabold text-slate-700">
+                            ملاحظات وتعليق تجربة التوصيل:
+                          </label>
+                          {isFeedbackSaved && (
+                            <span className="text-[9px] font-extrabold text-emerald-700 bg-emerald-50 px-1.5 py-0.5 rounded">
+                              تم حفظ التعليق ✓
+                            </span>
+                          )}
+                        </div>
+                        <textarea
+                          rows={2}
+                          value={feedbackDraft}
+                          onChange={(e) =>
+                            setHistoryFeedbackDrafts((prev) => ({
+                              ...prev,
+                              [ord.id]: e.target.value,
+                            }))
+                          }
+                          placeholder="اكتب رأيك في سرعة وجودة توصيل الكابتن..."
+                          className="w-full px-2.5 py-1.5 rounded-xl bg-slate-50 border border-slate-200 text-[11px] text-slate-800 focus:outline-hidden focus:border-emerald-600 resize-none"
+                        />
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="text-[10px] text-slate-400 truncate">
+                            {ord.orderFeedback || ord.customerFeedback
+                              ? `التعليق المسجل: ${ord.orderFeedback || ord.customerFeedback}`
+                              : 'لم يتم إضافة تعليق بعد'}
+                          </span>
+                          <button
+                            type="submit"
+                            className="px-2.5 py-1 rounded-lg bg-emerald-700 hover:bg-emerald-800 text-white text-[10px] font-extrabold shrink-0 cursor-pointer"
+                          >
+                            حفظ التعليق
+                          </button>
+                        </div>
+                      </form>
                     </div>
                   );
                 })}
@@ -2059,20 +2885,23 @@ export const CustomerMobileExperience: React.FC<CustomerMobileExperienceProps> =
         </div>
       )}
 
-      {/* Chat Simulation Modal */}
+      {/* Chat Simulation Modal with Predefined Quick Messages */}
       {showChatModal && (
         <div className="absolute inset-0 z-50 bg-black/60 backdrop-blur-2xs flex flex-col justify-end">
-          <div className="bg-white rounded-t-3xl p-4 shadow-2xl flex flex-col h-[75%]">
-            <div className="flex items-center justify-between border-b border-slate-100 pb-2">
+          <div className="bg-white rounded-t-3xl p-4 shadow-2xl flex flex-col h-[78%]">
+            <div className="flex items-center justify-between border-b border-slate-100 pb-2.5">
               <div className="flex items-center gap-2">
                 <div className="w-8 h-8 rounded-full bg-slate-900 text-emerald-400 flex items-center justify-center font-bold text-sm">
                   🛵
                 </div>
                 <div>
                   <h4 className="font-extrabold text-xs text-slate-900">
-                    محادثة الكابتن: {activeCustomerOrder?.assignedCaptainName || 'محمود الصياد'}
+                    محادثة الكابتن: {activeCustomerOrder?.assignedCaptainName || 'كابتن محمد سعيد'}
                   </h4>
-                  <span className="text-[10px] text-emerald-700 font-bold">متصل الآن</span>
+                  <span className="text-[10px] text-emerald-700 font-bold flex items-center gap-1">
+                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-ping" />
+                    متصل الآن في الباجور
+                  </span>
                 </div>
               </div>
               <button
@@ -2093,10 +2922,10 @@ export const CustomerMobileExperience: React.FC<CustomerMobileExperienceProps> =
                     className={`flex flex-col ${isMe ? 'items-start' : 'items-end'}`}
                   >
                     <div
-                      className={`max-w-[80%] p-2.5 rounded-2xl ${
+                      className={`max-w-[82%] p-2.5 rounded-2xl ${
                         isMe
                           ? 'bg-emerald-700 text-white rounded-br-none'
-                          : 'bg-slate-100 text-slate-800 rounded-bl-none'
+                          : 'bg-slate-100 text-slate-800 rounded-bl-none border border-slate-200/70'
                       }`}
                     >
                       {msg.text}
@@ -2105,6 +2934,33 @@ export const CustomerMobileExperience: React.FC<CustomerMobileExperienceProps> =
                   </div>
                 );
               })}
+            </div>
+
+            {/* Predefined Quick Messages Bar */}
+            <div className="pt-2 pb-1.5 border-t border-slate-100">
+              <span className="text-[9px] font-bold text-slate-400 block mb-1">
+                رسائل سريعة جاهزة للكابتن:
+              </span>
+              <div className="flex flex-wrap gap-1.5">
+                {[
+                  'أنا في انتظارك',
+                  'أين أنت الآن؟',
+                  'تواصل معي عند الوصول',
+                  'شكراً لك يا كابتن',
+                ].map((quickMsg) => (
+                  <button
+                    key={quickMsg}
+                    type="button"
+                    onClick={() => {
+                      if (!activeCustomerOrder) return;
+                      sendChatMessage(activeCustomerOrder.id, quickMsg);
+                    }}
+                    className="px-2.5 py-1 rounded-full bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-200 text-[10px] font-extrabold transition cursor-pointer"
+                  >
+                    {quickMsg}
+                  </button>
+                ))}
+              </div>
             </div>
 
             {/* Input Bar */}
@@ -2126,6 +2982,403 @@ export const CustomerMobileExperience: React.FC<CustomerMobileExperienceProps> =
           </div>
         </div>
       )}
+
+      {/* Captain Profile Bottom Sheet Modal */}
+      {showCaptainProfileModal && (
+        <div className="absolute inset-0 z-50 bg-black/60 backdrop-blur-2xs flex flex-col justify-end">
+          <div className="bg-white rounded-t-3xl p-4 shadow-2xl flex flex-col gap-3 max-h-[82%] overflow-y-auto">
+            <div className="flex items-center justify-between border-b border-slate-100 pb-2.5">
+              <div className="flex items-center gap-2">
+                <div className="w-10 h-10 rounded-full bg-slate-900 text-emerald-400 flex items-center justify-center text-lg shadow-xs">
+                  🛵
+                </div>
+                <div>
+                  <div className="flex items-center gap-1.5">
+                    <h4 className="font-black text-sm text-slate-900">
+                      {activeCustomerOrder?.assignedCaptainName || 'كابتن محمد سعيد'}
+                    </h4>
+                    <span className="px-1.5 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200 text-[9px] font-black">
+                      موثق بالباجور ✓
+                    </span>
+                  </div>
+                  <p className="text-[10px] text-slate-500 font-bold">
+                    كابتن توصيل معتمد • مركز الباجور، المنوفية
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowCaptainProfileModal(false)}
+                className="w-7 h-7 rounded-full bg-slate-100 text-slate-500 flex items-center justify-center cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            {/* Rating & Completed Trips in El Bagour */}
+            <div className="grid grid-cols-2 gap-2">
+              <div className="p-3 rounded-2xl bg-amber-50/90 border border-amber-200/80 flex flex-col items-center text-center">
+                <span className="text-[10px] font-bold text-amber-800">تقييم الكابتن العام</span>
+                <span className="text-lg font-black text-amber-600 mt-0.5 flex items-center gap-1">
+                  <span>4.92</span>
+                  <Star className="w-4 h-4 fill-amber-400 text-amber-500" />
+                </span>
+                <span className="text-[9px] text-amber-700 font-bold">من تقييمات أهالي الباجور</span>
+              </div>
+              <div className="p-3 rounded-2xl bg-emerald-50/90 border border-emerald-200/80 flex flex-col items-center text-center">
+                <span className="text-[10px] font-bold text-emerald-800">إجمالي المشاوير بالباجور</span>
+                <span className="text-lg font-black text-emerald-700 mt-0.5">348 مشوار</span>
+                <span className="text-[9px] text-emerald-700 font-bold">نسبة التزام 99.4%</span>
+              </div>
+            </div>
+
+            {/* Vehicle Details Card */}
+            <div className="p-3 rounded-2xl bg-slate-50 border border-slate-200/80 space-y-2 text-xs">
+              <div className="font-extrabold text-slate-800 flex items-center gap-1.5">
+                <Bike className="w-4 h-4 text-emerald-700" />
+                <span>بيانات المركبة المسجلة:</span>
+              </div>
+              <div className="grid grid-cols-2 gap-2 text-[11px]">
+                <div className="bg-white p-2 rounded-xl border border-slate-200/60">
+                  <span className="text-[9px] text-slate-400 block font-bold">نوع المركبة</span>
+                  <span className="font-extrabold text-slate-800">باجاج بوكسر 150 (موتوسيكل)</span>
+                </div>
+                <div className="bg-white p-2 rounded-xl border border-slate-200/60">
+                  <span className="text-[9px] text-slate-400 block font-bold">رقم اللوحة</span>
+                  <span className="font-extrabold text-slate-800 font-mono">م ن ف • ٤٨٢١</span>
+                </div>
+              </div>
+              <div className="bg-white p-2 rounded-xl border border-slate-200/60 flex items-center justify-between text-[11px]">
+                <span className="text-slate-500 font-bold">نطاق الخدمة الأساسي:</span>
+                <span className="font-extrabold text-emerald-800">الباجور، سبك الضحاك، جروان، بهناي</span>
+              </div>
+            </div>
+
+            {/* Action Buttons */}
+            <div className="grid grid-cols-2 gap-2 pt-1">
+              <button
+                type="button"
+                onClick={() => {
+                  setShowCaptainProfileModal(false);
+                  setShowCallCaptainModal(true);
+                }}
+                className="py-2.5 rounded-xl bg-emerald-700 hover:bg-emerald-800 text-white font-extrabold text-xs flex items-center justify-center gap-1.5 shadow-xs cursor-pointer"
+              >
+                <Phone className="w-3.5 h-3.5" />
+                <span>اتصال بالكابتن</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setShowCaptainProfileModal(false);
+                  setShowChatModal(true);
+                }}
+                className="py-2.5 rounded-xl bg-slate-900 hover:bg-slate-800 text-white font-extrabold text-xs flex items-center justify-center gap-1.5 cursor-pointer"
+              >
+                <MessageSquare className="w-3.5 h-3.5 text-emerald-400" />
+                <span>مراسلة فورية</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Call Captain Dialer Bottom Sheet Modal */}
+      {showCallCaptainModal && (
+        <div className="absolute inset-0 z-50 bg-black/60 backdrop-blur-2xs flex flex-col justify-end">
+          <div className="bg-white rounded-t-3xl p-4 shadow-2xl flex flex-col gap-3">
+            <div className="flex items-center justify-between border-b border-slate-100 pb-2">
+              <div className="flex items-center gap-2">
+                <div className="w-9 h-9 rounded-full bg-emerald-100 text-emerald-700 flex items-center justify-center">
+                  <Phone className="w-4 h-4" />
+                </div>
+                <div>
+                  <h4 className="font-black text-xs text-slate-900">الاتصال الهاتفي بالكابتن</h4>
+                  <p className="text-[10px] text-slate-500 font-bold">
+                    {activeCustomerOrder?.assignedCaptainName || 'كابتن محمد سعيد'}
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowCallCaptainModal(false)}
+                className="w-7 h-7 rounded-full bg-slate-100 text-slate-500 flex items-center justify-center cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="p-3 rounded-2xl bg-slate-50 border border-slate-200 text-center space-y-1">
+              <span className="text-[10px] font-bold text-slate-500 block">رقم هاتف الكابتن المسجل</span>
+              <p className="font-mono font-black text-lg text-slate-900 tracking-wider" dir="ltr">
+                {activeCustomerOrder?.assignedCaptainPhone || '01198765432'}
+              </p>
+              <span className="text-[10px] text-emerald-700 font-bold block">
+                متاح للرد لمتابعة طلبك رقم {activeCustomerOrder?.orderNumber}
+              </span>
+            </div>
+
+            <div className="flex items-center gap-2">
+              <a
+                href={`tel:${activeCustomerOrder?.assignedCaptainPhone || '01198765432'}`}
+                className="flex-1 py-2.5 rounded-xl bg-emerald-700 hover:bg-emerald-800 text-white font-black text-xs flex items-center justify-center gap-1.5 shadow-sm"
+              >
+                <Phone className="w-3.5 h-3.5" />
+                <span>اتصال مباشر الآن</span>
+              </a>
+              <button
+                type="button"
+                onClick={() => {
+                  const phone = activeCustomerOrder?.assignedCaptainPhone || '01198765432';
+                  if (typeof navigator !== 'undefined' && navigator.clipboard?.writeText) {
+                    navigator.clipboard.writeText(phone).catch(() => {});
+                  }
+                  setCopiedCaptainPhone(true);
+                  setTimeout(() => setCopiedCaptainPhone(false), 2000);
+                }}
+                className="px-3.5 py-2.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-800 font-extrabold text-xs flex items-center gap-1 cursor-pointer"
+              >
+                <Copy className="w-3.5 h-3.5" />
+                <span>{copiedCaptainPhone ? 'تم النسخ ✓' : 'نسخ الرقم'}</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Complete Order Summary Bottom Sheet Modal */}
+      {summarySheetOrder && (
+        <div className="absolute inset-0 z-50 bg-black/60 backdrop-blur-2xs flex flex-col justify-end">
+          <div className="bg-white rounded-t-3xl p-4 shadow-2xl flex flex-col gap-3 max-h-[82%] overflow-y-auto">
+            <div className="flex items-center justify-between border-b border-slate-100 pb-2.5">
+              <div>
+                <div className="flex items-center gap-1.5">
+                  <h4 className="font-black text-sm text-slate-900">
+                    ملخص تفاصيل الطلب {summarySheetOrder.orderNumber}
+                  </h4>
+                  <span className="px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-800 border border-emerald-200 text-[10px] font-black">
+                    {summarySheetOrder.status}
+                  </span>
+                </div>
+                <p className="text-[10px] text-slate-500 font-bold mt-0.5">
+                  تاريخ الإنشاء: {summarySheetOrder.createdAt}
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setSummarySheetOrder(null)}
+                className="w-7 h-7 rounded-full bg-slate-100 text-slate-500 flex items-center justify-center cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            {/* Pickup & Dropoff Addresses */}
+            <div className="p-3 rounded-2xl bg-slate-50 border border-slate-200/80 space-y-2 text-xs">
+              <div className="flex items-start gap-2">
+                <MapPin className="w-3.5 h-3.5 text-emerald-700 shrink-0 mt-0.5" />
+                <div>
+                  <span className="text-[10px] font-bold text-slate-400 block">نقطة الاستلام (Pickup):</span>
+                  <span className="font-extrabold text-slate-900">
+                    {summarySheetOrder.pickupAddress || summarySheetOrder.storeName}
+                  </span>
+                </div>
+              </div>
+              <div className="flex items-start gap-2 pt-1.5 border-t border-slate-200/60">
+                <Navigation className="w-3.5 h-3.5 text-amber-600 shrink-0 mt-0.5" />
+                <div>
+                  <span className="text-[10px] font-bold text-slate-400 block">عنوان التوصيل (Dropoff):</span>
+                  <span className="font-extrabold text-slate-900">
+                    {summarySheetOrder.deliveryAddress}
+                  </span>
+                </div>
+              </div>
+            </div>
+
+            {/* Items Description */}
+            <div className="p-3 rounded-2xl bg-white border border-slate-200 space-y-1.5 text-xs">
+              <span className="text-[10px] font-extrabold text-slate-500 block">
+                محتويات الطلب والأصناف:
+              </span>
+              {summarySheetOrder.items.map((item, idx) => (
+                <div key={idx} className="flex items-center justify-between text-[11px] font-bold text-slate-800">
+                  <span>
+                    {item.quantity}x {item.productName}
+                  </span>
+                  <span>{item.unitPriceEgp * item.quantity}.00 ج.م</span>
+                </div>
+              ))}
+              {(summarySheetOrder.orderNotes || summarySheetOrder.notes) && (
+                <div className="pt-1.5 mt-1.5 border-t border-slate-100 text-[10px] text-amber-800 font-bold">
+                  ملاحظات العميل: {summarySheetOrder.orderNotes || summarySheetOrder.notes}
+                </div>
+              )}
+            </div>
+
+            {/* Customer & Captain Info */}
+            <div className="grid grid-cols-2 gap-2 text-[11px]">
+              <div className="p-2.5 rounded-xl bg-slate-50 border border-slate-200/70">
+                <span className="text-[9px] text-slate-400 font-bold block">بيانات العميل</span>
+                <span className="font-extrabold text-slate-800 block">{summarySheetOrder.customerName}</span>
+                <span className="font-mono text-[10px] text-slate-600">{summarySheetOrder.customerPhone}</span>
+              </div>
+              <div className="p-2.5 rounded-xl bg-slate-50 border border-slate-200/70">
+                <span className="text-[9px] text-slate-400 font-bold block">الكابتن والدفع</span>
+                <span className="font-extrabold text-slate-800 block">
+                  {summarySheetOrder.assignedCaptainName || 'كابتن محمد سعيد'}
+                </span>
+                <span className="text-[10px] text-emerald-700 font-bold">
+                  {summarySheetOrder.paymentMethod === 'cash' ? 'الدفع نقداً عند الاستلام' : 'محفظة مشوار'}
+                </span>
+              </div>
+            </div>
+
+            {/* Total Row */}
+            <div className="p-3 rounded-2xl bg-slate-900 text-white flex items-center justify-between">
+              <span className="text-xs font-bold">إجمالي الطلب شامل التوصيل</span>
+              <span className="text-sm font-black text-emerald-400">
+                {summarySheetOrder.totalEgp + (summarySheetOrder.id === activeCustomerOrder?.id ? mobileTipEgp : 0)}.00 ج.م
+              </span>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Cancel Order Confirmation Bottom Sheet Modal */}
+      {showCancelConfirmModal && activeCustomerOrder && (
+        <div className="absolute inset-0 z-50 bg-black/60 backdrop-blur-2xs flex flex-col justify-end">
+          <div className="bg-white rounded-t-3xl p-4 shadow-2xl flex flex-col gap-3">
+            <div className="flex items-center gap-2.5 text-rose-600">
+              <div className="w-10 h-10 rounded-2xl bg-rose-50 border border-rose-200 flex items-center justify-center shrink-0">
+                <AlertTriangle className="w-5 h-5 text-rose-600" />
+              </div>
+              <div>
+                <h4 className="font-black text-sm text-slate-900">تأكيد إلغاء الطلب الحالي؟</h4>
+                <p className="text-[11px] text-slate-500 font-bold">
+                  الطلب رقم {activeCustomerOrder.orderNumber} • {activeCustomerOrder.storeName}
+                </p>
+              </div>
+            </div>
+
+            <p className="text-xs text-slate-600 leading-relaxed bg-slate-50 p-3 rounded-xl border border-slate-200/80">
+              هل أنت متأكد من رغبتك في إلغاء هذا الطلب؟ سيتم تحديث حالة الطلب فوراً إلى ملغي وإشعار المتجر والكابتن في الباجور.
+            </p>
+
+            <div className="grid grid-cols-2 gap-2 pt-1">
+              <button
+                type="button"
+                onClick={() => {
+                  customerCancelOrder(activeCustomerOrder.id);
+                  setShowCancelConfirmModal(false);
+                }}
+                className="py-2.5 rounded-xl bg-rose-600 hover:bg-rose-700 text-white font-black text-xs cursor-pointer shadow-xs"
+              >
+                نعم، تأكيد الإلغاء
+              </button>
+              <button
+                type="button"
+                onClick={() => setShowCancelConfirmModal(false)}
+                className="py-2.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-800 font-extrabold text-xs cursor-pointer"
+              >
+                تراجع واستمرار الطلب
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* SOS Emergency Assistance Bottom Sheet Modal (El Bagour) */}
+      {showSosEmergencyModal && (
+        <div className="absolute inset-0 z-50 bg-black/60 backdrop-blur-2xs flex flex-col justify-end">
+          <div className="bg-white rounded-t-3xl p-4 shadow-2xl flex flex-col gap-3 max-h-[84%] overflow-y-auto">
+            <div className="flex items-center justify-between border-b border-rose-100 pb-2.5">
+              <div className="flex items-center gap-2">
+                <div className="w-9 h-9 rounded-2xl bg-rose-600 text-white flex items-center justify-center shadow-xs">
+                  <ShieldCheck className="w-5 h-5" />
+                </div>
+                <div>
+                  <h4 className="font-black text-sm text-rose-950">طوارئ وأمان مشوار الباجور (SOS)</h4>
+                  <p className="text-[10px] text-rose-600 font-bold">
+                    مشاركة الموقع الفوري والاتصال السريع بالطوارئ
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowSosEmergencyModal(false)}
+                className="w-7 h-7 rounded-full bg-slate-100 text-slate-500 flex items-center justify-center cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            {/* Live GPS Location & Emergency Contact in El Bagour */}
+            <div className="p-3 rounded-2xl bg-rose-50/70 border border-rose-200 space-y-2 text-xs">
+              <div className="flex items-center justify-between">
+                <span className="font-extrabold text-rose-900">جهة اتصال الطوارئ المسجلة بالباجور:</span>
+                <span className="px-2 py-0.5 rounded-full bg-white text-rose-700 font-black text-[10px] border border-rose-200">
+                  الباجور • المنوفية
+                </span>
+              </div>
+              <div className="bg-white p-2.5 rounded-xl border border-rose-100 flex items-center justify-between">
+                <div>
+                  <span className="font-black text-slate-900 block">د. سامح المنوفي (أقارب - الباجور)</span>
+                  <span className="font-mono text-[11px] text-slate-600" dir="ltr">
+                    01099881122
+                  </span>
+                </div>
+                <span className="text-[10px] font-mono text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-md border border-emerald-200">
+                  30.4312° N, 31.0365° E
+                </span>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => setMobileSosLocationShared(true)}
+                className="w-full py-2.5 rounded-xl bg-rose-600 hover:bg-rose-700 text-white font-black text-xs flex items-center justify-center gap-1.5 shadow-sm cursor-pointer"
+              >
+                <Share2 className="w-3.5 h-3.5" />
+                <span>
+                  {mobileSosLocationShared
+                    ? 'تم إرسال الموقع الحي لجهة الطوارئ بنجاح ✓'
+                    : 'مشاركة موقعي الحي الآن مع جهة الطوارئ'}
+                </span>
+              </button>
+            </div>
+
+            {/* Emergency Services in El Bagour */}
+            <div className="space-y-1.5">
+              <span className="text-[10px] font-extrabold text-slate-500 block">
+                أرقام طوارئ مركز ومدينة الباجور المباشرة:
+              </span>
+              <div className="grid grid-cols-2 gap-2">
+                <button
+                  type="button"
+                  onClick={() => setMobileSosCalledService('شرطة النجدة بالباجور (122)')}
+                  className="p-2.5 rounded-xl bg-slate-900 hover:bg-slate-800 text-white text-xs font-extrabold flex flex-col items-center gap-1 cursor-pointer"
+                >
+                  <Phone className="w-4 h-4 text-rose-400" />
+                  <span>شرطة النجدة (122)</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setMobileSosCalledService('إسعاف الباجور المركزي (123)')}
+                  className="p-2.5 rounded-xl bg-slate-900 hover:bg-slate-800 text-white text-xs font-extrabold flex flex-col items-center gap-1 cursor-pointer"
+                >
+                  <Phone className="w-4 h-4 text-emerald-400" />
+                  <span>إسعاف الباجور (123)</span>
+                </button>
+              </div>
+              {mobileSosCalledService && (
+                <div className="p-2 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-900 text-[11px] font-bold text-center">
+                  جاري الاتصال الفوري بـ: {mobileSosCalledService} — تم إرفاق إحداثيات المشوار
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
 
       {/* Customer Mobile Bottom Navigation Bar (5 Unified Destinations, Touch Targets >= 44px) */}
       <div className="relative z-20 bg-white border-t border-slate-100 py-1 px-2 flex items-center justify-around shadow-sm shrink-0">

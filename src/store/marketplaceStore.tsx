@@ -84,6 +84,8 @@ export interface MarketplaceOrder {
   deliveryAddress: string;
   distanceKm: number;
   estimatedMinutes: string;
+  estimatedDuration?: number;
+  estimatedDurationMinutes?: number;
   isRural: boolean;
   customerId: string;
   customerName: string;
@@ -108,6 +110,9 @@ export interface MarketplaceOrder {
   assignedCaptainPhone?: string;
   assignedCaptainVehicle?: string;
   assignedCaptainRating?: number;
+  customerRating?: number;
+  customerFeedback?: string;
+  orderFeedback?: string;
   createdAt: string;
   createdAtDate: Date;
   acceptedAt?: string;
@@ -117,6 +122,7 @@ export interface MarketplaceOrder {
   quoteId?: string;
   quoteSignature?: string;
   notes?: string;
+  orderNotes?: string;
 }
 
 export interface ChatMessage {
@@ -626,6 +632,8 @@ const INITIAL_ORDERS: MarketplaceOrder[] = [
     deliveryAddress: 'شارع الجيش - برج الشروق، الدور الرابع، الباجور',
     distanceKm: 1.8,
     estimatedMinutes: '١٨ - ٢٢ دقيقة',
+    estimatedDuration: 18,
+    estimatedDurationMinutes: 18,
     isRural: false,
     customerId: 'usr_cust_1',
     customerName: 'أحمد سعيد المنوفي',
@@ -677,6 +685,8 @@ const INITIAL_ORDERS: MarketplaceOrder[] = [
     deliveryAddress: 'قرية شنتنا الحجر - المدخل القبلي',
     distanceKm: 4.8,
     estimatedMinutes: '١٥ - ٢٠ دقيقة',
+    estimatedDuration: 15,
+    estimatedDurationMinutes: 15,
     isRural: true,
     customerId: 'usr_cust_02',
     customerName: 'د. سحر عبد الحميد',
@@ -723,6 +733,8 @@ const INITIAL_ORDERS: MarketplaceOrder[] = [
     deliveryAddress: 'شارع الجيش - برج الشروق، الباجور',
     distanceKm: 1.5,
     estimatedMinutes: '١٠ - ١٤ دقيقة',
+    estimatedDuration: 12,
+    estimatedDurationMinutes: 12,
     isRural: false,
     customerId: 'usr_cust_03',
     customerName: 'م. إسلام عاشور',
@@ -761,6 +773,8 @@ const INITIAL_ORDERS: MarketplaceOrder[] = [
     deliveryAddress: 'قرية كفر الباجور - بجوار المسجد الكبير',
     distanceKm: 3.2,
     estimatedMinutes: '١٥ - ٢٠ دقيقة',
+    estimatedDuration: 15,
+    estimatedDurationMinutes: 15,
     isRural: true,
     customerId: 'usr_cust_1',
     customerName: 'أحمد سعيد المنوفي',
@@ -860,6 +874,9 @@ interface MarketplaceContextType {
   submitRideOrPackageOrder: (params: SubmitRideOrPackageInput) => MarketplaceOrder;
   simulateInstantCaptainAccept: (orderId: string) => void;
   customerCancelOrder: (orderId: string, reason?: string) => void;
+  rateOrderCaptain: (orderId: string, rating: number) => void;
+  updateOrderNotes: (orderId: string, orderNotes: string) => void;
+  updateOrderFeedback: (orderId: string, feedback: string) => void;
 
   // Merchant Actions
   merchantAcceptOrder: (orderId: string) => void;
@@ -912,8 +929,12 @@ interface MarketplaceContextType {
   chatMessages: ChatMessage[];
   sendChatMessage: (orderId: string, text: string) => void;
 
-  // Active Customer Order Shortcut
+  // Active Customer Order Shortcut & Refresh / Navigation Helpers
   activeCustomerOrder: MarketplaceOrder | null;
+  refreshOrderStatus: (orderId?: string) => Promise<MarketplaceOrder | null>;
+  customerNavTab: 'home' | 'ride_booking' | 'stores' | 'history' | 'profile';
+  setCustomerNavTab: (tab: 'home' | 'ride_booking' | 'stores' | 'history' | 'profile') => void;
+  navigateToCustomerHistory: () => void;
 }
 
 const MarketplaceContext = createContext<MarketplaceContextType | undefined>(undefined);
@@ -927,6 +948,7 @@ const STORAGE_KEYS = {
 export const MarketplaceProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [currentUser, setCurrentUser] = useState<DemoUser>(DEMO_PERSONAS[0]);
   const [isAuthModalOpen, setIsAuthModalOpen] = useState<boolean>(false);
+  const [customerNavTab, setCustomerNavTab] = useState<'home' | 'ride_booking' | 'stores' | 'history' | 'profile'>('home');
 
   const [stores, setStores] = useState<StoreItem[]>(INITIAL_STORES);
   const [products, setProducts] = useState<ProductItem[]>(INITIAL_PRODUCTS);
@@ -1295,6 +1317,8 @@ export const MarketplaceProvider: React.FC<{ children: React.ReactNode }> = ({ c
       deliveryAddress: params.deliveryAddress,
       distanceKm: activeCartStore.distanceKm,
       estimatedMinutes: activeCartStore.deliveryTimeEst,
+      estimatedDuration: 20,
+      estimatedDurationMinutes: 20,
       isRural: params.deliveryAddress.includes('قرية'),
       customerId: currentUser.role === 'customer' ? currentUser.id : 'usr_cust_1',
       customerName: currentUser.role === 'customer' ? currentUser.name : 'أحمد سعيد المنوفي',
@@ -1396,6 +1420,16 @@ export const MarketplaceProvider: React.FC<{ children: React.ReactNode }> = ({ c
         : params.isRural
         ? '١٨ - ٢٤ دقيقة'
         : '١٠ - ١٥ دقيقة',
+      estimatedDuration: params.quoteData?.estimatedDurationMinutes
+        ? parseInt(String(params.quoteData.estimatedDurationMinutes), 10) || 15
+        : params.isRural
+        ? 18
+        : 12,
+      estimatedDurationMinutes: params.quoteData?.estimatedDurationMinutes
+        ? parseInt(String(params.quoteData.estimatedDurationMinutes), 10) || 15
+        : params.isRural
+        ? 18
+        : 12,
       isRural: params.isRural,
       customerId: currentUser.role === 'customer' ? currentUser.id : 'usr_cust_1',
       customerName: currentUser.role === 'customer' ? currentUser.name : 'أحمد سعيد المنوفي',
@@ -1471,15 +1505,65 @@ export const MarketplaceProvider: React.FC<{ children: React.ReactNode }> = ({ c
     }
   };
 
-  // Customer cancels own order while in created or searching_captain
+  // Customer cancels own order and updates status to 'cancelled' in the marketplace store
   const customerCancelOrder = (orderId: string, reason: string = 'إلغاء بناءً على رغبة العميل') => {
     setOrders((prev) =>
       prev.map((o) =>
-        o.id === orderId && (o.status === 'created' || o.status === 'searching_captain')
+        (o.id === orderId || o.orderNumber === orderId) && o.status !== 'delivered'
           ? { ...o, status: 'cancelled', notes: `${o.notes ? o.notes + ' | ' : ''}[ملغي: ${reason}]` }
           : o
       )
     );
+  };
+
+  // Customer rates captain performance post-delivery on a 1-5 star scale
+  const rateOrderCaptain = (orderId: string, rating: number) => {
+    const clampedRating = Math.max(1, Math.min(5, Math.round(Number(rating) || 5)));
+    setOrders((prev) =>
+      prev.map((o) =>
+        o.id === orderId || o.orderNumber === orderId
+          ? { ...o, customerRating: clampedRating }
+          : o
+      )
+    );
+  };
+
+  // Customer updates orderNotes on an active or existing order and persists to marketplace store
+  const updateOrderNotes = (orderId: string, nextOrderNotes: string) => {
+    setOrders((prev) => {
+      const updated = prev.map((o) =>
+        o.id === orderId || o.orderNumber === orderId
+          ? { ...o, notes: nextOrderNotes, orderNotes: nextOrderNotes }
+          : o
+      );
+      if (typeof window !== 'undefined') {
+        try {
+          window.localStorage.setItem(STORAGE_KEYS.ORDERS, JSON.stringify(updated));
+        } catch {
+          // ignore storage quota errors
+        }
+      }
+      return updated;
+    });
+  };
+
+  // Customer leaves post-delivery Order Feedback comment in order history and persists to marketplace store
+  const updateOrderFeedback = (orderId: string, feedback: string) => {
+    setOrders((prev) => {
+      const updated = prev.map((o) =>
+        o.id === orderId || o.orderNumber === orderId
+          ? { ...o, customerFeedback: feedback, orderFeedback: feedback }
+          : o
+      );
+      if (typeof window !== 'undefined') {
+        try {
+          window.localStorage.setItem(STORAGE_KEYS.ORDERS, JSON.stringify(updated));
+        } catch {
+          // ignore storage quota errors
+        }
+      }
+      return updated;
+    });
   };
 
   // Merchant Transitions
@@ -1990,6 +2074,51 @@ export const MarketplaceProvider: React.FC<{ children: React.ReactNode }> = ({ c
         o.status !== 'cancelled'
     ) || null;
 
+  const navigateToCustomerHistory = () => {
+    const customerPersona = DEMO_PERSONAS.find((p) => p.role === 'customer');
+    if (customerPersona && currentUser.role !== 'customer') {
+      setCurrentUser(customerPersona);
+    }
+    setCustomerNavTab('history');
+  };
+
+  const refreshOrderStatus = async (orderId?: string): Promise<MarketplaceOrder | null> => {
+    let latestOrders = orders;
+    try {
+      const saved =
+        typeof window !== 'undefined' ? window.localStorage.getItem(STORAGE_KEYS.ORDERS) : null;
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          latestOrders = parsed.map((o: any) => ({
+            ...o,
+            status: o.status === 'merchant_accepted' ? 'accepted_by_store' : o.status,
+            createdAtDate: o.createdAtDate ? new Date(o.createdAtDate) : new Date(),
+          }));
+          setOrders(latestOrders);
+        }
+      }
+    } catch {
+      // Keep in-memory orders if localStorage read fails
+    }
+
+    if (orderId) {
+      const matched = latestOrders.find((o) => o.id === orderId || o.orderNumber === orderId);
+      if (matched) return matched;
+    }
+
+    return (
+      latestOrders.find(
+        (o) =>
+          (o.customerId === currentUser.id || o.customerId === 'usr_cust_1') &&
+          o.status !== 'delivered' &&
+          o.status !== 'cancelled'
+      ) ||
+      latestOrders[0] ||
+      null
+    );
+  };
+
   return (
     <MarketplaceContext.Provider
       value={{
@@ -2018,6 +2147,9 @@ export const MarketplaceProvider: React.FC<{ children: React.ReactNode }> = ({ c
         submitRideOrPackageOrder,
         simulateInstantCaptainAccept,
         customerCancelOrder,
+        rateOrderCaptain,
+        updateOrderNotes,
+        updateOrderFeedback,
         merchantAcceptOrder,
         merchantMarkReady,
         merchantRejectOrder,
@@ -2047,6 +2179,10 @@ export const MarketplaceProvider: React.FC<{ children: React.ReactNode }> = ({ c
         chatMessages,
         sendChatMessage,
         activeCustomerOrder,
+        refreshOrderStatus,
+        customerNavTab,
+        setCustomerNavTab,
+        navigateToCustomerHistory,
       }}
     >
       {children}

@@ -3,10 +3,11 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import JSZip from 'jszip';
 import { OwnerAdminDashboard } from './components/OwnerAdminDashboard';
 import { MobileAppFrame } from './components/mobile/MobileAppFrame';
+import { PinchZoomPan } from './components/common/PinchZoomPan';
 import {
   useMarketplace,
   formatHumanReadableAcceptedTimestamp,
@@ -45,7 +46,13 @@ import {
   ToggleLeft,
   ToggleRight,
   Send,
-  Radio
+  Radio,
+  Star,
+  Share2,
+  Edit3,
+  ChevronDown,
+  ChevronUp,
+  MessageSquare
 } from 'lucide-react';
 
 // Egyptian El Bagour landmarks
@@ -63,6 +70,44 @@ const EL_BAGOUR_LANDMARKS = [
   'قرية ميت عفيف',
   'مجمع مواقف الباجور الجديد',
 ];
+
+interface OrderHistoryEmptyStateProps {
+  onBookNewDelivery: () => void;
+}
+
+function OrderHistoryEmptyState({ onBookNewDelivery }: OrderHistoryEmptyStateProps) {
+  return (
+    <div
+      data-testid="order-history-empty-state"
+      className="bg-slate-950 border border-slate-800 rounded-2xl p-6 text-center flex flex-col items-center justify-center gap-4 font-['Cairo',sans-serif] shadow-inner"
+    >
+      <div
+        data-testid="order-history-empty-state-icon"
+        className="w-14 h-14 rounded-2xl bg-slate-900 border border-slate-800 flex items-center justify-center text-slate-400 shadow-sm"
+      >
+        <Package className="w-7 h-7 text-slate-400 opacity-80" aria-hidden="true" />
+      </div>
+      <div className="flex flex-col items-center gap-1.5 max-w-md">
+        <h3 className="text-sm font-black text-slate-100 font-['Cairo',sans-serif]">
+          No Past Deliveries Found • لا توجد طلبات توصيل في السجل
+        </h3>
+        <p className="text-xs text-slate-400 leading-relaxed font-['Cairo',sans-serif]">
+          Ready for your next trip or package delivery in El Bagour? Book a new delivery with our local fleet in seconds. • هل ترغب في إرسال طرد أو حجز توصيل جديد داخل مركز وقرى الباجور؟
+        </p>
+      </div>
+      <button
+        type="button"
+        data-testid="book-new-delivery-btn"
+        data-button-variant="primary"
+        onClick={onBookNewDelivery}
+        className="min-h-[44px] px-4 py-2.5 rounded-xl bg-amber-500 hover:bg-amber-400 border border-amber-400 text-slate-950 text-xs font-black font-['Cairo',sans-serif] flex items-center justify-center gap-2 shadow-md transform hover:scale-105 active:scale-95 transition-all duration-200 ease-out cursor-pointer"
+      >
+        <Bike className="w-4 h-4 shrink-0" />
+        <span>Book New Delivery • حجز توصيل جديد</span>
+      </button>
+    </div>
+  );
+}
 
 // Flutter source files data for inspection and export
 const FLUTTER_FILES: { path: string; language: string; content: string }[] = [
@@ -477,6 +522,34 @@ All 11 invariant suites verified with zero live DB connection or secret leakage.
   }
 ];
 
+function extractEstimatedDurationMinutes(order: Record<string, any> | null | undefined): number {
+  if (!order) return 15;
+  if (typeof order.estimatedDuration === 'number' && Number.isFinite(order.estimatedDuration) && order.estimatedDuration > 0) {
+    return Math.round(order.estimatedDuration);
+  }
+  if (
+    typeof order.estimatedDurationMinutes === 'number' &&
+    Number.isFinite(order.estimatedDurationMinutes) &&
+    order.estimatedDurationMinutes > 0
+  ) {
+    return Math.round(order.estimatedDurationMinutes);
+  }
+  const rawStr = String(
+    order.estimatedDuration ?? order.estimatedDurationMinutes ?? order.estimatedMinutes ?? ''
+  );
+  if (rawStr) {
+    const normalized = rawStr.replace(/[٠-٩]/g, (d) => String('٠١٢٣٤٥٦٧٨٩'.indexOf(d)));
+    const match = normalized.match(/(\d+)/);
+    if (match) {
+      const parsed = parseInt(match[1], 10);
+      if (Number.isFinite(parsed) && parsed > 0) {
+        return parsed;
+      }
+    }
+  }
+  return 15;
+}
+
 export default function App() {
   // Top-Level Mode: Mobile App Prototype vs Owner Admin Dashboard vs Developer Testing Workbench
   const [workspaceMode, setWorkspaceMode] = useState<'mobile' | 'admin' | 'workbench'>('mobile');
@@ -485,41 +558,430 @@ export default function App() {
   const [activeRole, setActiveRole] = useState<'customer' | 'captain' | 'merchant' | 'operations'>('customer');
   const [deviceFrame, setDeviceFrame] = useState<'iphone' | 'pixel' | 'fluid'>('iphone');
   const [language, setLanguage] = useState<'ar' | 'en'>('ar');
-  const [isDarkMode, setIsDarkMode] = useState(false);
+  const [isDarkMode, setIsDarkMode] = useState<boolean>(true);
   const [activeTab, setActiveTab] = useState<'simulator' | 'backend_tests' | 'code' | 'architecture'>('backend_tests');
   const [selectedFileIndex, setSelectedFileIndex] = useState(0);
   const [copied, setCopied] = useState(false);
   const [downloadingZip, setDownloadingZip] = useState(false);
 
-  const { orders: marketplaceOrders, activeCustomerOrder } = useMarketplace();
+  const {
+    orders: marketplaceOrders,
+    activeCustomerOrder,
+    refreshOrderStatus,
+    navigateToCustomerHistory,
+    customerCancelOrder,
+    rateOrderCaptain,
+    updateOrderNotes,
+    updateOrderFeedback,
+    captains: marketplaceCaptains,
+    captainCompletedDeliveries,
+  } = useMarketplace();
 
   // Customer experience state
   const [customerScreen, setCustomerScreen] = useState<'home' | 'booking' | 'tracking' | 'history'>('home');
   const [selectedPickup, setSelectedPickup] = useState(EL_BAGOUR_LANDMARKS[0]);
   const [selectedDropoff, setSelectedDropoff] = useState(EL_BAGOUR_LANDMARKS[3]);
   const [orderType, setOrderType] = useState<'package' | 'store' | 'errand'>('package');
-  const [orderNotes, setOrderNotes] = useState('');
+  const [orderNotes, setOrderNotes] = useState('الاتصال عند الوصول أمام البوابة الرئيسية');
+  const [isEditNotesOpen, setIsEditNotesOpen] = useState<boolean>(false);
+  const [notesSavedFeedback, setNotesSavedFeedback] = useState<boolean>(false);
+  const [sharedLiveLinkUrl, setSharedLiveLinkUrl] = useState<string | null>(null);
+  const [isShareLiveLinkOpen, setIsShareLiveLinkOpen] = useState<boolean>(false);
+  const [liveLinkCopied, setLiveLinkCopied] = useState<boolean>(false);
   const [isRuralDestination, setIsRuralDestination] = useState(false);
   const [showPassengerModal, setShowPassengerModal] = useState(false);
+  const [isCallCaptainPromptOpen, setIsCallCaptainPromptOpen] = useState<boolean>(false);
+  const [isCaptainProfileModalOpen, setIsCaptainProfileModalOpen] = useState<boolean>(false);
+  const [isCancelOrderDialogOpen, setIsCancelOrderDialogOpen] = useState<boolean>(false);
+  const [trackedCancelledOrderId, setTrackedCancelledOrderId] = useState<string | null>(null);
+  const [orderRatings, setOrderRatings] = useState<Record<string, number>>({});
+  const [isFareBreakdownExpanded, setIsFareBreakdownExpanded] = useState<boolean>(true);
+  const [isCaptainChatModalOpen, setIsCaptainChatModalOpen] = useState<boolean>(false);
+  const [captainChatInput, setCaptainChatInput] = useState<string>('');
+  const [captainChatMessages, setCaptainChatMessages] = useState<
+    Array<{ id: string; sender: 'customer' | 'captain'; text: string; time: string }>
+  >([
+    {
+      id: 'msg_init_1',
+      sender: 'captain',
+      text: 'أهلاً بك يا فندم، معك كابتن طارق، استلمت الطلب وأنا في الطريق إليك في الباجور.',
+      time: '07:29 م',
+    },
+  ]);
+  const [captainTipEgp, setCaptainTipEgp] = useState<number>(0);
+  const [customTipInput, setCustomTipInput] = useState<string>('');
+  const [isAddTipSectionOpen, setIsAddTipSectionOpen] = useState<boolean>(true);
+  const [isTimelinePulsing, setIsTimelinePulsing] = useState<boolean>(true);
+  const [orderFeedbackDrafts, setOrderFeedbackDrafts] = useState<Record<string, string>>({});
+  const [orderFeedbackSavedMap, setOrderFeedbackSavedMap] = useState<Record<string, boolean>>({});
+  const [isSosModalOpen, setIsSosModalOpen] = useState<boolean>(false);
+  const [sosLocationShared, setSosLocationShared] = useState<boolean>(false);
+  const [sosTriggeredService, setSosTriggeredService] = useState<string | null>(null);
+  const [isOrderSummaryModalOpen, setIsOrderSummaryModalOpen] = useState<boolean>(false);
+  const [isOrderHistoryEmptyPreview, setIsOrderHistoryEmptyPreview] = useState<boolean>(false);
+  const [pickupAddressCopied, setPickupAddressCopied] = useState<boolean>(false);
+  const [dropoffAddressCopied, setDropoffAddressCopied] = useState<boolean>(false);
+  const [isWidgetStatusSlideAnimating, setIsWidgetStatusSlideAnimating] = useState<boolean>(true);
+  const [isFullScreenMapOpen, setIsFullScreenMapOpen] = useState<boolean>(false);
 
-  // Active order state with acceptance timestamp
+  const handleToggleFullScreenMap = () => {
+    setIsFullScreenMapOpen((prev) => !prev);
+  };
+
+  const handleBookNewDelivery = () => {
+    setIsOrderHistoryEmptyPreview(false);
+    setCustomerScreen('tracking');
+  };
+
+  // Active order state with acceptance timestamp, captain phone & estimated duration
   const [activeOrderState, setActiveOrderState] = useState({
     id: 'ord_bagour_8102',
     orderNumber: '#MSH-8102',
     captainName: 'كابتن طارق الغريب',
+    captainPhone: '01012345678',
+    assignedCaptainPhone: '01012345678',
     captainVehicle: 'دراجة هوجان سوداء (٤٣٢١ م ن)',
     destination: 'مستشفى الباجور العام',
     pickup: 'ميدان المحطة - وسط الباجور',
     totalEgp: 22,
+    status: 'in_transit',
+    estimatedDuration: 15,
+    estimatedDurationMinutes: 15,
+    estimatedMinutes: '١٥ دقيقة',
     acceptedAt: '07:28 م',
     acceptedAtIso: new Date(Date.now() - 6 * 60 * 1000).toISOString(),
+    notes: 'الاتصال عند الوصول أمام البوابة الرئيسية',
+    orderNotes: 'الاتصال عند الوصول أمام البوابة الرئيسية',
   });
+
+  useEffect(() => {
+    if (
+      activeCustomerOrder &&
+      trackedCancelledOrderId &&
+      activeCustomerOrder.id !== trackedCancelledOrderId
+    ) {
+      setTrackedCancelledOrderId(null);
+    }
+  }, [activeCustomerOrder?.id, trackedCancelledOrderId]);
 
   // Extract the active order and its human-readable acceptance timestamp from existing order state
   const currentTrackedOrder =
+    (trackedCancelledOrderId
+      ? marketplaceOrders.find((o) => o.id === trackedCancelledOrderId) || activeOrderState
+      : null) ||
     activeCustomerOrder ||
     marketplaceOrders.find((o) => Boolean(o.acceptedAtIso || o.acceptedAt)) ||
     activeOrderState;
+
+  const currentOrderCaptainPhone =
+    ('assignedCaptainPhone' in currentTrackedOrder && currentTrackedOrder.assignedCaptainPhone) ||
+    ('captainPhone' in currentTrackedOrder && currentTrackedOrder.captainPhone) ||
+    activeOrderState.captainPhone ||
+    '01012345678';
+  const currentOrderCaptainName =
+    ('assignedCaptainName' in currentTrackedOrder && currentTrackedOrder.assignedCaptainName) ||
+    ('captainName' in currentTrackedOrder && currentTrackedOrder.captainName) ||
+    activeOrderState.captainName;
+  const matchedCaptainProfile = marketplaceCaptains.find(
+    (c) =>
+      ('assignedCaptainId' in currentTrackedOrder && c.id === currentTrackedOrder.assignedCaptainId) ||
+      c.name === currentOrderCaptainName ||
+      c.phone === currentOrderCaptainPhone
+  );
+  const currentOrderCaptainVehicle =
+    ('assignedCaptainVehicle' in currentTrackedOrder && currentTrackedOrder.assignedCaptainVehicle) ||
+    ('captainVehicle' in currentTrackedOrder && currentTrackedOrder.captainVehicle) ||
+    (matchedCaptainProfile
+      ? `${matchedCaptainProfile.vehicleType} (${matchedCaptainProfile.plateNumber})`
+      : activeOrderState.captainVehicle);
+  const currentOrderCaptainRating =
+    ('assignedCaptainRating' in currentTrackedOrder &&
+    typeof currentTrackedOrder.assignedCaptainRating === 'number'
+      ? currentTrackedOrder.assignedCaptainRating
+      : undefined) ??
+    matchedCaptainProfile?.rating ??
+    4.9;
+  const currentOrderCaptainTotalTripsElBagour =
+    140 + (matchedCaptainProfile?.completedToday ?? captainCompletedDeliveries ?? 8);
+  const currentOrderStatus =
+    ('status' in currentTrackedOrder && currentTrackedOrder.status) || activeOrderState.status;
+  const currentOrderPickup =
+    ('pickupAddress' in currentTrackedOrder && currentTrackedOrder.pickupAddress) ||
+    ('pickup' in currentTrackedOrder && currentTrackedOrder.pickup) ||
+    activeOrderState.pickup ||
+    'ميدان المحطة - وسط الباجور';
+  const currentOrderDropoff =
+    ('deliveryAddress' in currentTrackedOrder && currentTrackedOrder.deliveryAddress) ||
+    ('destination' in currentTrackedOrder && currentTrackedOrder.destination) ||
+    activeOrderState.destination ||
+    'مستشفى الباجور العام';
+  const currentOrderNotesValue =
+    ('orderNotes' in currentTrackedOrder && typeof currentTrackedOrder.orderNotes === 'string'
+      ? currentTrackedOrder.orderNotes
+      : undefined) ??
+    ('notes' in currentTrackedOrder && typeof currentTrackedOrder.notes === 'string'
+      ? currentTrackedOrder.notes
+      : undefined) ??
+    orderNotes;
+
+  const currentOrderItemDescription =
+    ('itemDescription' in currentTrackedOrder &&
+    typeof currentTrackedOrder.itemDescription === 'string' &&
+    currentTrackedOrder.itemDescription.trim() !== ''
+      ? currentTrackedOrder.itemDescription
+      : undefined) || 'طرد مستلزمات طبية وأدوية عاجلة - مشوار الباجور';
+  const currentOrderCustomerName =
+    ('customerName' in currentTrackedOrder &&
+    typeof currentTrackedOrder.customerName === 'string' &&
+    currentTrackedOrder.customerName.trim() !== ''
+      ? currentTrackedOrder.customerName
+      : undefined) || 'أحمد سعيد المنوفي';
+  const currentOrderCustomerPhone =
+    ('customerPhone' in currentTrackedOrder &&
+    typeof currentTrackedOrder.customerPhone === 'string' &&
+    currentTrackedOrder.customerPhone.trim() !== ''
+      ? currentTrackedOrder.customerPhone
+      : undefined) || '01012345678';
+  const currentOrderPaymentMethod =
+    ('paymentMethod' in currentTrackedOrder &&
+    typeof currentTrackedOrder.paymentMethod === 'string'
+      ? currentTrackedOrder.paymentMethod
+      : undefined) || 'cash';
+  const elBagourEmergencyContact = {
+    name: 'د. سامح المنوفي (جهة اتصال الطوارئ - الباجور)',
+    phone: '01099881122',
+    coordinates: '30.4328° N, 31.0369° E (El Bagour Center)',
+  };
+
+  // Fare Breakdown calculation for the active tracked order in El Bagour
+  const isCurrentTrackedOrderRural =
+    currentOrderDropoff.includes('قرية') || isRuralDestination;
+  const fareBreakdownBaseFareEgp = 15;
+  const fareBreakdownRuralSurchargeEgp = isCurrentTrackedOrderRural ? 5 : 0;
+  const fareBreakdownPlatformFeeEgp = 2;
+  const rawTrackedOrderTotalEgp =
+    ('totalEgp' in currentTrackedOrder && typeof currentTrackedOrder.totalEgp === 'number'
+      ? currentTrackedOrder.totalEgp
+      : undefined) ?? activeOrderState.totalEgp;
+  const fareBreakdownDistanceFareEgp = Math.max(
+    5,
+    rawTrackedOrderTotalEgp -
+      (fareBreakdownBaseFareEgp + fareBreakdownRuralSurchargeEgp + fareBreakdownPlatformFeeEgp)
+  );
+  const fareBreakdownTipEgp = captainTipEgp;
+  const fareBreakdownTotalEgp =
+    fareBreakdownBaseFareEgp +
+    fareBreakdownDistanceFareEgp +
+    fareBreakdownRuralSurchargeEgp +
+    fareBreakdownPlatformFeeEgp +
+    fareBreakdownTipEgp;
+
+  const PREDEFINED_QUICK_MESSAGES = [
+    'أنا في انتظارك',
+    'أين أنت الآن؟',
+    'أنا أمام البوابة الرئيسية',
+    'يرجى الاتصال عند الوصول',
+  ] as const;
+
+  const handleSendCaptainChatMessage = (rawMessageText: string) => {
+    const trimmed = rawMessageText.trim();
+    if (!trimmed) return;
+    const nowTime = new Date().toLocaleTimeString('ar-EG', {
+      hour: '2-digit',
+      minute: '2-digit',
+    });
+    const customerMessage = {
+      id: `msg_cust_${Date.now()}`,
+      sender: 'customer' as const,
+      text: trimmed,
+      time: nowTime,
+    };
+    const captainReplyText =
+      trimmed === 'أين أنت الآن؟'
+        ? 'أنا في الطريق إليك في الباجور، سأصل خلال دقائق قليلة إن شاء الله 🛵'
+        : trimmed === 'أنا في انتظارك'
+          ? 'تمام يا فندم، أنا قريب جداً من نقطة التسليم الآن 👍'
+          : 'تم استلام رسالتك يا فندم، في خدمتك دائماً ✔️';
+    const captainReply = {
+      id: `msg_capt_${Date.now() + 1}`,
+      sender: 'captain' as const,
+      text: captainReplyText,
+      time: nowTime,
+    };
+    setCaptainChatMessages((prev) => [...prev, customerMessage, captainReply]);
+    setCaptainChatInput('');
+  };
+
+  const handleSelectPresetTip = (amountEgp: number) => {
+    setCaptainTipEgp(amountEgp);
+    setCustomTipInput(String(amountEgp));
+    setIsFareBreakdownExpanded(true);
+  };
+
+  const handleCustomTipInputChange = (rawVal: string) => {
+    setCustomTipInput(rawVal);
+    const trimmed = rawVal.trim();
+    if (trimmed === '') {
+      setCaptainTipEgp(0);
+      return;
+    }
+    const parsed = Number(trimmed);
+    if (Number.isFinite(parsed) && parsed >= 0) {
+      setCaptainTipEgp(parsed);
+      setIsFareBreakdownExpanded(true);
+    }
+  };
+
+  const handleApplyCustomTip = (e: React.FormEvent) => {
+    e.preventDefault();
+    const parsed = Number(customTipInput.trim());
+    if (Number.isFinite(parsed) && parsed >= 0) {
+      setCaptainTipEgp(parsed);
+      setIsFareBreakdownExpanded(true);
+    }
+  };
+
+  // Vertical Status Timeline steps for active order tracking
+  const orderTimelineSteps = [
+    {
+      key: 'created',
+      label: 'Created',
+      arabicLabel: 'تم إنشاء الطلب',
+      description: 'Order registered in El Bagour dispatch ledger',
+      Icon: FileText,
+    },
+    {
+      key: 'searching_captain',
+      label: 'Searching Captain',
+      arabicLabel: 'جاري البحث عن كابتن',
+      description: 'Broadcasting request to nearby El Bagour captains',
+      Icon: Radio,
+    },
+    {
+      key: 'captain_assigned',
+      label: 'Captain Assigned',
+      arabicLabel: 'تم تعيين الكابتن',
+      description: `${currentOrderCaptainName} accepted the trip`,
+      Icon: Bike,
+    },
+    {
+      key: 'at_pickup',
+      label: 'At Pickup',
+      arabicLabel: 'الكابتن في نقطة الاستلام',
+      description: `Arrived at ${currentOrderPickup}`,
+      Icon: MapPin,
+    },
+    {
+      key: 'picked_up',
+      label: 'Picked Up',
+      arabicLabel: 'تم استلام الطلب',
+      description: 'Package verified and collected from pickup point',
+      Icon: Package,
+    },
+    {
+      key: 'in_transit',
+      label: 'In Transit',
+      arabicLabel: 'في الطريق للتسليم',
+      description: `En route to ${currentOrderDropoff}`,
+      Icon: Navigation,
+    },
+    {
+      key: 'delivered',
+      label: 'Delivered',
+      arabicLabel: 'تم التسليم بنجاح',
+      description: 'Order delivered and cash settlement recorded',
+      Icon: CheckCircle2,
+    },
+  ] as const;
+
+  const normalizedStatusForTimeline =
+    currentOrderStatus === 'assigned' || currentOrderStatus === 'accepted'
+      ? 'captain_assigned'
+      : currentOrderStatus === 'pending'
+        ? 'searching_captain'
+        : currentOrderStatus;
+  const activeTimelineIndex = Math.max(
+    0,
+    orderTimelineSteps.findIndex((step) => step.key === normalizedStatusForTimeline)
+  );
+
+  // Trigger subtle pulse animation on the status timeline and Material 3 slide-in entrance on widget whenever an order status update is received
+  useEffect(() => {
+    setIsTimelinePulsing(true);
+    setIsWidgetStatusSlideAnimating(false);
+    const frameTimer = window.setTimeout(() => {
+      setIsWidgetStatusSlideAnimating(true);
+    }, 15);
+    const pulseTimer = window.setTimeout(() => {
+      setIsTimelinePulsing(false);
+    }, 2600);
+    const slideSettleTimer = window.setTimeout(() => {
+      setIsWidgetStatusSlideAnimating(false);
+    }, 650);
+    return () => {
+      window.clearTimeout(frameTimer);
+      window.clearTimeout(pulseTimer);
+      window.clearTimeout(slideSettleTimer);
+    };
+  }, [currentOrderStatus, currentTrackedOrder.id]);
+
+  useEffect(() => {
+    const trackedNotes =
+      ('orderNotes' in currentTrackedOrder && typeof currentTrackedOrder.orderNotes === 'string'
+        ? currentTrackedOrder.orderNotes
+        : undefined) ??
+      ('notes' in currentTrackedOrder && typeof currentTrackedOrder.notes === 'string'
+        ? currentTrackedOrder.notes
+        : undefined);
+    if (typeof trackedNotes === 'string') {
+      setOrderNotes(trackedNotes);
+    }
+  }, [currentTrackedOrder.id]);
+  const elBagourRoutePolylinePoints = '38,68 96,46 168,54 242,28';
+  const mapThemePalette = isDarkMode
+    ? {
+        mode: 'dark' as const,
+        backgroundFill: '#091326',
+        gridStroke: '#1e293b',
+        baseRouteStroke: '#f59e0b',
+        activeRouteStroke: '#fbbf24',
+        pickupFill: '#10b981',
+        pickupCenter: '#ffffff',
+        dropoffFill: '#f59e0b',
+        dropoffCenter: '#091326',
+        riderFill: '#f59e0b',
+        riderStroke: '#ffffff',
+        labelFill: '#94a3b8',
+      }
+    : {
+        mode: 'light' as const,
+        backgroundFill: '#f1f5f9',
+        gridStroke: '#cbd5e1',
+        baseRouteStroke: '#d97706',
+        activeRouteStroke: '#b45309',
+        pickupFill: '#059669',
+        pickupCenter: '#ffffff',
+        dropoffFill: '#d97706',
+        dropoffCenter: '#ffffff',
+        riderFill: '#d97706',
+        riderStroke: '#0f172a',
+        labelFill: '#334155',
+      };
+  const elBagourStaticMapSvgUri = `data:image/svg+xml;utf8,${encodeURIComponent(
+    `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 280 96" width="280" height="96" data-theme="${mapThemePalette.mode}">
+      <rect width="280" height="96" rx="12" fill="${mapThemePalette.backgroundFill}"/>
+      <path d="M0 24 H280 M0 52 H280 M0 78 H280 M52 0 V96 M135 0 V96 M218 0 V96" stroke="${mapThemePalette.gridStroke}" stroke-width="1.5"/>
+      <polyline points="${elBagourRoutePolylinePoints}" stroke="${mapThemePalette.baseRouteStroke}" stroke-opacity="0.4" stroke-width="5" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+      <polyline id="animated-route-polyline" points="${elBagourRoutePolylinePoints}" stroke="${mapThemePalette.activeRouteStroke}" stroke-width="3" stroke-dasharray="8 6" stroke-linecap="round" stroke-linejoin="round" fill="none">
+        <animate attributeName="stroke-dashoffset" from="28" to="0" dur="1.2s" repeatCount="indefinite"/>
+      </polyline>
+      <circle cx="38" cy="68" r="7" fill="${mapThemePalette.pickupFill}"/>
+      <circle cx="38" cy="68" r="3" fill="${mapThemePalette.pickupCenter}"/>
+      <circle cx="242" cy="28" r="7" fill="${mapThemePalette.dropoffFill}"/>
+      <circle cx="242" cy="28" r="3" fill="${mapThemePalette.dropoffCenter}"/>
+      <text x="140" y="15" fill="${mapThemePalette.labelFill}" font-family="Cairo, sans-serif" font-size="9" font-weight="bold" text-anchor="middle">EL BAGOUR LIVE ROUTE MAP (${mapThemePalette.mode.toUpperCase()})</text>
+    </svg>`
+  )}`;
 
   const hasCurrentOrderAcceptanceTimestamp = Boolean(
     currentTrackedOrder.acceptedAtIso || currentTrackedOrder.acceptedAt
@@ -537,6 +999,259 @@ export default function App() {
     ) ||
     extractedAcceptedAtFallback ||
     'بانتظار تسجيل وقت القبول...';
+
+  // Dynamic Estimated Time of Arrival (ETA) countdown derived from the current order's estimated duration field
+  const currentOrderDurationMinutes = extractEstimatedDurationMinutes(currentTrackedOrder);
+  const currentOrderRouteDistanceKm =
+    ('distanceKm' in currentTrackedOrder &&
+    typeof currentTrackedOrder.distanceKm === 'number' &&
+    currentTrackedOrder.distanceKm > 0
+      ? currentTrackedOrder.distanceKm
+      : undefined) ?? 2.4;
+  const [etaRemainingSeconds, setEtaRemainingSeconds] = useState<number>(
+    () => currentOrderDurationMinutes * 60
+  );
+  const [isRefreshingOrder, setIsRefreshingOrder] = useState<boolean>(false);
+  const [refreshProgress, setRefreshProgress] = useState<number>(0);
+  const [refreshFeedbackStage, setRefreshFeedbackStage] = useState<'idle' | 'updating' | 'updated'>('idle');
+  const [lastRefreshedAtLabel, setLastRefreshedAtLabel] = useState<string | null>(null);
+
+  useEffect(() => {
+    setEtaRemainingSeconds(currentOrderDurationMinutes * 60);
+  }, [currentTrackedOrder.id, currentOrderDurationMinutes]);
+
+  useEffect(() => {
+    const countdownInterval = window.setInterval(() => {
+      setEtaRemainingSeconds((prev) => (prev > 0 ? prev - 1 : 0));
+    }, 1000);
+    return () => window.clearInterval(countdownInterval);
+  }, []);
+
+  const etaMinutesRemaining = Math.floor(etaRemainingSeconds / 60);
+  const etaSecondsRemaining = etaRemainingSeconds % 60;
+  const formattedEtaCountdown = `${String(etaMinutesRemaining).padStart(2, '0')}:${String(
+    etaSecondsRemaining
+  ).padStart(2, '0')}`;
+
+  // Manual refresh handler to re-fetch order status from the marketplace store with visual progress feedback
+  const handleManualRefreshOrderStatus = async () => {
+    if (isRefreshingOrder) return;
+    setIsRefreshingOrder(true);
+    setRefreshFeedbackStage('updating');
+    setRefreshProgress(25);
+
+    const stepTimer1 = window.setTimeout(() => setRefreshProgress(65), 140);
+    const stepTimer2 = window.setTimeout(() => setRefreshProgress(90), 280);
+
+    try {
+      const refreshedOrder = await refreshOrderStatus(currentTrackedOrder.id);
+      if (refreshedOrder) {
+        const durMins = extractEstimatedDurationMinutes(refreshedOrder);
+        setActiveOrderState((prev) => ({
+          ...prev,
+          id: refreshedOrder.id,
+          orderNumber: refreshedOrder.orderNumber,
+          captainName: refreshedOrder.assignedCaptainName || prev.captainName,
+          captainPhone: refreshedOrder.assignedCaptainPhone || prev.captainPhone,
+          assignedCaptainPhone: refreshedOrder.assignedCaptainPhone || prev.assignedCaptainPhone,
+          captainVehicle: refreshedOrder.assignedCaptainVehicle || prev.captainVehicle,
+          destination: refreshedOrder.deliveryAddress || prev.destination,
+          pickup: refreshedOrder.pickupAddress || prev.pickup,
+          totalEgp: refreshedOrder.totalEgp,
+          status: refreshedOrder.status,
+          estimatedDuration: durMins,
+          estimatedDurationMinutes: durMins,
+          estimatedMinutes: refreshedOrder.estimatedMinutes || prev.estimatedMinutes,
+          acceptedAt: refreshedOrder.acceptedAt || prev.acceptedAt,
+          acceptedAtIso: refreshedOrder.acceptedAtIso || prev.acceptedAtIso,
+        }));
+      }
+      setLastRefreshedAtLabel(
+        new Date().toLocaleTimeString('ar-EG', {
+          hour: '2-digit',
+          minute: '2-digit',
+          second: '2-digit',
+        })
+      );
+      setIsTimelinePulsing(true);
+      setIsWidgetStatusSlideAnimating(true);
+      window.setTimeout(() => {
+        setIsTimelinePulsing(false);
+      }, 2600);
+      window.setTimeout(() => {
+        setIsWidgetStatusSlideAnimating(false);
+      }, 650);
+    } finally {
+      window.setTimeout(() => {
+        window.clearTimeout(stepTimer1);
+        window.clearTimeout(stepTimer2);
+        setRefreshProgress(100);
+        setIsRefreshingOrder(false);
+        setRefreshFeedbackStage('updated');
+        window.setTimeout(() => {
+          setRefreshFeedbackStage('idle');
+          setRefreshProgress(0);
+        }, 1200);
+      }, 420);
+    }
+  };
+
+  // Navigate to the order history section of the application
+  const handleViewOrderHistory = () => {
+    setCustomerScreen('history');
+    navigateToCustomerHistory();
+  };
+
+  // Open Phone Dialer prompt with the captain's phone number from the active order object
+  const handleOpenCallCaptainPrompt = () => {
+    setIsCallCaptainPromptOpen(true);
+  };
+
+  // Open Cancel Order confirmation dialog
+  const handleOpenCancelOrderDialog = () => {
+    setIsCancelOrderDialogOpen(true);
+  };
+
+  // Confirm cancellation and update the order status to 'cancelled' in the marketplace store
+  const handleConfirmCancelOrder = () => {
+    const targetOrderId = currentTrackedOrder.id;
+    customerCancelOrder(targetOrderId, 'إلغاء الطلب من شريط التتبع الحي');
+    setTrackedCancelledOrderId(targetOrderId);
+    setActiveOrderState((prev) => ({
+      ...prev,
+      status: 'cancelled',
+    }));
+    setEtaRemainingSeconds(0);
+    setIsTimelinePulsing(true);
+    setIsCancelOrderDialogOpen(false);
+  };
+
+  // Post-delivery 1-5 star rating handler for captain performance
+  const handleRateOrderCaptain = (orderId: string, rating: number) => {
+    const clamped = Math.max(1, Math.min(5, Math.round(rating)));
+    setOrderRatings((prev) => ({
+      ...prev,
+      [orderId]: clamped,
+    }));
+    rateOrderCaptain(orderId, clamped);
+  };
+
+  // Order Feedback comment handlers persisting to marketplace order history store
+  const handleOrderFeedbackChange = (orderId: string, feedbackText: string) => {
+    setOrderFeedbackDrafts((prev) => ({
+      ...prev,
+      [orderId]: feedbackText,
+    }));
+    setOrderFeedbackSavedMap((prev) => ({
+      ...prev,
+      [orderId]: false,
+    }));
+    updateOrderFeedback(orderId, feedbackText);
+  };
+
+  const handleSaveOrderFeedback = (orderId: string, currentFeedbackText: string, e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    updateOrderFeedback(orderId, currentFeedbackText);
+    setOrderFeedbackSavedMap((prev) => ({
+      ...prev,
+      [orderId]: true,
+    }));
+  };
+
+  // Generate a temporary live tracking URL and invoke mobile sharing intents
+  const handleShareLiveLink = async () => {
+    const normalizedOrderNo = String(currentTrackedOrder.orderNumber || '#MSH-8102').replace('#', '');
+    const expiresAt = Date.now() + 30 * 60 * 1000;
+    const tempUrl = `https://mashwar.eg/live-track/${encodeURIComponent(
+      currentTrackedOrder.id
+    )}?order=${encodeURIComponent(normalizedOrderNo)}&exp=${expiresAt}`;
+
+    setSharedLiveLinkUrl(tempUrl);
+    setIsShareLiveLinkOpen(true);
+    setLiveLinkCopied(false);
+
+    if (typeof navigator !== 'undefined' && typeof navigator.share === 'function') {
+      try {
+        await navigator.share({
+          title: `تتبع طلب مشوار الباجور ${currentTrackedOrder.orderNumber}`,
+          text: `تابع مسار طلبي الحالي من ${currentOrderPickup} إلى ${currentOrderDropoff} لحظة بلحظة:`,
+          url: tempUrl,
+        });
+      } catch {
+        // Fallback panel remains open if native share sheet is dismissed or unsupported
+      }
+    }
+  };
+
+  const handleCopyLiveLink = async () => {
+    if (!sharedLiveLinkUrl) return;
+    if (typeof navigator !== 'undefined' && navigator.clipboard?.writeText) {
+      try {
+        await navigator.clipboard.writeText(sharedLiveLinkUrl);
+      } catch {
+        // ignore clipboard permission errors in test environment
+      }
+    }
+    setLiveLinkCopied(true);
+  };
+
+  const handleCopyPickupAddress = async () => {
+    if (typeof navigator !== 'undefined' && navigator.clipboard?.writeText) {
+      try {
+        await navigator.clipboard.writeText(currentOrderPickup);
+      } catch {
+        // ignore clipboard permission errors in test environment
+      }
+    }
+    setPickupAddressCopied(true);
+    window.setTimeout(() => {
+      setPickupAddressCopied(false);
+    }, 2000);
+  };
+
+  const handleCopyDropoffAddress = async () => {
+    if (typeof navigator !== 'undefined' && navigator.clipboard?.writeText) {
+      try {
+        await navigator.clipboard.writeText(currentOrderDropoff);
+      } catch {
+        // ignore clipboard permission errors in test environment
+      }
+    }
+    setDropoffAddressCopied(true);
+    window.setTimeout(() => {
+      setDropoffAddressCopied(false);
+    }, 2000);
+  };
+
+  // Toggle Edit Notes form in the active order tracking widget
+  const handleToggleEditNotes = () => {
+    setIsEditNotesOpen((prev) => !prev);
+    setNotesSavedFeedback(false);
+  };
+
+  // Update orderNotes in component state and persist to marketplaceStore
+  const handleOrderNotesChange = (nextNotes: string) => {
+    setOrderNotes(nextNotes);
+    setActiveOrderState((prev) => ({
+      ...prev,
+      notes: nextNotes,
+      orderNotes: nextNotes,
+    }));
+    updateOrderNotes(currentTrackedOrder.id, nextNotes);
+    setNotesSavedFeedback(false);
+  };
+
+  const handleSaveOrderNotes = (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    setActiveOrderState((prev) => ({
+      ...prev,
+      notes: orderNotes,
+      orderNotes,
+    }));
+    updateOrderNotes(currentTrackedOrder.id, orderNotes);
+    setNotesSavedFeedback(true);
+    setIsEditNotesOpen(false);
+  };
 
   // Captain experience state
   const [isCaptainOnline, setIsCaptainOnline] = useState(true);
@@ -693,14 +1408,14 @@ export default function App() {
           </div>
 
           {/* Primary Mode Switcher: Mobile App vs Owner Dashboard vs Developer Workbench */}
-          <div className="flex items-center flex-wrap gap-2">
-            <div className="bg-slate-900 p-1 rounded-xl flex items-center border border-emerald-500/30 shadow-inner">
+          <div className="flex items-center flex-wrap gap-2 font-['Cairo',sans-serif]">
+            <div className="bg-slate-900 p-1 rounded-2xl flex items-center border border-slate-800 shadow-inner gap-1">
               <button
                 onClick={() => setWorkspaceMode('mobile')}
-                className={`px-3 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1.5 transition-all ${
+                className={`px-3.5 py-2 rounded-xl border text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer ${
                   workspaceMode === 'mobile'
-                    ? 'bg-emerald-600 text-white shadow-md font-black ring-1 ring-emerald-400/40'
-                    : 'text-slate-300 hover:text-white'
+                    ? 'bg-emerald-700 text-white border-emerald-500/50 shadow-md font-black ring-1 ring-emerald-500/40'
+                    : 'bg-transparent border-transparent text-slate-400 hover:text-white hover:bg-slate-800/60'
                 }`}
               >
                 <Smartphone className="w-3.5 h-3.5" />
@@ -708,10 +1423,10 @@ export default function App() {
               </button>
               <button
                 onClick={() => setWorkspaceMode('admin')}
-                className={`px-3 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1.5 transition-all ${
+                className={`px-3.5 py-2 rounded-xl border text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer ${
                   workspaceMode === 'admin'
-                    ? 'bg-amber-500 text-slate-950 shadow-md font-black'
-                    : 'text-slate-300 hover:text-white'
+                    ? 'bg-amber-600 text-white border-amber-500/50 shadow-md font-black ring-1 ring-amber-500/40'
+                    : 'bg-transparent border-transparent text-slate-400 hover:text-white hover:bg-slate-800/60'
                 }`}
               >
                 <ShieldCheck className="w-3.5 h-3.5" />
@@ -719,10 +1434,10 @@ export default function App() {
               </button>
               <button
                 onClick={() => setWorkspaceMode('workbench')}
-                className={`px-3 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1.5 transition-all ${
+                className={`px-3.5 py-2 rounded-xl border text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer ${
                   workspaceMode === 'workbench'
-                    ? 'bg-amber-500 text-slate-950 shadow-md font-black'
-                    : 'text-slate-300 hover:text-white'
+                    ? 'bg-amber-600 text-white border-amber-500/50 shadow-md font-black ring-1 ring-amber-500/40'
+                    : 'bg-transparent border-transparent text-slate-400 hover:text-white hover:bg-slate-800/60'
                 }`}
               >
                 <Code2 className="w-3.5 h-3.5" />
@@ -732,21 +1447,25 @@ export default function App() {
 
             {/* Workbench Sub-Tab Switchers (Only in Workbench Mode) */}
             {workspaceMode === 'workbench' && (
-              <div className="bg-slate-800 p-1 rounded-xl flex items-center border border-slate-700">
+              <div className="bg-slate-900 p-1 rounded-2xl flex items-center border border-slate-800 gap-1">
                 <button
                   onClick={() => setActiveTab('backend_tests')}
-                  className={`px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-all ${
-                    activeTab === 'backend_tests' ? 'bg-emerald-500 text-slate-950 shadow font-bold' : 'text-slate-300 hover:text-white'
+                  className={`px-3.5 py-2 rounded-xl border text-xs font-semibold flex items-center gap-1.5 transition-all cursor-pointer ${
+                    activeTab === 'backend_tests'
+                      ? 'bg-emerald-700 text-white border-emerald-500/50 shadow font-bold'
+                      : 'border-transparent text-slate-400 hover:text-white'
                   }`}
                 >
                   <ShieldCheck className="w-3.5 h-3.5" />
                   <span>Backend Tests</span>
-                  <span className="px-1.5 py-0.5 rounded-full bg-emerald-950 text-emerald-300 text-[10px] font-bold">83/83</span>
+                  <span className="px-1.5 py-0.5 rounded-full bg-emerald-950 text-emerald-300 text-[10px] font-bold">89/89</span>
                 </button>
                 <button
                   onClick={() => setActiveTab('simulator')}
-                  className={`px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-all ${
-                    activeTab === 'simulator' ? 'bg-amber-500 text-slate-950 shadow' : 'text-slate-300 hover:text-white'
+                  className={`px-3.5 py-2 rounded-xl border text-xs font-semibold flex items-center gap-1.5 transition-all cursor-pointer ${
+                    activeTab === 'simulator'
+                      ? 'bg-amber-600 text-white border-amber-500/50 shadow font-bold'
+                      : 'border-transparent text-slate-400 hover:text-white'
                   }`}
                 >
                   <Smartphone className="w-3.5 h-3.5" />
@@ -754,8 +1473,10 @@ export default function App() {
                 </button>
                 <button
                   onClick={() => setActiveTab('code')}
-                  className={`px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-all ${
-                    activeTab === 'code' ? 'bg-amber-500 text-slate-950 shadow' : 'text-slate-300 hover:text-white'
+                  className={`px-3.5 py-2 rounded-xl border text-xs font-semibold flex items-center gap-1.5 transition-all cursor-pointer ${
+                    activeTab === 'code'
+                      ? 'bg-amber-600 text-white border-amber-500/50 shadow font-bold'
+                      : 'border-transparent text-slate-400 hover:text-white'
                   }`}
                 >
                   <Code2 className="w-3.5 h-3.5" />
@@ -763,8 +1484,10 @@ export default function App() {
                 </button>
                 <button
                   onClick={() => setActiveTab('architecture')}
-                  className={`px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-all ${
-                    activeTab === 'architecture' ? 'bg-amber-500 text-slate-950 shadow' : 'text-slate-300 hover:text-white'
+                  className={`px-3.5 py-2 rounded-xl border text-xs font-semibold flex items-center gap-1.5 transition-all cursor-pointer ${
+                    activeTab === 'architecture'
+                      ? 'bg-amber-600 text-white border-amber-500/50 shadow font-bold'
+                      : 'border-transparent text-slate-400 hover:text-white'
                   }`}
                 >
                   <Layers className="w-3.5 h-3.5" />
@@ -773,10 +1496,32 @@ export default function App() {
               </div>
             )}
 
+            {/* Dark / Light Mode Map & UI Theme Toggle */}
+            <button
+              type="button"
+              data-testid="toggle-dark-mode-btn"
+              aria-pressed={isDarkMode}
+              onClick={() => setIsDarkMode((prev) => !prev)}
+              className="px-3.5 py-2 rounded-xl bg-slate-900 border border-slate-800 text-xs font-bold text-slate-200 hover:text-amber-400 hover:bg-slate-800 transition-all cursor-pointer flex items-center gap-1.5"
+              title="Toggle Map & UI Dark/Light Mode"
+            >
+              {isDarkMode ? (
+                <>
+                  <ToggleRight className="w-4 h-4 text-amber-400" />
+                  <span>Dark Mode • الوضع الداكن</span>
+                </>
+              ) : (
+                <>
+                  <ToggleLeft className="w-4 h-4 text-amber-500" />
+                  <span>Light Mode • الوضع الفاتح</span>
+                </>
+              )}
+            </button>
+
             {/* Language Toggle */}
             <button
               onClick={() => setLanguage(language === 'ar' ? 'en' : 'ar')}
-              className="px-2.5 py-1.5 rounded-lg bg-slate-800 border border-slate-700 text-xs font-bold text-amber-400 hover:bg-slate-700 transition"
+              className="px-3.5 py-2 rounded-xl bg-slate-900 border border-slate-800 text-xs font-bold text-amber-400 hover:bg-slate-800 transition-all cursor-pointer"
               title="Toggle Language"
             >
               {language === 'ar' ? '🇪🇬 العربية' : '🇬🇧 English'}
@@ -786,7 +1531,7 @@ export default function App() {
             <button
               onClick={downloadFlutterZip}
               disabled={downloadingZip}
-              className="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold flex items-center gap-1.5 shadow transition disabled:opacity-50"
+              className="px-3.5 py-2 rounded-xl bg-emerald-700 hover:bg-emerald-600 border border-emerald-500/50 text-white text-xs font-bold flex items-center gap-1.5 shadow-md transition-all disabled:opacity-50 cursor-pointer"
             >
               <Download className="w-3.5 h-3.5" />
               <span>{downloadingZip ? 'Packaging...' : 'Export Flutter .ZIP'}</span>
@@ -796,52 +1541,1082 @@ export default function App() {
       </header>
 
       {/* Main Content Area */}
-      <main className="flex-1 max-w-7xl w-full mx-auto p-2 sm:p-4 flex flex-col gap-4">
+      <main className="flex-1 max-w-7xl w-full mx-auto p-2 sm:p-4 flex flex-col gap-4 font-['Cairo',sans-serif]">
         {/* Render Mobile App Prototype (Customer & Captain Home Screens First) */}
         {workspaceMode === 'mobile' && (
-          <div className="flex flex-col gap-4" dir={isRtl ? 'rtl' : 'ltr'}>
-            {/* Synchronized Active Order Tracking Summary Bar */}
+          <div className="flex flex-col gap-6 font-['Cairo',sans-serif]" dir={isRtl ? 'rtl' : 'ltr'}>
+            {/* Primary Mobile Application Frame (Customer, Captain & Merchant Interactive App) */}
+            <MobileAppFrame onOpenOperationsDashboard={() => setWorkspaceMode('admin')} />
+
+            {/* Synchronized Active Order Tracking Summary Card (Uniform Grid Layout & Slate/Amber/Rose Design System) */}
             <div
               data-testid="active-order-tracking-widget"
-              className="bg-slate-900 border border-slate-800 rounded-2xl p-4 shadow-lg flex flex-col md:flex-row md:items-center justify-between gap-4"
+              data-status-animation={isWidgetStatusSlideAnimating ? 'slide-in' : 'settled'}
+              className={`bg-slate-900 border border-slate-800 rounded-2xl p-4 shadow-xl grid grid-cols-1 gap-4 font-['Cairo',sans-serif] transform transition-all duration-300 ease-out ${
+                isWidgetStatusSlideAnimating
+                  ? 'animate-m3-slide-in translate-y-0 opacity-100 ring-1 ring-amber-500/30'
+                  : 'translate-y-0 opacity-100'
+              }`}
             >
-              <div className="flex items-center gap-3">
-                <span className="w-3 h-3 rounded-full bg-emerald-500 animate-ping shrink-0" />
-                <div>
-                  <div className="flex items-center gap-2">
-                    <span className="text-sm font-black text-white">
-                      متابعة الطلب الحي في المحاكي الموحد ({currentTrackedOrder.orderNumber})
+              {/* Tier 1 Grid: Order Header + Live Timers (7 cols) & El Bagour Static Map Thumbnail (5 cols) */}
+              <div className="grid grid-cols-1 lg:grid-cols-12 gap-4 items-stretch">
+                {/* Order Summary & Live Timers Card */}
+                <div className="lg:col-span-7 bg-slate-950 border border-slate-800 rounded-2xl p-4 grid grid-cols-1 gap-4">
+                  <div className="flex items-start gap-4">
+                    <span className="w-3 h-3 rounded-full bg-amber-500 animate-ping shrink-0 mt-1.5" />
+                    <div className="grid grid-cols-1 gap-2 flex-1">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className="text-sm sm:text-base font-black text-white font-['Cairo',sans-serif]">
+                          متابعة الطلب الحي في المحاكي الموحد ({currentTrackedOrder.orderNumber})
+                        </span>
+                        <span className="text-xs font-bold text-amber-300 bg-amber-500/15 px-3 py-1 rounded-xl border border-amber-500/30">
+                          {currentTrackedOrder.totalEgp}.00 ج.م
+                        </span>
+                        <span
+                          data-testid="active-order-status-badge"
+                          className="text-xs font-bold text-slate-200 bg-slate-800 px-3 py-1 rounded-xl border border-slate-700"
+                        >
+                          الحالة: {('status' in currentTrackedOrder && currentTrackedOrder.status) || activeOrderState.status}
+                        </span>
+                      </div>
+                      <p className="text-xs text-slate-400 leading-relaxed font-['Cairo',sans-serif]">
+                        {('assignedCaptainName' in currentTrackedOrder && currentTrackedOrder.assignedCaptainName) ||
+                          activeOrderState.captainName}{' '}
+                        • الوجهة:{' '}
+                        {('deliveryAddress' in currentTrackedOrder && currentTrackedOrder.deliveryAddress) ||
+                          activeOrderState.destination}
+                        {lastRefreshedAtLabel && (
+                          <span className="text-xs text-amber-400 mr-2 font-bold">
+                            • آخر تحديث: {lastRefreshedAtLabel}
+                          </span>
+                        )}
+                      </p>
+                    </div>
+                  </div>
+
+                  {/* Live ETA Countdown & Accepted Timestamp Sub-Grid */}
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    {/* Dynamic Estimated Time of Arrival (ETA) Countdown Timer */}
+                    <div
+                      data-testid="active-order-eta-timer"
+                      className="min-h-[44px] px-4 py-2.5 rounded-xl bg-amber-500/10 border border-amber-500/30 flex items-center justify-between gap-2 text-xs text-amber-300"
+                    >
+                      <div className="flex items-center gap-2">
+                        <Clock className="w-4 h-4 text-amber-400 shrink-0" />
+                        <span className="font-bold">Estimated Time of Arrival (ETA):</span>
+                      </div>
+                      <div className="flex items-center gap-1.5">
+                        <span className="font-mono font-black text-white text-sm" data-testid="eta-countdown-value">
+                          {formattedEtaCountdown}
+                        </span>
+                        <span className="text-[11px] text-amber-200/80">
+                          ({currentOrderDurationMinutes} د)
+                        </span>
+                      </div>
+                    </div>
+
+                    {/* Accepted Timestamp */}
+                    <div
+                      data-testid="active-order-accepted-time"
+                      className="min-h-[44px] px-4 py-2.5 rounded-xl bg-slate-900 border border-slate-800 flex items-center justify-between gap-2 text-xs text-slate-300"
+                    >
+                      <div className="flex items-center gap-2">
+                        <Clock className="w-4 h-4 text-amber-400 shrink-0" />
+                        <span className="font-bold">وقت قبول الطلب:</span>
+                      </div>
+                      <span className="font-black text-white">
+                        {formatHumanReadableAcceptedTimestamp(
+                          extractedAcceptedAtIso,
+                          extractedAcceptedAtFallback
+                        ) || humanReadableAcceptedTime}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Static Map Thumbnail for El Bagour Route with Pickup & Dropoff Markers */}
+                <div
+                  data-testid="active-order-static-map-thumbnail"
+                  data-map-view-mode={isFullScreenMapOpen ? 'fullscreen' : 'thumbnail'}
+                  data-theme-mode={isDarkMode ? 'dark' : 'light'}
+                  aria-label="El Bagour Route Static Map Thumbnail"
+                  className="lg:col-span-5 bg-slate-950 border border-slate-800 rounded-2xl p-4 grid grid-cols-1 sm:grid-cols-2 gap-4 items-center font-['Cairo',sans-serif]"
+                >
+                  <div
+                    className={`relative w-full ${
+                      isFullScreenMapOpen ? 'h-40 sm:col-span-2' : 'h-24'
+                    } rounded-xl overflow-hidden border transition-all duration-300 ${
+                      isDarkMode
+                        ? 'border-slate-800 bg-slate-900'
+                        : 'border-slate-300 bg-slate-100'
+                    }`}
+                  >
+                    <PinchZoomPan isDarkMode={isDarkMode}>
+                      <img
+                        src={elBagourStaticMapSvgUri}
+                        alt={`El Bagour Route Static Map from ${currentOrderPickup} to ${currentOrderDropoff}`}
+                        data-testid="static-map-thumbnail-img"
+                        data-theme-mode={isDarkMode ? 'dark' : 'light'}
+                        className="w-full h-full object-cover pointer-events-none"
+                      />
+                      <svg
+                        data-testid="active-order-map-polyline-svg"
+                        data-theme-mode={isDarkMode ? 'dark' : 'light'}
+                        viewBox="0 0 280 96"
+                        className="absolute inset-0 w-full h-full pointer-events-none"
+                        aria-label="Animated Route Path Polyline"
+                      >
+                        <polyline
+                          data-testid="route-base-polyline"
+                          points={elBagourRoutePolylinePoints}
+                          fill="none"
+                          stroke={mapThemePalette.baseRouteStroke}
+                          strokeOpacity="0.4"
+                          strokeWidth="5"
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                        />
+                        <polyline
+                          data-testid="animated-route-polyline"
+                          points={elBagourRoutePolylinePoints}
+                          fill="none"
+                          stroke={mapThemePalette.activeRouteStroke}
+                          strokeWidth="3"
+                          strokeDasharray="8 6"
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                          className="animate-pulse"
+                        >
+                          <animate
+                            attributeName="stroke-dashoffset"
+                            from="28"
+                            to="0"
+                            dur="1.2s"
+                            repeatCount="indefinite"
+                          />
+                        </polyline>
+                        <circle cx="38" cy="68" r="5" fill={mapThemePalette.pickupFill} />
+                        <circle cx="242" cy="28" r="5" fill={mapThemePalette.dropoffFill} />
+                        <circle
+                          data-testid="animated-route-rider-dot"
+                          r="4"
+                          fill={mapThemePalette.riderFill}
+                          stroke={mapThemePalette.riderStroke}
+                          strokeWidth="1.5"
+                        >
+                          <animateMotion
+                            path="M38,68 L96,46 L168,54 L242,28"
+                            dur="3.5s"
+                            repeatCount="indefinite"
+                          />
+                        </circle>
+                      </svg>
+                    </PinchZoomPan>
+                    <span className="absolute top-1.5 right-1.5 z-10 px-2 py-0.5 rounded-lg bg-slate-950/90 text-[10px] font-bold font-['Cairo',sans-serif] text-amber-400 border border-amber-500/30 pointer-events-none">
+                      El Bagour • الباجور
                     </span>
-                    <span className="text-xs font-bold text-emerald-400 bg-emerald-500/15 px-2.5 py-0.5 rounded-full border border-emerald-500/30">
-                      {currentTrackedOrder.totalEgp}.00 ج.م
+                    <span
+                      data-testid="map-travel-estimate-badge"
+                      className="absolute bottom-1.5 left-1.5 z-10 px-2 py-0.5 rounded-lg bg-slate-950/90 border border-slate-700/80 text-[10px] font-bold font-['Cairo',sans-serif] text-amber-300 flex items-center gap-1 shadow-sm pointer-events-none"
+                    >
+                      <Clock className="w-3 h-3 text-amber-400 shrink-0" />
+                      <span>
+                        ~{currentOrderDurationMinutes} min ({currentOrderDurationMinutes} د) • {currentOrderRouteDistanceKm.toFixed(1)} km
+                      </span>
                     </span>
                   </div>
-                  <p className="text-xs text-slate-400 mt-0.5">
-                    {('assignedCaptainName' in currentTrackedOrder && currentTrackedOrder.assignedCaptainName) ||
-                      activeOrderState.captainName}{' '}
-                    • الوجهة:{' '}
-                    {('deliveryAddress' in currentTrackedOrder && currentTrackedOrder.deliveryAddress) ||
-                      activeOrderState.destination}
-                  </p>
+                  <div
+                    className={`grid grid-cols-1 gap-3 text-xs font-['Cairo',sans-serif] ${
+                      isFullScreenMapOpen ? 'sm:col-span-2' : ''
+                    }`}
+                  >
+                    <div
+                      data-testid="map-pickup-marker"
+                      className="flex items-center justify-between gap-2 text-amber-300 bg-slate-900 border border-slate-800 rounded-xl px-3 py-2"
+                    >
+                      <div className="flex items-center gap-2 min-w-0">
+                        <MapPin className="w-4 h-4 text-amber-400 shrink-0" />
+                        <span className="font-bold text-slate-400 shrink-0">Pickup (الانطلاق):</span>
+                        <span className="font-bold text-white truncate" title={currentOrderPickup}>
+                          {currentOrderPickup}
+                        </span>
+                      </div>
+                      <button
+                        type="button"
+                        data-testid="copy-pickup-address-btn"
+                        aria-label="Copy Pickup Address"
+                        title="Copy Pickup Address • نسخ عنوان الانطلاق"
+                        onClick={handleCopyPickupAddress}
+                        className="shrink-0 p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-200 hover:text-amber-300 font-['Cairo',sans-serif] flex items-center justify-center gap-1 transition-all cursor-pointer"
+                      >
+                        {pickupAddressCopied ? (
+                          <Check className="w-3.5 h-3.5 text-emerald-400" />
+                        ) : (
+                          <Copy className="w-3.5 h-3.5 text-amber-400" />
+                        )}
+                        <span className="sr-only">Copy Pickup Address</span>
+                      </button>
+                    </div>
+                    <div
+                      data-testid="map-dropoff-marker"
+                      className="flex items-center justify-between gap-2 text-slate-200 bg-slate-900 border border-slate-800 rounded-xl px-3 py-2"
+                    >
+                      <div className="flex items-center gap-2 min-w-0">
+                        <Navigation className="w-4 h-4 text-amber-400 shrink-0" />
+                        <span className="font-bold text-slate-400 shrink-0">Dropoff (الوصول):</span>
+                        <span className="font-bold text-white truncate" title={currentOrderDropoff}>
+                          {currentOrderDropoff}
+                        </span>
+                      </div>
+                      <button
+                        type="button"
+                        data-testid="copy-dropoff-address-btn"
+                        aria-label="Copy Dropoff Address"
+                        title="Copy Dropoff Address • نسخ عنوان الوصول"
+                        onClick={handleCopyDropoffAddress}
+                        className="shrink-0 p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-200 hover:text-amber-300 font-['Cairo',sans-serif] flex items-center justify-center gap-1 transition-all cursor-pointer"
+                      >
+                        {dropoffAddressCopied ? (
+                          <Check className="w-3.5 h-3.5 text-emerald-400" />
+                        ) : (
+                          <Copy className="w-3.5 h-3.5 text-amber-400" />
+                        )}
+                        <span className="sr-only">Copy Dropoff Address</span>
+                      </button>
+                    </div>
+                    <div className="grid grid-cols-2 gap-2">
+                      <button
+                        type="button"
+                        data-testid="toggle-map-theme-btn"
+                        aria-pressed={isDarkMode}
+                        onClick={() => setIsDarkMode((prev) => !prev)}
+                        className="min-h-[40px] px-2.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-100 hover:text-amber-300 text-[11px] font-bold font-['Cairo',sans-serif] flex items-center justify-center gap-1.5 shadow-sm transition-all cursor-pointer"
+                      >
+                        {isDarkMode ? (
+                          <ToggleRight className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+                        ) : (
+                          <ToggleLeft className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+                        )}
+                        <span>{isDarkMode ? 'Dark Map • داكن' : 'Light Map • فاتح'}</span>
+                      </button>
+                      <button
+                        type="button"
+                        data-testid="toggle-fullscreen-map-btn"
+                        aria-expanded={isFullScreenMapOpen}
+                        aria-label={
+                          isFullScreenMapOpen
+                            ? 'Toggle Static Map Thumbnail View'
+                            : 'Toggle Full-Screen Map View'
+                        }
+                        onClick={handleToggleFullScreenMap}
+                        className="min-h-[40px] px-2.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-100 hover:text-amber-300 text-[11px] font-bold font-['Cairo',sans-serif] flex items-center justify-center gap-1.5 shadow-sm transition-all cursor-pointer"
+                      >
+                        <ExternalLink className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+                        <span>
+                          {isFullScreenMapOpen
+                            ? 'Thumbnail • مصغر'
+                            : 'Full-Screen • ملء الشاشة'}
+                        </span>
+                      </button>
+                    </div>
+                  </div>
                 </div>
               </div>
 
+              {/* Tier 2 Grid: Cohesive Mobile-Optimized Action Buttons (Primary=Amber, Secondary=Slate, Danger=Rose) */}
               <div
-                data-testid="active-order-accepted-time"
-                className="px-3.5 py-2 rounded-xl bg-emerald-500/10 border border-emerald-500/30 flex items-center gap-2 text-xs text-emerald-300 shrink-0"
+                data-testid="active-order-actions-grid"
+                className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-4 pt-4 border-t border-slate-800"
               >
-                <Clock className="w-4 h-4 text-emerald-400 shrink-0" />
-                <span className="font-bold">وقت قبول الطلب:</span>
-                <span className="font-black text-white">
-                  {formatHumanReadableAcceptedTimestamp(
-                    extractedAcceptedAtIso,
-                    extractedAcceptedAtFallback
-                  ) || humanReadableAcceptedTime}
-                </span>
+                {/* Call Captain Button (Primary - Amber) */}
+                <button
+                  type="button"
+                  data-testid="call-captain-btn"
+                  data-button-variant="primary"
+                  onClick={handleOpenCallCaptainPrompt}
+                  aria-label={`Call Captain ${currentOrderCaptainPhone}`}
+                  className="min-h-[44px] px-4 py-2.5 rounded-xl bg-amber-500 hover:bg-amber-400 border border-amber-400 text-slate-950 text-xs font-black font-['Cairo',sans-serif] flex items-center justify-center gap-2 shadow-md transform hover:scale-105 active:scale-95 transition-all duration-200 ease-out cursor-pointer"
+                >
+                  <Phone className="w-4 h-4 shrink-0" />
+                  <span>Call Captain</span>
+                  <span className="font-mono text-[11px] text-slate-900" data-testid="tracking-widget-captain-phone">
+                    ({currentOrderCaptainPhone})
+                  </span>
+                </button>
+
+                {/* Message Captain Button (Primary - Amber) */}
+                <button
+                  type="button"
+                  data-testid="message-captain-btn"
+                  data-button-variant="primary"
+                  onClick={() => setIsCaptainChatModalOpen(true)}
+                  className="min-h-[44px] px-4 py-2.5 rounded-xl bg-amber-600 hover:bg-amber-500 border border-amber-400/60 text-white text-xs font-black font-['Cairo',sans-serif] flex items-center justify-center gap-2 shadow-md transform hover:scale-105 active:scale-95 transition-all duration-200 ease-out cursor-pointer"
+                >
+                  <MessageSquare className="w-4 h-4 shrink-0" />
+                  <span>Message Captain</span>
+                  <span className="px-1.5 py-0.5 rounded-lg bg-slate-950/80 text-[10px] font-mono text-amber-300 border border-amber-400/40">
+                    {captainChatMessages.length}
+                  </span>
+                </button>
+
+                {/* Manual Refresh Order Status Button with Visual Feedback & Progress Bar (Secondary - Slate) */}
+                <button
+                  type="button"
+                  data-testid="refresh-order-status-btn"
+                  data-button-variant="secondary"
+                  onClick={handleManualRefreshOrderStatus}
+                  disabled={isRefreshingOrder}
+                  aria-busy={isRefreshingOrder}
+                  aria-label="Refresh Order Status"
+                  className={`relative overflow-hidden min-h-[44px] px-4 py-2.5 rounded-xl border text-xs font-bold font-['Cairo',sans-serif] flex flex-col items-center justify-center gap-1.5 shadow-sm transform hover:scale-105 active:scale-95 disabled:hover:scale-100 transition-all duration-200 ease-out cursor-pointer disabled:cursor-not-allowed ${
+                    isRefreshingOrder
+                      ? 'bg-slate-800 border-amber-500/60 text-amber-300 opacity-95'
+                      : refreshFeedbackStage === 'updated'
+                      ? 'bg-slate-800 border-amber-500/60 text-amber-300'
+                      : 'bg-slate-800 hover:bg-slate-700 text-slate-100 border-slate-700'
+                  }`}
+                >
+                  <div className="flex items-center gap-2">
+                    <RefreshCw
+                      className={`w-4 h-4 text-amber-400 shrink-0 ${
+                        isRefreshingOrder ? 'animate-spin' : ''
+                      }`}
+                    />
+                    <span data-testid="refresh-button-label">
+                      {isRefreshingOrder
+                        ? 'Updating... • جاري التحديث...'
+                        : refreshFeedbackStage === 'updated'
+                        ? 'Updated ✓ • تم التحديث'
+                        : 'Refresh • تحديث الحالة'}
+                    </span>
+                  </div>
+                  <div
+                    role="progressbar"
+                    data-testid="refresh-progress-bar"
+                    aria-valuemin={0}
+                    aria-valuemax={100}
+                    aria-valuenow={refreshProgress}
+                    className={`w-full h-1 rounded-full bg-slate-950 overflow-hidden transition-opacity duration-200 ${
+                      isRefreshingOrder || refreshProgress > 0 ? 'opacity-100' : 'opacity-40'
+                    }`}
+                  >
+                    <div
+                      className={`h-full bg-amber-400 transition-all duration-150 ease-out rounded-full ${
+                        refreshProgress >= 100
+                          ? 'w-full'
+                          : refreshProgress >= 90
+                          ? 'w-11/12'
+                          : refreshProgress >= 65
+                          ? 'w-2/3'
+                          : refreshProgress > 0 || isRefreshingOrder
+                          ? 'w-1/4'
+                          : 'w-0'
+                      }`}
+                    />
+                  </div>
+                </button>
+
+                {/* View Captain Profile Button (Secondary - Slate) */}
+                <button
+                  type="button"
+                  data-testid="view-captain-profile-btn"
+                  data-button-variant="secondary"
+                  onClick={() => setIsCaptainProfileModalOpen(true)}
+                  className="min-h-[44px] px-4 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-100 text-xs font-bold font-['Cairo',sans-serif] flex items-center justify-center gap-2 shadow-sm transform hover:scale-105 active:scale-95 transition-all duration-200 ease-out cursor-pointer"
+                >
+                  <Bike className="w-4 h-4 text-amber-400 shrink-0" />
+                  <span>View Captain Profile</span>
+                </button>
+
+                {/* View Order Summary Button (Secondary - Slate) */}
+                <button
+                  type="button"
+                  data-testid="view-order-summary-btn"
+                  data-button-variant="secondary"
+                  onClick={() => setIsOrderSummaryModalOpen(true)}
+                  className="min-h-[44px] px-4 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-100 text-xs font-bold font-['Cairo',sans-serif] flex items-center justify-center gap-2 shadow-sm transform hover:scale-105 active:scale-95 transition-all duration-200 ease-out cursor-pointer"
+                >
+                  <Package className="w-4 h-4 text-amber-400 shrink-0" />
+                  <span>View Order Summary</span>
+                </button>
+
+                {/* Edit Notes Button (Secondary - Slate) */}
+                <button
+                  type="button"
+                  data-testid="edit-notes-btn"
+                  data-button-variant="secondary"
+                  onClick={handleToggleEditNotes}
+                  className="min-h-[44px] px-4 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-100 text-xs font-bold font-['Cairo',sans-serif] flex items-center justify-center gap-2 shadow-sm transform hover:scale-105 active:scale-95 transition-all duration-200 ease-out cursor-pointer"
+                >
+                  <Edit3 className="w-4 h-4 text-amber-400 shrink-0" />
+                  <span>Edit Notes</span>
+                </button>
+
+                {/* Add Tip Button (Secondary - Slate) */}
+                <button
+                  type="button"
+                  data-testid="add-tip-btn"
+                  data-button-variant="secondary"
+                  onClick={() => {
+                    setIsAddTipSectionOpen(true);
+                    setIsFareBreakdownExpanded(true);
+                  }}
+                  className="min-h-[44px] px-4 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-100 text-xs font-bold font-['Cairo',sans-serif] flex items-center justify-center gap-2 shadow-sm transform hover:scale-105 active:scale-95 transition-all duration-200 ease-out cursor-pointer"
+                >
+                  <DollarSign className="w-4 h-4 text-amber-400 shrink-0" />
+                  <span>Add Tip</span>
+                  {captainTipEgp > 0 && (
+                    <span className="px-1.5 py-0.5 rounded-lg bg-amber-500/20 text-[10px] font-mono text-amber-300 border border-amber-500/30">
+                      +{captainTipEgp} EGP
+                    </span>
+                  )}
+                </button>
+
+                {/* Share Live Link Button (Secondary - Slate) */}
+                <button
+                  type="button"
+                  data-testid="share-live-link-btn"
+                  data-button-variant="secondary"
+                  onClick={handleShareLiveLink}
+                  className="min-h-[44px] px-4 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-100 text-xs font-bold font-['Cairo',sans-serif] flex items-center justify-center gap-2 shadow-sm transform hover:scale-105 active:scale-95 transition-all duration-200 ease-out cursor-pointer"
+                >
+                  <Share2 className="w-4 h-4 text-amber-400 shrink-0" />
+                  <span>Share Live Link</span>
+                </button>
+
+                {/* View History Navigation Button (Secondary - Slate) */}
+                <button
+                  type="button"
+                  data-testid="view-order-history-btn"
+                  data-button-variant="secondary"
+                  onClick={handleViewOrderHistory}
+                  className="min-h-[44px] px-4 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-100 text-xs font-bold font-['Cairo',sans-serif] flex items-center justify-center gap-2 shadow-sm transform hover:scale-105 active:scale-95 transition-all duration-200 ease-out cursor-pointer"
+                >
+                  <FileText className="w-4 h-4 text-amber-400 shrink-0" />
+                  <span>View History</span>
+                </button>
+
+                {/* Cancel Order Button (Danger - Rose) */}
+                <button
+                  type="button"
+                  data-testid="cancel-order-btn"
+                  data-button-variant="danger"
+                  onClick={handleOpenCancelOrderDialog}
+                  disabled={currentOrderStatus === 'cancelled' || currentOrderStatus === 'delivered'}
+                  className="min-h-[44px] px-4 py-2.5 rounded-xl bg-rose-950/80 hover:bg-rose-900 border border-rose-600/60 disabled:bg-slate-800 disabled:border-slate-700 disabled:text-slate-500 text-rose-200 text-xs font-bold font-['Cairo',sans-serif] flex items-center justify-center gap-2 shadow-sm transform hover:scale-105 active:scale-95 disabled:hover:scale-100 transition-all duration-200 ease-out cursor-pointer disabled:cursor-not-allowed"
+                >
+                  <AlertTriangle className="w-4 h-4 text-rose-400 shrink-0" />
+                  <span>Cancel Order</span>
+                </button>
+
+                {/* SOS Emergency Button (Danger - Rose) */}
+                <button
+                  type="button"
+                  data-testid="sos-emergency-btn"
+                  data-button-variant="danger"
+                  onClick={() => {
+                    setSosLocationShared(false);
+                    setSosTriggeredService(null);
+                    setIsSosModalOpen(true);
+                  }}
+                  aria-label="SOS Emergency Assistance"
+                  className="min-h-[44px] px-4 py-2.5 rounded-xl bg-rose-700 hover:bg-rose-600 border border-rose-500 text-white text-xs font-black font-['Cairo',sans-serif] flex items-center justify-center gap-2 shadow-md shadow-rose-950/50 transform hover:scale-105 active:scale-95 transition-all duration-200 ease-out cursor-pointer sm:col-span-2 lg:col-span-2"
+                >
+                  <ShieldCheck className="w-4 h-4 text-rose-200 shrink-0" />
+                  <span>SOS • طوارئ الباجور</span>
+                </button>
+              </div>
+
+              {/* Tier 3 Grid: 2-Column Hierarchy for Vertical Status Timeline & Order Details / Fare / Notes */}
+              <div className="grid grid-cols-1 lg:grid-cols-12 gap-4 items-start">
+                {/* Left Column (6 cols): Vertical Status Timeline Component */}
+                <div
+                  data-testid="active-order-vertical-timeline"
+                  data-status-pulse={isTimelinePulsing ? 'active' : 'idle'}
+                  className={`lg:col-span-6 bg-slate-950 border border-slate-800 rounded-2xl p-4 grid grid-cols-1 gap-4 transition-all duration-500 ${
+                    isTimelinePulsing
+                      ? 'animate-pulse ring-1 ring-amber-500/40 bg-amber-950/15'
+                      : ''
+                  }`}
+                >
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-bold text-slate-200 flex items-center gap-2">
+                      <Activity
+                        className={`w-4 h-4 text-amber-400 ${
+                          isTimelinePulsing ? 'animate-pulse' : ''
+                        }`}
+                      />
+                      <span>Order Status Timeline • التسلسل الزمني لحالات الطلب</span>
+                    </span>
+                    <span
+                      data-testid="timeline-pulse-indicator"
+                      className={`text-xs font-mono text-amber-400 ${
+                        isTimelinePulsing ? 'animate-pulse font-bold' : ''
+                      }`}
+                    >
+                      {currentOrderStatus === 'cancelled'
+                        ? 'Cancelled • ملغي'
+                        : `${activeTimelineIndex + 1} / ${orderTimelineSteps.length}`}
+                    </span>
+                  </div>
+
+                  <div className="relative pl-3 pr-1 grid grid-cols-1 gap-4">
+                    {orderTimelineSteps.map((step, index) => {
+                      const StepIcon = step.Icon;
+                      const isCompleted =
+                        currentOrderStatus !== 'cancelled' && index < activeTimelineIndex;
+                      const isCurrent =
+                        currentOrderStatus !== 'cancelled' && index === activeTimelineIndex;
+
+                      return (
+                        <div
+                          key={step.key}
+                          data-testid={`timeline-step-${step.key}`}
+                          data-step-state={
+                            isCurrent ? 'current' : isCompleted ? 'completed' : 'upcoming'
+                          }
+                          className={`relative flex items-start gap-4 ${
+                            isCurrent ? 'animate-pulse' : ''
+                          }`}
+                        >
+                          {index < orderTimelineSteps.length - 1 && (
+                            <div
+                              className={`absolute left-[13px] top-7 bottom-[-16px] w-0.5 ${
+                                isCompleted ? 'bg-amber-500/70' : 'bg-slate-800'
+                              }`}
+                            />
+                          )}
+                          <div
+                            className={`relative z-10 w-7 h-7 rounded-full flex items-center justify-center border shrink-0 ${
+                              isCurrent
+                                ? 'bg-amber-500/20 border-amber-400 text-amber-300 shadow-sm shadow-amber-500/30 animate-pulse'
+                                : isCompleted
+                                  ? 'bg-slate-800 border-amber-500/50 text-amber-400'
+                                  : 'bg-slate-900 border-slate-700 text-slate-500'
+                            }`}
+                          >
+                            <StepIcon className="w-3.5 h-3.5" />
+                          </div>
+                          <div className="flex-1 min-w-0 flex flex-wrap items-center justify-between gap-2 bg-slate-900 border border-slate-800 rounded-xl px-3.5 py-2.5">
+                            <div className="flex flex-col">
+                              <div className="flex items-center gap-2">
+                                <span
+                                  className={`text-xs font-bold ${
+                                    isCurrent
+                                      ? 'text-amber-300'
+                                      : isCompleted
+                                        ? 'text-white'
+                                        : 'text-slate-400'
+                                  }`}
+                                >
+                                  {step.label}
+                                </span>
+                                <span className="text-[11px] text-slate-400">
+                                  • {step.arabicLabel}
+                                </span>
+                              </div>
+                              <span className="text-[10px] text-slate-500">{step.description}</span>
+                            </div>
+                            <span
+                              className={`text-[10px] font-bold px-2.5 py-0.5 rounded-lg border ${
+                                isCurrent
+                                  ? 'bg-amber-500/20 text-amber-300 border-amber-500/40 animate-pulse'
+                                  : isCompleted
+                                    ? 'bg-slate-800 text-amber-400 border-slate-700'
+                                    : 'bg-slate-950 text-slate-500 border-slate-800'
+                              }`}
+                            >
+                              {isCurrent ? 'Active • حالي' : isCompleted ? 'Done ✓' : 'Pending'}
+                            </span>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                {/* Right Column (6 cols): Fare Breakdown, Order Notes, Tip & Live Link Cards */}
+                <div className="lg:col-span-6 grid grid-cols-1 gap-4">
+                  {/* Expandable Fare Breakdown Section */}
+                  <div
+                    data-testid="expandable-fare-breakdown"
+                    className="bg-slate-950 border border-slate-800 rounded-2xl p-4 grid grid-cols-1 gap-4"
+                  >
+                    <button
+                      type="button"
+                      data-testid="toggle-fare-breakdown-btn"
+                      data-button-variant="secondary"
+                      aria-expanded={isFareBreakdownExpanded}
+                      onClick={() => setIsFareBreakdownExpanded((prev) => !prev)}
+                      className="w-full min-h-[44px] flex items-center justify-between px-4 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-700 text-xs font-bold font-['Cairo',sans-serif] text-slate-100 cursor-pointer transition-all"
+                    >
+                      <span className="flex items-center gap-2">
+                        <DollarSign className="w-4 h-4 text-amber-400" />
+                        <span>Expandable Fare Breakdown • تفاصيل تكلفة المشوار</span>
+                      </span>
+                      <span
+                        data-testid="fare-breakdown-total-amount"
+                        className="flex items-center gap-2 text-amber-400 font-mono"
+                      >
+                        <span>{fareBreakdownTotalEgp.toFixed(2)} EGP</span>
+                        {isFareBreakdownExpanded ? (
+                          <ChevronUp className="w-4 h-4 text-slate-400" />
+                        ) : (
+                          <ChevronDown className="w-4 h-4 text-slate-400" />
+                        )}
+                      </span>
+                    </button>
+
+                    {isFareBreakdownExpanded && (
+                      <div
+                        data-testid="fare-breakdown-content"
+                        className="bg-slate-900 border border-slate-800 rounded-xl p-4 grid grid-cols-1 sm:grid-cols-2 gap-4 text-xs"
+                      >
+                        <div
+                          data-testid="fare-item-base-fare"
+                          className="flex items-center justify-between px-3.5 py-2.5 rounded-xl bg-slate-950 border border-slate-800"
+                        >
+                          <span className="text-slate-300 font-medium">Base Fare (فتحة العداد)</span>
+                          <span className="font-mono font-bold text-white">
+                            {fareBreakdownBaseFareEgp.toFixed(2)} EGP
+                          </span>
+                        </div>
+                        <div
+                          data-testid="fare-item-distance-fare"
+                          className="flex items-center justify-between px-3.5 py-2.5 rounded-xl bg-slate-950 border border-slate-800"
+                        >
+                          <span className="text-slate-300 font-medium">Distance Fare (تكلفة المسافة)</span>
+                          <span className="font-mono font-bold text-white">
+                            {fareBreakdownDistanceFareEgp.toFixed(2)} EGP
+                          </span>
+                        </div>
+                        <div
+                          data-testid="fare-item-rural-surcharge"
+                          className="flex items-center justify-between px-3.5 py-2.5 rounded-xl bg-slate-950 border border-slate-800"
+                        >
+                          <span className="text-slate-300 font-medium">Rural Surcharge (إضافي القرى)</span>
+                          <span className="font-mono font-bold text-amber-300">
+                            {fareBreakdownRuralSurchargeEgp.toFixed(2)} EGP
+                          </span>
+                        </div>
+                        <div
+                          data-testid="fare-item-platform-fee"
+                          className="flex items-center justify-between px-3.5 py-2.5 rounded-xl bg-slate-950 border border-slate-800"
+                        >
+                          <span className="text-slate-300 font-medium">Platform Fee (رسوم المنصة)</span>
+                          <span className="font-mono font-bold text-slate-200">
+                            {fareBreakdownPlatformFeeEgp.toFixed(2)} EGP
+                          </span>
+                        </div>
+                        <div
+                          data-testid="fare-item-tip"
+                          className="flex items-center justify-between px-3.5 py-2.5 rounded-xl bg-slate-950 border border-amber-500/30"
+                        >
+                          <span className="text-amber-300 font-medium">Captain Tip (إكرامية الكابتن)</span>
+                          <span className="font-mono font-bold text-amber-300">
+                            {fareBreakdownTipEgp.toFixed(2)} EGP
+                          </span>
+                        </div>
+                        <div
+                          data-testid="fare-item-total"
+                          className="flex items-center justify-between px-3.5 py-2.5 rounded-xl bg-amber-500/10 border border-amber-500/40"
+                        >
+                          <span className="text-amber-300 font-bold">Total Fare (الإجمالي الكلي)</span>
+                          <span className="font-mono font-black text-amber-400">
+                            {fareBreakdownTotalEgp.toFixed(2)} EGP
+                          </span>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Order Notes Summary & Inline Editor inside Active Order Tracking Widget */}
+                  <div
+                    data-testid="edit-notes-section"
+                    className="bg-slate-950 border border-slate-800 rounded-2xl p-4 grid grid-cols-1 gap-4"
+                  >
+                    <div className="flex items-center justify-between gap-4 text-xs">
+                      <div className="flex items-center gap-2 text-slate-300">
+                        <FileText className="w-4 h-4 text-amber-400 shrink-0" />
+                        <span className="font-bold text-slate-400">ملاحظات الطلب (Order Notes):</span>
+                        <span
+                          data-testid="active-order-notes-display"
+                          className="font-bold text-white"
+                        >
+                          {currentOrderNotesValue || 'لا توجد ملاحظات إضافية'}
+                        </span>
+                      </div>
+                      {notesSavedFeedback && (
+                        <span
+                          data-testid="order-notes-saved-badge"
+                          className="text-xs font-bold text-amber-400"
+                        >
+                          Saved ✓ • تم الحفظ
+                        </span>
+                      )}
+                    </div>
+
+                    {isEditNotesOpen && (
+                      <form
+                        onSubmit={handleSaveOrderNotes}
+                        data-testid="edit-order-notes-form"
+                        className="grid grid-cols-1 sm:grid-cols-3 gap-4 bg-slate-900 border border-slate-800 rounded-xl p-4"
+                      >
+                        <input
+                          type="text"
+                          name="orderNotes"
+                          aria-label="Order Notes"
+                          data-testid="edit-order-notes-input"
+                          value={orderNotes}
+                          onChange={(e) => handleOrderNotesChange(e.target.value)}
+                          placeholder="أضف أو عدّل ملاحظات التوصيل للكابتن..."
+                          className="sm:col-span-2 min-h-[44px] px-4 py-2.5 rounded-xl bg-slate-950 border border-slate-700 text-xs text-white focus:outline-none focus:border-amber-400"
+                        />
+                        <button
+                          type="submit"
+                          data-testid="save-order-notes-btn"
+                          data-button-variant="primary"
+                          className="min-h-[44px] px-4 py-2.5 rounded-xl bg-amber-500 hover:bg-amber-400 border border-amber-400 text-slate-950 text-xs font-black font-['Cairo',sans-serif] cursor-pointer transition-all shadow-sm"
+                        >
+                          Save Notes • حفظ الملاحظات
+                        </button>
+                      </form>
+                    )}
+                  </div>
+
+                  {/* Add Tip (Captain Gratuity) Section */}
+                  {isAddTipSectionOpen && (
+                    <div
+                      data-testid="add-tip-section"
+                      className="bg-slate-950 border border-slate-800 rounded-2xl p-4 grid grid-cols-1 gap-4"
+                    >
+                      <div className="flex flex-wrap items-center justify-between gap-4 text-xs">
+                        <span className="font-bold text-slate-200 flex items-center gap-2">
+                          <DollarSign className="w-4 h-4 text-amber-400" />
+                          <span>Add Tip • إكرامية الكابتن (Gratuity)</span>
+                        </span>
+                        <span
+                          data-testid="active-tip-amount-badge"
+                          className="text-xs font-mono font-bold text-amber-300 bg-amber-500/15 px-3 py-1 rounded-xl border border-amber-500/30"
+                        >
+                          Tip: {fareBreakdownTipEgp.toFixed(2)} EGP
+                        </span>
+                      </div>
+
+                      <div className="grid grid-cols-1 gap-4 bg-slate-900 border border-slate-800 rounded-xl p-4">
+                        <div className="grid grid-cols-3 gap-4">
+                          {[5, 10, 15].map((presetEgp) => {
+                            const isSelected = captainTipEgp === presetEgp;
+                            return (
+                              <button
+                                key={presetEgp}
+                                type="button"
+                                data-testid={`tip-preset-${presetEgp}`}
+                                data-button-variant={isSelected ? 'primary' : 'secondary'}
+                                aria-pressed={isSelected}
+                                onClick={() => handleSelectPresetTip(presetEgp)}
+                                className={`min-h-[44px] px-4 py-2.5 rounded-xl text-xs font-bold font-['Cairo',sans-serif] transition-all cursor-pointer border ${
+                                  isSelected
+                                    ? 'bg-amber-500 text-slate-950 border-amber-400 shadow-sm font-black'
+                                    : 'bg-slate-800 hover:bg-slate-700 text-slate-100 border-slate-700'
+                                }`}
+                              >
+                                {presetEgp} EGP
+                              </button>
+                            );
+                          })}
+                        </div>
+
+                        <form
+                          onSubmit={handleApplyCustomTip}
+                          className="grid grid-cols-1 sm:grid-cols-3 gap-4"
+                        >
+                          <input
+                            type="number"
+                            min="0"
+                            step="1"
+                            aria-label="Custom Tip Amount in EGP"
+                            data-testid="custom-tip-input"
+                            value={customTipInput}
+                            onChange={(e) => handleCustomTipInputChange(e.target.value)}
+                            placeholder="Custom Tip (EGP) • مبلغ مخصص"
+                            className="min-h-[44px] px-4 py-2.5 rounded-xl bg-slate-950 border border-slate-700 text-xs text-white focus:outline-none focus:border-amber-400 font-mono"
+                          />
+                          <button
+                            type="submit"
+                            data-testid="apply-custom-tip-btn"
+                            data-button-variant="primary"
+                            className="min-h-[44px] px-4 py-2.5 rounded-xl bg-amber-500 hover:bg-amber-400 border border-amber-400 text-slate-950 text-xs font-black font-['Cairo',sans-serif] cursor-pointer transition-all shadow-sm"
+                          >
+                            Apply Tip
+                          </button>
+                          {captainTipEgp > 0 && (
+                            <button
+                              type="button"
+                              data-testid="clear-tip-btn"
+                              data-button-variant="secondary"
+                              onClick={() => {
+                                setCaptainTipEgp(0);
+                                setCustomTipInput('');
+                              }}
+                              className="min-h-[44px] px-4 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-100 text-xs font-bold font-['Cairo',sans-serif] cursor-pointer transition-all"
+                            >
+                              Clear
+                            </button>
+                          )}
+                        </form>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Temporary Live Link & Mobile Sharing Intents Drawer */}
+                  {isShareLiveLinkOpen && sharedLiveLinkUrl && (
+                    <div
+                      data-testid="share-live-link-panel"
+                      className="bg-slate-950 border border-slate-800 rounded-2xl p-4 grid grid-cols-1 gap-4"
+                    >
+                      <div className="flex items-center justify-between gap-4">
+                        <span className="text-xs font-bold text-amber-300 flex items-center gap-2">
+                          <Share2 className="w-4 h-4 text-amber-400" />
+                          <span>رابط التتبع المؤقت للمشاركة (Temporary Live Tracking URL — صالح لمدة ٣٠ دقيقة)</span>
+                        </span>
+                        <button
+                          type="button"
+                          data-button-variant="secondary"
+                          onClick={() => setIsShareLiveLinkOpen(false)}
+                          className="min-h-[44px] px-4 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-700 text-xs font-bold font-['Cairo',sans-serif] text-slate-200 hover:text-white cursor-pointer transition-all"
+                        >
+                          إغلاق ✕
+                        </button>
+                      </div>
+                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                        <input
+                          type="text"
+                          readOnly
+                          aria-label="Temporary Live Share Link"
+                          data-testid="generated-live-link-input"
+                          value={sharedLiveLinkUrl}
+                          className="sm:col-span-3 min-h-[44px] px-4 py-2.5 rounded-xl bg-slate-900 border border-slate-700 font-mono text-xs text-amber-300"
+                        />
+                        <span data-testid="generated-live-link-url" className="sr-only">
+                          {sharedLiveLinkUrl}
+                        </span>
+                        <button
+                          type="button"
+                          data-testid="copy-live-link-btn"
+                          data-button-variant="secondary"
+                          onClick={handleCopyLiveLink}
+                          className="min-h-[44px] px-4 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-100 text-xs font-bold font-['Cairo',sans-serif] flex items-center justify-center gap-2 cursor-pointer transition-all"
+                        >
+                          {liveLinkCopied ? <Check className="w-4 h-4 text-amber-400" /> : <Copy className="w-4 h-4 text-amber-400" />}
+                          <span>{liveLinkCopied ? 'Copied!' : 'Copy Link'}</span>
+                        </button>
+                        <a
+                          href={`https://wa.me/?text=${encodeURIComponent(
+                            `تابع مسار طلبي في مشوار الباجور (${currentTrackedOrder.orderNumber}): ${sharedLiveLinkUrl}`
+                          )}`}
+                          data-testid="share-intent-whatsapp"
+                          data-button-variant="primary"
+                          className="min-h-[44px] px-4 py-2.5 rounded-xl bg-amber-500 hover:bg-amber-400 border border-amber-400 text-slate-950 text-xs font-black font-['Cairo',sans-serif] flex items-center justify-center gap-2 transition-all"
+                        >
+                          <span>WhatsApp Share</span>
+                        </a>
+                        <a
+                          href={`sms:?body=${encodeURIComponent(
+                            `تتبع طلبي في مشوار الباجور (${currentTrackedOrder.orderNumber}): ${sharedLiveLinkUrl}`
+                          )}`}
+                          data-testid="share-intent-sms"
+                          data-button-variant="secondary"
+                          className="min-h-[44px] px-4 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-100 text-xs font-bold font-['Cairo',sans-serif] flex items-center justify-center gap-2 transition-all"
+                        >
+                          <span>SMS Share</span>
+                        </a>
+                      </div>
+                    </div>
+                  )}
+                </div>
               </div>
             </div>
 
-            <MobileAppFrame onOpenOperationsDashboard={() => setWorkspaceMode('admin')} />
+            {/* Order History Section when navigated via 'View History' */}
+            {customerScreen === 'history' && (
+              <div
+                data-testid="order-history-section"
+                className="bg-slate-900 border border-slate-800 rounded-2xl p-4 shadow-xl flex flex-col gap-4 font-['Cairo',sans-serif]"
+              >
+                <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-800 pb-3">
+                  <div className="flex items-center gap-2">
+                    <FileText className="w-4 h-4 text-amber-400" />
+                    <h2 className="text-sm font-black text-white">
+                      سجل الطلبات والمشاوير وتقييم الكباتن (Order History & Post-Delivery Rating)
+                    </h2>
+                    <span className="text-xs px-2.5 py-0.5 rounded-full bg-slate-800 border border-slate-700 text-amber-300 font-bold">
+                      {isOrderHistoryEmptyPreview ? 0 : marketplaceOrders.length} طلبات
+                    </span>
+                  </div>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <button
+                      type="button"
+                      data-testid="toggle-history-empty-state-btn"
+                      onClick={() => setIsOrderHistoryEmptyPreview((prev) => !prev)}
+                      className="min-h-[44px] px-3.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-200 text-xs font-bold font-['Cairo',sans-serif] transition-all cursor-pointer"
+                    >
+                      {isOrderHistoryEmptyPreview
+                        ? 'Show Orders • عرض الطلبات'
+                        : 'Preview Empty State • معاينة السجل الفارغ'}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setCustomerScreen('tracking')}
+                      className="min-h-[44px] px-3.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-200 text-xs font-bold font-['Cairo',sans-serif] transition-all cursor-pointer"
+                    >
+                      إغلاق السجل والعودة للتتبع الحي
+                    </button>
+                  </div>
+                </div>
+
+                {!isOrderHistoryEmptyPreview && marketplaceOrders.length > 0 && (
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  {marketplaceOrders.map((ord) => {
+                    const currentRating = orderRatings[ord.id] ?? ord.customerRating ?? 0;
+                    const currentFeedback =
+                      orderFeedbackDrafts[ord.id] ?? ord.orderFeedback ?? ord.customerFeedback ?? '';
+                    const isFeedbackSaved = Boolean(orderFeedbackSavedMap[ord.id]);
+                    return (
+                      <div
+                        key={ord.id}
+                        data-testid={`history-order-card-${ord.id}`}
+                        className="p-4 rounded-2xl bg-slate-950 border border-slate-800 shadow-md flex flex-col gap-3 text-xs font-['Cairo',sans-serif]"
+                      >
+                        <div className="flex items-center justify-between">
+                          <span className="font-black text-white text-sm">
+                            {ord.orderNumber} • {ord.storeName}
+                          </span>
+                          <span className="font-bold text-emerald-400 bg-emerald-500/10 px-2.5 py-0.5 rounded-full border border-emerald-500/30">
+                            {ord.totalEgp}.00 ج.م
+                          </span>
+                        </div>
+                        <div className="flex items-center justify-between text-slate-400 text-[11px]">
+                          <span>
+                            الكابتن: {ord.assignedCaptainName || 'كابتن مشوار الباجور'} • الوجهة: {ord.deliveryAddress}
+                          </span>
+                          <span className="px-2.5 py-0.5 rounded-full bg-slate-900 border border-slate-800 text-amber-300 font-bold">
+                            {ord.status}
+                          </span>
+                        </div>
+
+                        {/* Post-Delivery 1-5 Star Rating System */}
+                        <div
+                          data-testid="post-delivery-star-rating"
+                          data-order-id={ord.id}
+                          className="pt-2.5 border-t border-slate-800/80 flex flex-wrap items-center justify-between gap-2"
+                        >
+                          <div className="flex items-center gap-1.5">
+                            <span className="text-[11px] font-bold text-slate-300">
+                              Rate Captain (1-5) • تقييم الكابتن:
+                            </span>
+                            {currentRating > 0 && (
+                              <span
+                                data-testid="selected-captain-rating"
+                                className="text-[11px] font-black text-amber-400 bg-amber-500/10 px-2 py-0.5 rounded-full border border-amber-500/30"
+                              >
+                                {currentRating}/5 ★
+                              </span>
+                            )}
+                          </div>
+                          <div className="flex items-center gap-1.5" role="group" aria-label={`Rate captain for order ${ord.orderNumber}`}>
+                            {[1, 2, 3, 4, 5].map((starValue) => {
+                              const isFilled = starValue <= currentRating;
+                              return (
+                                <button
+                                  key={starValue}
+                                  type="button"
+                                  data-testid={`rate-star-${starValue}`}
+                                  data-star-value={starValue}
+                                  aria-label={`Rate ${starValue} out of 5 stars`}
+                                  aria-pressed={currentRating === starValue}
+                                  onClick={() => handleRateOrderCaptain(ord.id, starValue)}
+                                  className={`px-2.5 py-1.5 rounded-xl border text-[11px] font-bold flex items-center gap-1 transition-all cursor-pointer ${
+                                    isFilled
+                                      ? 'bg-amber-500/20 border-amber-400/60 text-amber-300 shadow-xs'
+                                      : 'bg-slate-900 hover:bg-slate-800 border-slate-800 text-slate-400'
+                                  }`}
+                                >
+                                  <Star
+                                    className={`w-3.5 h-3.5 ${
+                                      isFilled ? 'text-amber-400 fill-amber-400' : 'text-slate-500'
+                                    }`}
+                                  />
+                                  <span>{starValue}</span>
+                                </button>
+                              );
+                            })}
+                          </div>
+                        </div>
+
+                        {/* Order Feedback Textarea below Star Rating */}
+                        <form
+                          onSubmit={(e) => handleSaveOrderFeedback(ord.id, currentFeedback, e)}
+                          data-testid="order-feedback-section"
+                          data-order-id={ord.id}
+                          className="pt-2.5 border-t border-slate-800/80 flex flex-col gap-2"
+                        >
+                          <div className="flex items-center justify-between gap-2">
+                            <label
+                              htmlFor={`order-feedback-textarea-mobile-${ord.id}`}
+                              className="text-[11px] font-bold text-slate-300"
+                            >
+                              Order Feedback • تعليق وملاحظات تجربة التوصيل:
+                            </label>
+                            {(isFeedbackSaved || Boolean(ord.orderFeedback || ord.customerFeedback)) && (
+                              <span
+                                data-testid="order-feedback-saved-badge"
+                                className="text-[10px] font-bold text-emerald-400"
+                              >
+                                Feedback Saved ✓ • تم حفظ التعليق
+                              </span>
+                            )}
+                          </div>
+                          <textarea
+                            id={`order-feedback-textarea-mobile-${ord.id}`}
+                            name="orderFeedback"
+                            aria-label="Order Feedback"
+                            data-testid="order-feedback-textarea"
+                            data-order-id={ord.id}
+                            rows={2}
+                            value={currentFeedback}
+                            onChange={(e) => handleOrderFeedbackChange(ord.id, e.target.value)}
+                            placeholder="Write your Order Feedback about your delivery experience... • اكتب ملاحظاتك عن تجربة التوصيل..."
+                            className="w-full px-3 py-2 rounded-xl bg-slate-900 border border-slate-700 text-xs text-white focus:outline-none focus:border-emerald-400 resize-y"
+                          />
+                          <div className="flex items-center justify-between gap-2">
+                            <span
+                              data-testid="persisted-order-feedback-display"
+                              className="text-[11px] text-slate-400 truncate"
+                            >
+                              {ord.orderFeedback || ord.customerFeedback
+                                ? `Saved: ${ord.orderFeedback || ord.customerFeedback}`
+                                : 'لم يتم تسجيل تعليق بعد'}
+                            </span>
+                            <button
+                              type="submit"
+                              data-testid="save-order-feedback-btn"
+                              className="px-3.5 py-2 rounded-xl bg-emerald-700 hover:bg-emerald-600 border border-emerald-500/50 text-white text-xs font-bold cursor-pointer transition-all shadow-sm shrink-0"
+                            >
+                              Save Feedback • حفظ التعليق
+                            </button>
+                          </div>
+                        </form>
+                      </div>
+                    );
+                  })}
+                  </div>
+                )}
+
+                {/* Order History Empty State Component with Subtle Icon & 'Book New Delivery' CTA */}
+                <OrderHistoryEmptyState onBookNewDelivery={handleBookNewDelivery} />
+              </div>
+            )}
           </div>
         )}
 
@@ -1352,43 +3127,991 @@ export default function App() {
             {/* Synchronized Active Order Tracking Summary Bar (Preserves data-testid contracts) */}
             <div
               data-testid="active-order-tracking-widget"
-              className="bg-slate-900 border border-slate-800 rounded-2xl p-4 shadow-lg flex flex-col md:flex-row md:items-center justify-between gap-4"
+              data-status-animation={isWidgetStatusSlideAnimating ? 'slide-in' : 'settled'}
+              className={`bg-slate-900 border border-slate-800 rounded-2xl p-4 shadow-lg flex flex-col gap-4 font-['Cairo',sans-serif] transform transition-all duration-300 ease-out ${
+                isWidgetStatusSlideAnimating
+                  ? 'animate-m3-slide-in translate-y-0 opacity-100 ring-1 ring-amber-500/30'
+                  : 'translate-y-0 opacity-100'
+              }`}
             >
-              <div className="flex items-center gap-3">
-                <span className="w-3 h-3 rounded-full bg-emerald-500 animate-ping shrink-0" />
-                <div>
-                  <div className="flex items-center gap-2">
-                    <span className="text-sm font-black text-white">
-                      متابعة الطلب الحي في المحاكي الموحد ({currentTrackedOrder.orderNumber})
+              <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
+                <div className="flex items-center gap-3">
+                  <span className="w-3 h-3 rounded-full bg-emerald-500 animate-ping shrink-0" />
+                  <div>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="text-sm font-black text-white">
+                        متابعة الطلب الحي في المحاكي الموحد ({currentTrackedOrder.orderNumber})
+                      </span>
+                      <span className="text-xs font-bold text-emerald-400 bg-emerald-500/15 px-2.5 py-0.5 rounded-full border border-emerald-500/30">
+                        {currentTrackedOrder.totalEgp}.00 ج.م
+                      </span>
+                      <span
+                        data-testid="active-order-status-badge"
+                        className="text-[11px] font-bold text-amber-300 bg-amber-500/15 px-2.5 py-0.5 rounded-full border border-amber-500/30"
+                      >
+                        الحالة: {('status' in currentTrackedOrder && currentTrackedOrder.status) || activeOrderState.status}
+                      </span>
+                    </div>
+                    <p className="text-xs text-slate-400 mt-0.5">
+                      {('assignedCaptainName' in currentTrackedOrder && currentTrackedOrder.assignedCaptainName) ||
+                        activeOrderState.captainName}{' '}
+                      • الوجهة:{' '}
+                      {('deliveryAddress' in currentTrackedOrder && currentTrackedOrder.deliveryAddress) ||
+                        activeOrderState.destination}
+                      {lastRefreshedAtLabel && (
+                        <span className="text-[11px] text-emerald-400 mr-2">
+                          • آخر تحديث: {lastRefreshedAtLabel}
+                        </span>
+                      )}
+                    </p>
+                  </div>
+                </div>
+
+                {/* Static Map Thumbnail for El Bagour Route with Pickup & Dropoff Markers */}
+                <div
+                  data-testid="active-order-static-map-thumbnail"
+                  data-map-view-mode={isFullScreenMapOpen ? 'fullscreen' : 'thumbnail'}
+                  data-theme-mode={isDarkMode ? 'dark' : 'light'}
+                  aria-label="El Bagour Route Static Map Thumbnail"
+                  className="bg-slate-950 border border-slate-800 rounded-xl p-2.5 flex flex-col sm:flex-row items-center gap-3 shrink-0"
+                >
+                  <div
+                    className={`relative w-44 h-16 rounded-lg overflow-hidden border shrink-0 ${
+                      isDarkMode
+                        ? 'border-slate-800 bg-slate-900'
+                        : 'border-slate-300 bg-slate-100'
+                    }`}
+                  >
+                    <PinchZoomPan isDarkMode={isDarkMode}>
+                      <img
+                        src={elBagourStaticMapSvgUri}
+                        alt={`El Bagour Route Static Map from ${currentOrderPickup} to ${currentOrderDropoff}`}
+                        data-testid="static-map-thumbnail-img"
+                        data-theme-mode={isDarkMode ? 'dark' : 'light'}
+                        className="w-full h-full object-cover pointer-events-none"
+                      />
+                      <svg
+                        data-testid="active-order-map-polyline-svg"
+                        data-theme-mode={isDarkMode ? 'dark' : 'light'}
+                        viewBox="0 0 280 96"
+                        className="absolute inset-0 w-full h-full pointer-events-none"
+                        aria-label="Animated Route Path Polyline"
+                      >
+                        <polyline
+                          data-testid="route-base-polyline"
+                          points={elBagourRoutePolylinePoints}
+                          fill="none"
+                          stroke={mapThemePalette.baseRouteStroke}
+                          strokeOpacity="0.4"
+                          strokeWidth="5"
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                        />
+                        <polyline
+                          data-testid="animated-route-polyline"
+                          points={elBagourRoutePolylinePoints}
+                          fill="none"
+                          stroke={mapThemePalette.activeRouteStroke}
+                          strokeWidth="3"
+                          strokeDasharray="8 6"
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                          className="animate-pulse"
+                        >
+                          <animate
+                            attributeName="stroke-dashoffset"
+                            from="28"
+                            to="0"
+                            dur="1.2s"
+                            repeatCount="indefinite"
+                          />
+                        </polyline>
+                        <circle cx="38" cy="68" r="5" fill={mapThemePalette.pickupFill} />
+                        <circle cx="242" cy="28" r="5" fill={mapThemePalette.dropoffFill} />
+                        <circle
+                          data-testid="animated-route-rider-dot"
+                          r="4"
+                          fill={mapThemePalette.riderFill}
+                          stroke={mapThemePalette.riderStroke}
+                          strokeWidth="1.5"
+                        >
+                          <animateMotion
+                            path="M38,68 L96,46 L168,54 L242,28"
+                            dur="3.5s"
+                            repeatCount="indefinite"
+                          />
+                        </circle>
+                      </svg>
+                    </PinchZoomPan>
+                    <span className="absolute top-1 right-1.5 z-10 px-1.5 py-0.5 rounded bg-slate-950/85 text-[9px] font-bold font-['Cairo',sans-serif] text-emerald-400 border border-emerald-500/30 pointer-events-none">
+                      El Bagour • الباجور
                     </span>
-                    <span className="text-xs font-bold text-emerald-400 bg-emerald-500/15 px-2.5 py-0.5 rounded-full border border-emerald-500/30">
-                      {currentTrackedOrder.totalEgp}.00 ج.م
+                    <span
+                      data-testid="map-travel-estimate-badge"
+                      className="absolute bottom-1 left-1.5 z-10 px-1.5 py-0.5 rounded bg-slate-950/90 border border-slate-700/80 text-[9px] font-bold font-['Cairo',sans-serif] text-amber-300 flex items-center gap-1 shadow-sm pointer-events-none"
+                    >
+                      <Clock className="w-2.5 h-2.5 text-amber-400 shrink-0" />
+                      <span>
+                        ~{currentOrderDurationMinutes} min • {currentOrderRouteDistanceKm.toFixed(1)} km
+                      </span>
                     </span>
                   </div>
-                  <p className="text-xs text-slate-400 mt-0.5">
-                    {('assignedCaptainName' in currentTrackedOrder && currentTrackedOrder.assignedCaptainName) ||
-                      activeOrderState.captainName}{' '}
-                    • الوجهة:{' '}
-                    {('deliveryAddress' in currentTrackedOrder && currentTrackedOrder.deliveryAddress) ||
-                      activeOrderState.destination}
-                  </p>
+                  <div className="flex flex-col gap-1.5 text-[11px] min-w-[200px] font-['Cairo',sans-serif]">
+                    <div
+                      data-testid="map-pickup-marker"
+                      className="flex items-center justify-between gap-2 text-emerald-300 bg-slate-900 border border-slate-800 rounded-xl px-2.5 py-1.5"
+                    >
+                      <div className="flex items-center gap-1.5 min-w-0">
+                        <MapPin className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+                        <span className="font-bold text-slate-400">Pickup (الانطلاق):</span>
+                        <span className="font-bold text-white truncate max-w-[140px]" title={currentOrderPickup}>
+                          {currentOrderPickup}
+                        </span>
+                      </div>
+                      <button
+                        type="button"
+                        data-testid="copy-pickup-address-btn"
+                        aria-label="Copy Pickup Address"
+                        title="Copy Pickup Address • نسخ عنوان الانطلاق"
+                        onClick={handleCopyPickupAddress}
+                        className="shrink-0 p-1 rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-200 hover:text-amber-300 font-['Cairo',sans-serif] flex items-center justify-center transition-all cursor-pointer"
+                      >
+                        {pickupAddressCopied ? (
+                          <Check className="w-3 h-3 text-emerald-400" />
+                        ) : (
+                          <Copy className="w-3 h-3 text-amber-400" />
+                        )}
+                        <span className="sr-only">Copy Pickup Address</span>
+                      </button>
+                    </div>
+                    <div
+                      data-testid="map-dropoff-marker"
+                      className="flex items-center justify-between gap-2 text-amber-300 bg-slate-900 border border-slate-800 rounded-xl px-2.5 py-1.5"
+                    >
+                      <div className="flex items-center gap-1.5 min-w-0">
+                        <Navigation className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+                        <span className="font-bold text-slate-400">Dropoff (الوصول):</span>
+                        <span className="font-bold text-white truncate max-w-[140px]" title={currentOrderDropoff}>
+                          {currentOrderDropoff}
+                        </span>
+                      </div>
+                      <button
+                        type="button"
+                        data-testid="copy-dropoff-address-btn"
+                        aria-label="Copy Dropoff Address"
+                        title="Copy Dropoff Address • نسخ عنوان الوصول"
+                        onClick={handleCopyDropoffAddress}
+                        className="shrink-0 p-1 rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-200 hover:text-amber-300 font-['Cairo',sans-serif] flex items-center justify-center transition-all cursor-pointer"
+                      >
+                        {dropoffAddressCopied ? (
+                          <Check className="w-3 h-3 text-emerald-400" />
+                        ) : (
+                          <Copy className="w-3 h-3 text-amber-400" />
+                        )}
+                        <span className="sr-only">Copy Dropoff Address</span>
+                      </button>
+                    </div>
+                    <button
+                      type="button"
+                      data-testid="toggle-fullscreen-map-btn"
+                      aria-expanded={isFullScreenMapOpen}
+                      aria-label={
+                        isFullScreenMapOpen
+                          ? 'Toggle Static Map Thumbnail View'
+                          : 'Toggle Full-Screen Map View'
+                      }
+                      onClick={handleToggleFullScreenMap}
+                      className="px-2.5 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-100 hover:text-amber-300 text-[11px] font-bold font-['Cairo',sans-serif] flex items-center justify-center gap-1.5 transition-all cursor-pointer"
+                    >
+                      <ExternalLink className="w-3 h-3 text-amber-400 shrink-0" />
+                      <span>
+                        {isFullScreenMapOpen
+                          ? 'Thumbnail Map View • تصغير الخريطة'
+                          : 'Full-Screen Map View • تكبير الخريطة'}
+                      </span>
+                    </button>
+                  </div>
                 </div>
               </div>
 
-              <div
-                data-testid="active-order-accepted-time"
-                className="px-3.5 py-2 rounded-xl bg-emerald-500/10 border border-emerald-500/30 flex items-center gap-2 text-xs text-emerald-300 shrink-0"
-              >
-                <Clock className="w-4 h-4 text-emerald-400 shrink-0" />
-                <span className="font-bold">وقت قبول الطلب:</span>
-                <span className="font-black text-white">
-                  {formatHumanReadableAcceptedTimestamp(
-                    extractedAcceptedAtIso,
-                    extractedAcceptedAtFallback
-                  ) || humanReadableAcceptedTime}
-                </span>
+              <div className="flex flex-wrap items-center gap-2 pt-2 border-t border-slate-800/80">
+                {/* Dynamic Estimated Time of Arrival (ETA) Countdown Timer */}
+                <div
+                  data-testid="active-order-eta-timer"
+                  className="px-3.5 py-2 rounded-xl bg-amber-500/10 border border-amber-500/30 flex items-center gap-2 text-xs text-amber-300 shrink-0"
+                >
+                  <Clock className="w-4 h-4 text-amber-400 shrink-0" />
+                  <span className="font-bold">Estimated Time of Arrival (ETA):</span>
+                  <span className="font-mono font-black text-white text-sm" data-testid="eta-countdown-value">
+                    {formattedEtaCountdown}
+                  </span>
+                  <span className="text-[10px] text-amber-200/80">
+                    ({currentOrderDurationMinutes} د)
+                  </span>
+                </div>
+
+                {/* Accepted Timestamp */}
+                <div
+                  data-testid="active-order-accepted-time"
+                  className="px-3.5 py-2 rounded-xl bg-emerald-500/10 border border-emerald-500/30 flex items-center gap-2 text-xs text-emerald-300 shrink-0"
+                >
+                  <Clock className="w-4 h-4 text-emerald-400 shrink-0" />
+                  <span className="font-bold">وقت قبول الطلب:</span>
+                  <span className="font-black text-white">
+                    {formatHumanReadableAcceptedTimestamp(
+                      extractedAcceptedAtIso,
+                      extractedAcceptedAtFallback
+                    ) || humanReadableAcceptedTime}
+                  </span>
+                </div>
+
+                {/* Manual Refresh Order Status Button with Visual Feedback & Progress Bar */}
+                <button
+                  type="button"
+                  data-testid="refresh-order-status-btn"
+                  onClick={handleManualRefreshOrderStatus}
+                  disabled={isRefreshingOrder}
+                  aria-busy={isRefreshingOrder}
+                  aria-label="Refresh Order Status"
+                  className={`relative overflow-hidden px-3.5 py-2 rounded-xl border text-xs font-bold flex flex-col items-center justify-center gap-1 transition cursor-pointer disabled:cursor-not-allowed ${
+                    isRefreshingOrder
+                      ? 'bg-slate-800/90 border-emerald-500/50 text-emerald-300 opacity-90'
+                      : refreshFeedbackStage === 'updated'
+                      ? 'bg-emerald-950/60 border-emerald-500/50 text-emerald-300'
+                      : 'bg-slate-800 hover:bg-slate-700 text-slate-200 border-slate-700'
+                  }`}
+                >
+                  <div className="flex items-center gap-1.5">
+                    <RefreshCw
+                      className={`w-3.5 h-3.5 text-emerald-400 ${
+                        isRefreshingOrder ? 'animate-spin' : ''
+                      }`}
+                    />
+                    <span data-testid="refresh-button-label">
+                      {isRefreshingOrder
+                        ? 'Updating... • جاري التحديث...'
+                        : refreshFeedbackStage === 'updated'
+                        ? 'Updated ✓ • تم التحديث'
+                        : 'Refresh • تحديث الحالة'}
+                    </span>
+                  </div>
+                  <div
+                    role="progressbar"
+                    data-testid="refresh-progress-bar"
+                    aria-valuemin={0}
+                    aria-valuemax={100}
+                    aria-valuenow={refreshProgress}
+                    className={`w-full h-1 rounded-full bg-slate-950/80 overflow-hidden transition-opacity duration-200 ${
+                      isRefreshingOrder || refreshProgress > 0 ? 'opacity-100' : 'opacity-40'
+                    }`}
+                  >
+                    <div
+                      className={`h-full bg-emerald-400 transition-all duration-150 ease-out rounded-full ${
+                        refreshProgress >= 100
+                          ? 'w-full'
+                          : refreshProgress >= 90
+                          ? 'w-11/12'
+                          : refreshProgress >= 65
+                          ? 'w-2/3'
+                          : refreshProgress > 0 || isRefreshingOrder
+                          ? 'w-1/4'
+                          : 'w-0'
+                      }`}
+                    />
+                  </div>
+                </button>
+
+                {/* Call Captain Button */}
+                <button
+                  type="button"
+                  data-testid="call-captain-btn"
+                  onClick={handleOpenCallCaptainPrompt}
+                  aria-label={`Call Captain ${currentOrderCaptainPhone}`}
+                  className="px-3 py-2 rounded-xl bg-sky-600 hover:bg-sky-500 text-white text-xs font-bold flex items-center gap-1.5 shadow transition cursor-pointer"
+                >
+                  <Phone className="w-3.5 h-3.5" />
+                  <span>Call Captain</span>
+                  <span className="font-mono text-[11px] text-sky-100" data-testid="tracking-widget-captain-phone">
+                    ({currentOrderCaptainPhone})
+                  </span>
+                </button>
+
+                {/* Message Captain Button */}
+                <button
+                  type="button"
+                  data-testid="message-captain-btn"
+                  onClick={() => setIsCaptainChatModalOpen(true)}
+                  className="px-3 py-2 rounded-xl bg-teal-600 hover:bg-teal-500 text-white text-xs font-bold flex items-center gap-1.5 shadow transition cursor-pointer"
+                >
+                  <MessageSquare className="w-3.5 h-3.5" />
+                  <span>Message Captain</span>
+                  <span className="px-1.5 py-0.5 rounded-full bg-teal-950/70 text-[10px] font-mono text-teal-200">
+                    {captainChatMessages.length}
+                  </span>
+                </button>
+
+                {/* Add Tip Button */}
+                <button
+                  type="button"
+                  data-testid="add-tip-btn"
+                  onClick={() => {
+                    setIsAddTipSectionOpen(true);
+                    setIsFareBreakdownExpanded(true);
+                  }}
+                  className="px-3 py-2 rounded-xl bg-pink-600 hover:bg-pink-500 text-white text-xs font-bold flex items-center gap-1.5 shadow transition cursor-pointer"
+                >
+                  <DollarSign className="w-3.5 h-3.5" />
+                  <span>Add Tip</span>
+                  {captainTipEgp > 0 && (
+                    <span className="px-1.5 py-0.5 rounded-full bg-pink-950/70 text-[10px] font-mono text-pink-200">
+                      +{captainTipEgp} EGP
+                    </span>
+                  )}
+                </button>
+
+                {/* View Captain Profile Button */}
+                <button
+                  type="button"
+                  data-testid="view-captain-profile-btn"
+                  onClick={() => setIsCaptainProfileModalOpen(true)}
+                  className="px-3 py-2 rounded-xl bg-violet-600 hover:bg-violet-500 text-white text-xs font-bold flex items-center gap-1.5 shadow transition cursor-pointer"
+                >
+                  <Bike className="w-3.5 h-3.5" />
+                  <span>View Captain Profile</span>
+                </button>
+
+                {/* Cancel Order Button */}
+                <button
+                  type="button"
+                  data-testid="cancel-order-btn"
+                  onClick={handleOpenCancelOrderDialog}
+                  disabled={currentOrderStatus === 'cancelled' || currentOrderStatus === 'delivered'}
+                  className="px-3 py-2 rounded-xl bg-red-600 hover:bg-red-500 disabled:bg-slate-800 disabled:text-slate-500 text-white text-xs font-bold flex items-center gap-1.5 shadow transition cursor-pointer disabled:cursor-not-allowed"
+                >
+                  <AlertTriangle className="w-3.5 h-3.5" />
+                  <span>Cancel Order</span>
+                </button>
+
+                {/* Share Live Link Button */}
+                <button
+                  type="button"
+                  data-testid="share-live-link-btn"
+                  onClick={handleShareLiveLink}
+                  className="px-3 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold flex items-center gap-1.5 shadow transition cursor-pointer"
+                >
+                  <Share2 className="w-3.5 h-3.5" />
+                  <span>Share Live Link</span>
+                </button>
+
+                {/* Edit Notes Button */}
+                <button
+                  type="button"
+                  data-testid="edit-notes-btn"
+                  onClick={handleToggleEditNotes}
+                  className="px-3 py-2 rounded-xl bg-amber-600 hover:bg-amber-500 text-white text-xs font-bold flex items-center gap-1.5 shadow transition cursor-pointer"
+                >
+                  <Edit3 className="w-3.5 h-3.5" />
+                  <span>Edit Notes</span>
+                </button>
+
+                {/* View Order Summary Button */}
+                <button
+                  type="button"
+                  data-testid="view-order-summary-btn"
+                  onClick={() => setIsOrderSummaryModalOpen(true)}
+                  className="px-3 py-2 rounded-xl bg-cyan-600 hover:bg-cyan-500 text-white text-xs font-bold flex items-center gap-1.5 shadow transition cursor-pointer"
+                >
+                  <Package className="w-3.5 h-3.5" />
+                  <span>View Order Summary</span>
+                </button>
+
+                {/* SOS Emergency Button */}
+                <button
+                  type="button"
+                  data-testid="sos-emergency-btn"
+                  onClick={() => {
+                    setSosLocationShared(false);
+                    setSosTriggeredService(null);
+                    setIsSosModalOpen(true);
+                  }}
+                  aria-label="SOS Emergency Assistance"
+                  className="px-3 py-2 rounded-xl bg-rose-700 hover:bg-rose-600 border border-rose-400/50 text-white text-xs font-black flex items-center gap-1.5 shadow-md shadow-rose-900/40 transition cursor-pointer"
+                >
+                  <ShieldCheck className="w-3.5 h-3.5 text-rose-200" />
+                  <span>SOS</span>
+                </button>
+
+                {/* View History Navigation Button */}
+                <button
+                  type="button"
+                  data-testid="view-order-history-btn"
+                  onClick={handleViewOrderHistory}
+                  className="px-3 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold flex items-center gap-1.5 shadow transition cursor-pointer"
+                >
+                  <FileText className="w-3.5 h-3.5" />
+                  <span>View History</span>
+                </button>
               </div>
+
+              {/* Order Notes Summary & Inline Editor inside Active Order Tracking Widget */}
+              <div
+                data-testid="edit-notes-section"
+                className="pt-2 border-t border-slate-800/80 flex flex-col gap-2"
+              >
+                <div className="flex items-center justify-between gap-2 text-xs">
+                  <div className="flex items-center gap-2 text-slate-300">
+                    <FileText className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+                    <span className="font-bold text-slate-400">ملاحظات الطلب (Order Notes):</span>
+                    <span
+                      data-testid="active-order-notes-display"
+                      className="font-bold text-white"
+                    >
+                      {currentOrderNotesValue || 'لا توجد ملاحظات إضافية'}
+                    </span>
+                  </div>
+                  {notesSavedFeedback && (
+                    <span
+                      data-testid="order-notes-saved-badge"
+                      className="text-[11px] font-bold text-emerald-400"
+                    >
+                      Saved ✓ • تم الحفظ
+                    </span>
+                  )}
+                </div>
+
+                {isEditNotesOpen && (
+                  <form
+                    onSubmit={handleSaveOrderNotes}
+                    data-testid="edit-order-notes-form"
+                    className="flex flex-wrap items-center gap-2 bg-slate-950/80 border border-amber-500/40 rounded-xl p-2.5"
+                  >
+                    <input
+                      type="text"
+                      name="orderNotes"
+                      aria-label="Order Notes"
+                      data-testid="edit-order-notes-input"
+                      value={orderNotes}
+                      onChange={(e) => handleOrderNotesChange(e.target.value)}
+                      placeholder="أضف أو عدّل ملاحظات التوصيل للكابتن..."
+                      className="flex-1 min-w-[200px] px-3 py-1.5 rounded-lg bg-slate-900 border border-slate-700 text-xs text-white focus:outline-none focus:border-amber-400"
+                    />
+                    <button
+                      type="submit"
+                      data-testid="save-order-notes-btn"
+                      className="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold cursor-pointer transition"
+                    >
+                      Save Notes • حفظ الملاحظات
+                    </button>
+                  </form>
+                )}
+              </div>
+
+              {/* Add Tip (Captain Gratuity) Section */}
+              {isAddTipSectionOpen && (
+                <div
+                  data-testid="add-tip-section"
+                  className="pt-2 border-t border-slate-800/80 flex flex-col gap-2"
+                >
+                  <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
+                    <span className="font-bold text-slate-300 flex items-center gap-1.5">
+                      <DollarSign className="w-3.5 h-3.5 text-pink-400" />
+                      <span>Add Tip • إكرامية الكابتن (Gratuity)</span>
+                    </span>
+                    <span
+                      data-testid="active-tip-amount-badge"
+                      className="text-[11px] font-mono font-bold text-pink-300 bg-pink-500/15 px-2.5 py-0.5 rounded-full border border-pink-500/30"
+                    >
+                      Tip: {fareBreakdownTipEgp.toFixed(2)} EGP
+                    </span>
+                  </div>
+
+                  <div className="flex flex-wrap items-center gap-2 bg-slate-950/80 border border-slate-800/90 rounded-xl p-2.5">
+                    {[5, 10, 15].map((presetEgp) => {
+                      const isSelected = captainTipEgp === presetEgp;
+                      return (
+                        <button
+                          key={presetEgp}
+                          type="button"
+                          data-testid={`tip-preset-${presetEgp}`}
+                          aria-pressed={isSelected}
+                          onClick={() => handleSelectPresetTip(presetEgp)}
+                          className={`px-3 py-1.5 rounded-lg text-xs font-bold transition cursor-pointer border ${
+                            isSelected
+                              ? 'bg-pink-600 text-white border-pink-400 shadow-sm shadow-pink-500/30'
+                              : 'bg-slate-900 hover:bg-slate-800 text-slate-200 border-slate-700'
+                          }`}
+                        >
+                          {presetEgp} EGP
+                        </button>
+                      );
+                    })}
+
+                    <form
+                      onSubmit={handleApplyCustomTip}
+                      className="flex flex-wrap items-center gap-1.5 flex-1 min-w-[180px]"
+                    >
+                      <input
+                        type="number"
+                        min="0"
+                        step="1"
+                        aria-label="Custom Tip Amount in EGP"
+                        data-testid="custom-tip-input"
+                        value={customTipInput}
+                        onChange={(e) => handleCustomTipInputChange(e.target.value)}
+                        placeholder="Custom Tip (EGP) • مبلغ مخصص"
+                        className="flex-1 min-w-[130px] px-2.5 py-1.5 rounded-lg bg-slate-900 border border-slate-700 text-xs text-white focus:outline-none focus:border-pink-400 font-mono"
+                      />
+                      <button
+                        type="submit"
+                        data-testid="apply-custom-tip-btn"
+                        className="px-3 py-1.5 rounded-lg bg-pink-600 hover:bg-pink-500 text-white text-xs font-bold cursor-pointer transition"
+                      >
+                        Apply Tip
+                      </button>
+                      {captainTipEgp > 0 && (
+                        <button
+                          type="button"
+                          data-testid="clear-tip-btn"
+                          onClick={() => {
+                            setCaptainTipEgp(0);
+                            setCustomTipInput('');
+                          }}
+                          className="px-2.5 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-bold cursor-pointer transition"
+                        >
+                          Clear
+                        </button>
+                      )}
+                    </form>
+                  </div>
+                </div>
+              )}
+
+              {/* Expandable Fare Breakdown Section */}
+              <div
+                data-testid="expandable-fare-breakdown"
+                className="pt-2 border-t border-slate-800/80 flex flex-col gap-2"
+              >
+                <div className="flex items-center justify-between gap-2">
+                  <button
+                    type="button"
+                    data-testid="toggle-fare-breakdown-btn"
+                    aria-expanded={isFareBreakdownExpanded}
+                    onClick={() => setIsFareBreakdownExpanded((prev) => !prev)}
+                    className="w-full flex items-center justify-between px-3 py-2 rounded-xl bg-slate-950/90 hover:bg-slate-900 border border-slate-800 text-xs font-bold text-slate-200 cursor-pointer transition"
+                  >
+                    <span className="flex items-center gap-2">
+                      <DollarSign className="w-3.5 h-3.5 text-emerald-400" />
+                      <span>Expandable Fare Breakdown • تفاصيل تكلفة المشوار</span>
+                    </span>
+                    <span
+                      data-testid="fare-breakdown-total-amount"
+                      className="flex items-center gap-2 text-emerald-400 font-mono"
+                    >
+                      <span>{fareBreakdownTotalEgp.toFixed(2)} EGP</span>
+                      {isFareBreakdownExpanded ? (
+                        <ChevronUp className="w-4 h-4 text-slate-400" />
+                      ) : (
+                        <ChevronDown className="w-4 h-4 text-slate-400" />
+                      )}
+                    </span>
+                  </button>
+                </div>
+
+                {isFareBreakdownExpanded && (
+                  <div
+                    data-testid="fare-breakdown-content"
+                    className="bg-slate-950/80 border border-slate-800/90 rounded-xl p-3 grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs"
+                  >
+                    <div
+                      data-testid="fare-item-base-fare"
+                      className="flex items-center justify-between px-2.5 py-1.5 rounded-lg bg-slate-900/80 border border-slate-800/60"
+                    >
+                      <span className="text-slate-300 font-medium">Base Fare (فتحة العداد)</span>
+                      <span className="font-mono font-bold text-white">
+                        {fareBreakdownBaseFareEgp.toFixed(2)} EGP
+                      </span>
+                    </div>
+                    <div
+                      data-testid="fare-item-distance-fare"
+                      className="flex items-center justify-between px-2.5 py-1.5 rounded-lg bg-slate-900/80 border border-slate-800/60"
+                    >
+                      <span className="text-slate-300 font-medium">Distance Fare (تكلفة المسافة)</span>
+                      <span className="font-mono font-bold text-white">
+                        {fareBreakdownDistanceFareEgp.toFixed(2)} EGP
+                      </span>
+                    </div>
+                    <div
+                      data-testid="fare-item-rural-surcharge"
+                      className="flex items-center justify-between px-2.5 py-1.5 rounded-lg bg-slate-900/80 border border-slate-800/60"
+                    >
+                      <span className="text-slate-300 font-medium">Rural Surcharge (إضافي القرى)</span>
+                      <span className="font-mono font-bold text-amber-300">
+                        {fareBreakdownRuralSurchargeEgp.toFixed(2)} EGP
+                      </span>
+                    </div>
+                    <div
+                      data-testid="fare-item-platform-fee"
+                      className="flex items-center justify-between px-2.5 py-1.5 rounded-lg bg-slate-900/80 border border-slate-800/60"
+                    >
+                      <span className="text-slate-300 font-medium">Platform Fee (رسوم المنصة)</span>
+                      <span className="font-mono font-bold text-sky-300">
+                        {fareBreakdownPlatformFeeEgp.toFixed(2)} EGP
+                      </span>
+                    </div>
+                    <div
+                      data-testid="fare-item-tip"
+                      className="flex items-center justify-between px-2.5 py-1.5 rounded-lg bg-slate-900/80 border border-pink-500/30"
+                    >
+                      <span className="text-pink-300 font-medium">Captain Tip (إكرامية الكابتن)</span>
+                      <span className="font-mono font-bold text-pink-300">
+                        {fareBreakdownTipEgp.toFixed(2)} EGP
+                      </span>
+                    </div>
+                    <div
+                      data-testid="fare-item-total"
+                      className="flex items-center justify-between px-2.5 py-1.5 rounded-lg bg-emerald-950/40 border border-emerald-500/40"
+                    >
+                      <span className="text-emerald-300 font-bold">Total Fare (الإجمالي الكلي)</span>
+                      <span className="font-mono font-black text-emerald-400">
+                        {fareBreakdownTotalEgp.toFixed(2)} EGP
+                      </span>
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* Vertical Status Timeline Component */}
+              <div
+                data-testid="active-order-vertical-timeline"
+                data-status-pulse={isTimelinePulsing ? 'active' : 'idle'}
+                className={`pt-2 border-t border-slate-800/80 flex flex-col gap-2 rounded-xl transition-all duration-500 ${
+                  isTimelinePulsing
+                    ? 'animate-pulse ring-1 ring-emerald-500/40 bg-emerald-950/15 p-2'
+                    : ''
+                }`}
+              >
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-bold text-slate-300 flex items-center gap-1.5">
+                    <Activity
+                      className={`w-3.5 h-3.5 text-emerald-400 ${
+                        isTimelinePulsing ? 'animate-pulse' : ''
+                      }`}
+                    />
+                    Order Status Timeline • التسلسل الزمني لحالات الطلب
+                  </span>
+                  <span
+                    data-testid="timeline-pulse-indicator"
+                    className={`text-[11px] font-mono text-emerald-400 ${
+                      isTimelinePulsing ? 'animate-pulse font-bold' : ''
+                    }`}
+                  >
+                    {currentOrderStatus === 'cancelled'
+                      ? 'Cancelled • ملغي'
+                      : `${activeTimelineIndex + 1} / ${orderTimelineSteps.length}`}
+                  </span>
+                </div>
+
+                <div className="relative pl-3 pr-1 py-1 flex flex-col gap-2.5">
+                  {orderTimelineSteps.map((step, index) => {
+                    const StepIcon = step.Icon;
+                    const isCompleted =
+                      currentOrderStatus !== 'cancelled' && index < activeTimelineIndex;
+                    const isCurrent =
+                      currentOrderStatus !== 'cancelled' && index === activeTimelineIndex;
+
+                    return (
+                      <div
+                        key={step.key}
+                        data-testid={`timeline-step-${step.key}`}
+                        data-step-state={
+                          isCurrent ? 'current' : isCompleted ? 'completed' : 'upcoming'
+                        }
+                        className={`relative flex items-start gap-3 ${
+                          isCurrent ? 'animate-pulse' : ''
+                        }`}
+                      >
+                        {index < orderTimelineSteps.length - 1 && (
+                          <div
+                            className={`absolute left-[13px] top-6 bottom-[-12px] w-0.5 ${
+                              isCompleted ? 'bg-emerald-500/70' : 'bg-slate-800'
+                            }`}
+                          />
+                        )}
+                        <div
+                          className={`relative z-10 w-7 h-7 rounded-full flex items-center justify-center border shrink-0 ${
+                            isCurrent
+                              ? 'bg-emerald-500/20 border-emerald-400 text-emerald-300 shadow-sm shadow-emerald-500/30 animate-pulse'
+                              : isCompleted
+                                ? 'bg-emerald-600/20 border-emerald-500/50 text-emerald-400'
+                                : 'bg-slate-900 border-slate-700 text-slate-500'
+                          }`}
+                        >
+                          <StepIcon className="w-3.5 h-3.5" />
+                        </div>
+                        <div className="flex-1 min-w-0 flex flex-wrap items-center justify-between gap-1 bg-slate-950/60 border border-slate-800/70 rounded-lg px-2.5 py-1.5">
+                          <div className="flex flex-col">
+                            <div className="flex items-center gap-1.5">
+                              <span
+                                className={`text-xs font-bold ${
+                                  isCurrent
+                                    ? 'text-emerald-300'
+                                    : isCompleted
+                                      ? 'text-white'
+                                      : 'text-slate-400'
+                                }`}
+                              >
+                                {step.label}
+                              </span>
+                              <span className="text-[11px] text-slate-400">
+                                • {step.arabicLabel}
+                              </span>
+                            </div>
+                            <span className="text-[10px] text-slate-500">{step.description}</span>
+                          </div>
+                          <span
+                            className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${
+                              isCurrent
+                                ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 animate-pulse'
+                                : isCompleted
+                                  ? 'bg-slate-800 text-emerald-400'
+                                  : 'bg-slate-900 text-slate-500'
+                            }`}
+                          >
+                            {isCurrent ? 'Active • حالي' : isCompleted ? 'Done ✓' : 'Pending'}
+                          </span>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {/* Temporary Live Link & Mobile Sharing Intents Drawer */}
+              {isShareLiveLinkOpen && sharedLiveLinkUrl && (
+                <div
+                  data-testid="share-live-link-panel"
+                  className="pt-2 border-t border-slate-800/80 bg-indigo-950/30 border border-indigo-500/30 rounded-xl p-3 flex flex-col gap-2"
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-xs font-bold text-indigo-300 flex items-center gap-1.5">
+                      <Share2 className="w-3.5 h-3.5 text-indigo-400" />
+                      رابط التتبع المؤقت للمشاركة (Temporary Live Tracking URL — صالح لمدة ٣٠ دقيقة)
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => setIsShareLiveLinkOpen(false)}
+                      className="text-[11px] text-slate-400 hover:text-white cursor-pointer"
+                    >
+                      إغلاق ✕
+                    </button>
+                  </div>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <input
+                      type="text"
+                      readOnly
+                      aria-label="Temporary Live Share Link"
+                      data-testid="generated-live-link-input"
+                      value={sharedLiveLinkUrl}
+                      className="flex-1 min-w-[220px] px-3 py-1.5 rounded-lg bg-slate-950 border border-indigo-500/40 font-mono text-xs text-indigo-200"
+                    />
+                    <span data-testid="generated-live-link-url" className="sr-only">
+                      {sharedLiveLinkUrl}
+                    </span>
+                    <button
+                      type="button"
+                      data-testid="copy-live-link-btn"
+                      onClick={handleCopyLiveLink}
+                      className="px-3 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold flex items-center gap-1 cursor-pointer transition"
+                    >
+                      {liveLinkCopied ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
+                      <span>{liveLinkCopied ? 'Copied!' : 'Copy Link'}</span>
+                    </button>
+                    <a
+                      href={`https://wa.me/?text=${encodeURIComponent(
+                        `تابع مسار طلبي في مشوار الباجور (${currentTrackedOrder.orderNumber}): ${sharedLiveLinkUrl}`
+                      )}`}
+                      data-testid="share-intent-whatsapp"
+                      className="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold flex items-center gap-1 transition"
+                    >
+                      <span>WhatsApp Share</span>
+                    </a>
+                    <a
+                      href={`sms:?body=${encodeURIComponent(
+                        `تتبع طلبي في مشوار الباجور (${currentTrackedOrder.orderNumber}): ${sharedLiveLinkUrl}`
+                      )}`}
+                      data-testid="share-intent-sms"
+                      className="px-3 py-1.5 rounded-lg bg-sky-600 hover:bg-sky-500 text-white text-xs font-bold flex items-center gap-1 transition"
+                    >
+                      <span>SMS Share</span>
+                    </a>
+                  </div>
+                </div>
+              )}
             </div>
+
+            {/* Order History Section when navigated via 'View History' */}
+            {customerScreen === 'history' && (
+              <div
+                data-testid="order-history-section"
+                className="bg-slate-900 border border-emerald-500/30 rounded-2xl p-4 shadow-xl flex flex-col gap-3"
+              >
+                <div className="flex items-center justify-between border-b border-slate-800 pb-3">
+                  <div className="flex items-center gap-2">
+                    <FileText className="w-4 h-4 text-emerald-400" />
+                    <h2 className="text-sm font-black text-white">
+                      سجل الطلبات والمشاوير وتقييم الكباتن (Order History & Post-Delivery Rating)
+                    </h2>
+                    <span className="text-xs px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 font-bold">
+                      {marketplaceOrders.length} طلبات
+                    </span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setCustomerScreen('tracking')}
+                    className="px-3 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-bold transition cursor-pointer"
+                  >
+                    إغلاق السجل والعودة للتتبع الحي
+                  </button>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                  {marketplaceOrders.map((ord) => {
+                    const currentRating = orderRatings[ord.id] ?? ord.customerRating ?? 0;
+                    const currentFeedback =
+                      orderFeedbackDrafts[ord.id] ?? ord.orderFeedback ?? ord.customerFeedback ?? '';
+                    const isFeedbackSaved = Boolean(orderFeedbackSavedMap[ord.id]);
+                    return (
+                      <div
+                        key={ord.id}
+                        data-testid={`history-order-card-${ord.id}`}
+                        className="p-3.5 rounded-xl bg-slate-950 border border-slate-800 flex flex-col gap-2.5 text-xs"
+                      >
+                        <div className="flex items-center justify-between">
+                          <span className="font-black text-white">
+                            {ord.orderNumber} • {ord.storeName}
+                          </span>
+                          <span className="font-bold text-emerald-400">{ord.totalEgp}.00 ج.م</span>
+                        </div>
+                        <div className="flex items-center justify-between text-slate-400 text-[11px]">
+                          <span>
+                            الكابتن: {ord.assignedCaptainName || 'كابتن مشوار الباجور'} • الوجهة: {ord.deliveryAddress}
+                          </span>
+                          <span className="px-2 py-0.5 rounded bg-slate-800 text-amber-300 font-bold">
+                            {ord.status}
+                          </span>
+                        </div>
+
+                        {/* Post-Delivery 1-5 Star Rating System */}
+                        <div
+                          data-testid="post-delivery-star-rating"
+                          data-order-id={ord.id}
+                          className="pt-2 border-t border-slate-800/80 flex flex-wrap items-center justify-between gap-2"
+                        >
+                          <div className="flex items-center gap-1.5">
+                            <span className="text-[11px] font-bold text-slate-300">
+                              Rate Captain (1-5) • تقييم الكابتن:
+                            </span>
+                            {currentRating > 0 && (
+                              <span
+                                data-testid="selected-captain-rating"
+                                className="text-[11px] font-black text-amber-400 bg-amber-500/10 px-2 py-0.5 rounded-full border border-amber-500/30"
+                              >
+                                {currentRating}/5 ★
+                              </span>
+                            )}
+                          </div>
+                          <div className="flex items-center gap-1" role="group" aria-label={`Rate captain for order ${ord.orderNumber}`}>
+                            {[1, 2, 3, 4, 5].map((starValue) => {
+                              const isFilled = starValue <= currentRating;
+                              return (
+                                <button
+                                  key={starValue}
+                                  type="button"
+                                  data-testid={`rate-star-${starValue}`}
+                                  data-star-value={starValue}
+                                  aria-label={`Rate ${starValue} out of 5 stars`}
+                                  aria-pressed={currentRating === starValue}
+                                  onClick={() => handleRateOrderCaptain(ord.id, starValue)}
+                                  className={`px-2 py-1 rounded-lg border text-[11px] font-bold flex items-center gap-0.5 transition cursor-pointer ${
+                                    isFilled
+                                      ? 'bg-amber-500/20 border-amber-400/60 text-amber-300'
+                                      : 'bg-slate-900 hover:bg-slate-800 border-slate-800 text-slate-400'
+                                  }`}
+                                >
+                                  <Star
+                                    className={`w-3.5 h-3.5 ${
+                                      isFilled ? 'text-amber-400 fill-amber-400' : 'text-slate-500'
+                                    }`}
+                                  />
+                                  <span>{starValue}</span>
+                                </button>
+                              );
+                            })}
+                          </div>
+                        </div>
+
+                        {/* Order Feedback Textarea below Star Rating */}
+                        <form
+                          onSubmit={(e) => handleSaveOrderFeedback(ord.id, currentFeedback, e)}
+                          data-testid="order-feedback-section"
+                          data-order-id={ord.id}
+                          className="pt-2 border-t border-slate-800/80 flex flex-col gap-2"
+                        >
+                          <div className="flex items-center justify-between gap-2">
+                            <label
+                              htmlFor={`order-feedback-textarea-sim-${ord.id}`}
+                              className="text-[11px] font-bold text-slate-300"
+                            >
+                              Order Feedback • تعليق وملاحظات تجربة التوصيل:
+                            </label>
+                            {(isFeedbackSaved || Boolean(ord.orderFeedback || ord.customerFeedback)) && (
+                              <span
+                                data-testid="order-feedback-saved-badge"
+                                className="text-[10px] font-bold text-emerald-400"
+                              >
+                                Feedback Saved ✓ • تم حفظ التعليق
+                              </span>
+                            )}
+                          </div>
+                          <textarea
+                            id={`order-feedback-textarea-sim-${ord.id}`}
+                            name="orderFeedback"
+                            aria-label="Order Feedback"
+                            data-testid="order-feedback-textarea"
+                            data-order-id={ord.id}
+                            rows={2}
+                            value={currentFeedback}
+                            onChange={(e) => handleOrderFeedbackChange(ord.id, e.target.value)}
+                            placeholder="Write your Order Feedback about your delivery experience... • اكتب ملاحظاتك عن تجربة التوصيل..."
+                            className="w-full px-3 py-2 rounded-lg bg-slate-900 border border-slate-700 text-xs text-white focus:outline-none focus:border-emerald-400 resize-y"
+                          />
+                          <div className="flex items-center justify-between gap-2">
+                            <span
+                              data-testid="persisted-order-feedback-display"
+                              className="text-[11px] text-slate-400 truncate"
+                            >
+                              {ord.orderFeedback || ord.customerFeedback
+                                ? `Saved: ${ord.orderFeedback || ord.customerFeedback}`
+                                : 'لم يتم تسجيل تعليق بعد'}
+                            </span>
+                            <button
+                              type="submit"
+                              data-testid="save-order-feedback-btn"
+                              className="px-3 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-[11px] font-bold cursor-pointer transition shrink-0"
+                            >
+                              Save Feedback • حفظ التعليق
+                            </button>
+                          </div>
+                        </form>
+                      </div>
+                    );
+                  })}
+                </div>
+
+                {/* Order History Empty State Component with Subtle Icon & 'Book New Delivery' CTA */}
+                <OrderHistoryEmptyState onBookNewDelivery={handleBookNewDelivery} />
+              </div>
+            )}
 
             {/* Unified Production Mobile App Experience Frame */}
             <MobileAppFrame onOpenOperationsDashboard={() => setWorkspaceMode('admin')} />
@@ -1495,11 +4218,727 @@ export default function App() {
         )}
       </main>
 
+      {/* Call Captain Phone Dialer Prompt Modal */}
+      {isCallCaptainPromptOpen && (
+        <div
+          data-testid="call-captain-dialer-prompt"
+          role="dialog"
+          aria-modal="true"
+          aria-label="Call Captain Phone Dialer Prompt"
+          className="fixed inset-0 bg-black/75 backdrop-blur-xs z-50 flex items-center justify-center p-4 font-['Cairo',sans-serif]"
+        >
+          <div
+            className="bg-slate-900 border border-slate-800 rounded-2xl p-6 max-w-md w-full text-center shadow-2xl"
+            dir="rtl"
+          >
+            <div className="w-12 h-12 rounded-full bg-emerald-500/20 text-emerald-400 flex items-center justify-center mx-auto mb-3 border border-emerald-500/30">
+              <Phone className="w-6 h-6" />
+            </div>
+            <h3 className="text-base font-black text-white mb-1">
+              Call Captain • الاتصال الهاتفي بالكابتن
+            </h3>
+            <p className="text-xs text-slate-300 mb-3">
+              {currentOrderCaptainName} • الطلب ({currentTrackedOrder.orderNumber})
+            </p>
+            <div className="bg-slate-950 border border-slate-800 rounded-xl p-3 mb-4">
+              <span className="text-[11px] text-slate-400 block mb-1">
+                Captain Phone Number • رقم هاتف الكابتن المسجل بالطلب
+              </span>
+              <span
+                data-testid="dialer-prompt-phone-number"
+                className="font-mono text-lg font-black text-emerald-400 tracking-wider block"
+              >
+                {currentOrderCaptainPhone}
+              </span>
+            </div>
+            <div className="flex flex-col sm:flex-row gap-2">
+              <a
+                href={`tel:${currentOrderCaptainPhone}`}
+                data-testid="dialer-call-action-link"
+                onClick={() => setIsCallCaptainPromptOpen(false)}
+                className="flex-1 py-2.5 px-3.5 rounded-xl bg-emerald-700 hover:bg-emerald-600 border border-emerald-500/50 text-white font-bold text-xs flex items-center justify-center gap-1.5 shadow-md transition-all"
+              >
+                <Phone className="w-4 h-4" />
+                <span>Dial {currentOrderCaptainPhone} • فتح الهاتف</span>
+              </a>
+              <button
+                type="button"
+                data-testid="close-call-captain-prompt-btn"
+                onClick={() => setIsCallCaptainPromptOpen(false)}
+                className="py-2.5 px-3.5 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-200 font-bold text-xs transition-all cursor-pointer"
+              >
+                إغلاق • Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Cancel Order Confirmation Dialog */}
+      {isCancelOrderDialogOpen && (
+        <div
+          data-testid="cancel-order-confirm-dialog"
+          role="dialog"
+          aria-modal="true"
+          aria-label="Confirm Order Cancellation"
+          className="fixed inset-0 bg-black/75 backdrop-blur-xs z-50 flex items-center justify-center p-4 font-['Cairo',sans-serif]"
+        >
+          <div
+            className="bg-slate-900 border border-slate-800 rounded-2xl p-6 max-w-md w-full text-center shadow-2xl"
+            dir="rtl"
+          >
+            <div className="w-12 h-12 rounded-full bg-rose-500/20 text-rose-400 flex items-center justify-center mx-auto mb-3 border border-rose-500/30">
+              <AlertTriangle className="w-6 h-6" />
+            </div>
+            <h3 className="text-base font-black text-white mb-2">
+              Confirm Cancel Order • تأكيد إلغاء الطلب ({currentTrackedOrder.orderNumber})
+            </h3>
+            <p className="text-xs text-slate-300 leading-relaxed mb-5">
+              هل أنت متأكد من رغبتك في إلغاء الطلب الحالي؟ سيتم تحديث حالة الطلب فوراً إلى ملغي (cancelled) في متجر وسجل الطلبات.
+            </p>
+            <div className="flex flex-col sm:flex-row gap-2">
+              <button
+                type="button"
+                data-testid="confirm-cancel-order-btn"
+                onClick={handleConfirmCancelOrder}
+                className="flex-1 py-2.5 px-3.5 rounded-xl bg-rose-700 hover:bg-rose-600 border border-rose-500/50 text-white font-bold text-xs transition-all cursor-pointer shadow-md"
+              >
+                Confirm Cancel • تأكيد الإلغاء
+              </button>
+              <button
+                type="button"
+                data-testid="dismiss-cancel-order-btn"
+                onClick={() => setIsCancelOrderDialogOpen(false)}
+                className="flex-1 py-2.5 px-3.5 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-200 font-bold text-xs transition-all cursor-pointer"
+              >
+                Keep Order • تراجع
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Captain Profile Modal */}
+      {isCaptainProfileModalOpen && (
+        <div
+          data-testid="captain-profile-modal"
+          role="dialog"
+          aria-modal="true"
+          aria-label="Captain Profile Details in El Bagour"
+          className="fixed inset-0 bg-black/75 backdrop-blur-xs z-50 flex items-center justify-center p-4 font-['Cairo',sans-serif]"
+        >
+          <div
+            className="bg-slate-900 border border-slate-800 rounded-2xl p-6 max-w-md w-full shadow-2xl"
+            dir="rtl"
+          >
+            <div className="flex items-center justify-between border-b border-slate-800 pb-3 mb-4">
+              <div className="flex items-center gap-2.5">
+                <div className="w-10 h-10 rounded-full bg-emerald-500/20 text-emerald-400 flex items-center justify-center border border-emerald-500/30">
+                  <Bike className="w-5 h-5" />
+                </div>
+                <div className="text-right">
+                  <h3
+                    data-testid="captain-profile-name"
+                    className="text-base font-black text-white"
+                  >
+                    {currentOrderCaptainName}
+                  </h3>
+                  <span className="text-[11px] text-emerald-400 font-bold">
+                    كابتن معتمد • مدينة الباجور (El Bagour Verified Captain)
+                  </span>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsCaptainProfileModalOpen(false)}
+                className="text-slate-400 hover:text-white text-xs font-bold px-3 py-1.5 rounded-xl bg-slate-800 border border-slate-700 cursor-pointer transition-all"
+              >
+                ✕
+              </button>
+            </div>
+
+            <div className="space-y-3 text-xs mb-5">
+              <div className="p-3 rounded-xl bg-slate-950 border border-slate-800 flex items-center justify-between">
+                <span className="text-slate-400 font-bold">
+                  Vehicle Details • بيانات المركبة:
+                </span>
+                <span
+                  data-testid="captain-profile-vehicle"
+                  className="font-black text-white"
+                >
+                  {currentOrderCaptainVehicle}
+                </span>
+              </div>
+
+              <div className="p-3 rounded-xl bg-slate-950 border border-slate-800 flex items-center justify-between">
+                <span className="text-slate-400 font-bold">
+                  Captain Rating • تقييم الكابتن:
+                </span>
+                <span
+                  data-testid="captain-profile-rating"
+                  className="font-black text-amber-400 flex items-center gap-1"
+                >
+                  <Star className="w-3.5 h-3.5 fill-amber-400 text-amber-400" />
+                  <span>{currentOrderCaptainRating.toFixed(1)} / 5.0</span>
+                </span>
+              </div>
+
+              <div className="p-3 rounded-xl bg-slate-950 border border-slate-800 flex items-center justify-between">
+                <span className="text-slate-400 font-bold">
+                  Total Completed Trips in El Bagour • إجمالي مشاوير الباجور:
+                </span>
+                <span
+                  data-testid="captain-profile-completed-trips"
+                  className="font-black text-emerald-400"
+                >
+                  {currentOrderCaptainTotalTripsElBagour} رحلة مكتملة في الباجور (El Bagour)
+                </span>
+              </div>
+            </div>
+
+            <div className="flex gap-2">
+              <button
+                type="button"
+                onClick={() => {
+                  setIsCaptainProfileModalOpen(false);
+                  setIsCallCaptainPromptOpen(true);
+                }}
+                className="flex-1 py-2.5 px-3.5 rounded-xl bg-emerald-700 hover:bg-emerald-600 border border-emerald-500/50 text-white font-bold text-xs flex items-center justify-center gap-1.5 transition-all cursor-pointer shadow-md"
+              >
+                <Phone className="w-3.5 h-3.5" />
+                <span>Call Captain ({currentOrderCaptainPhone})</span>
+              </button>
+              <button
+                type="button"
+                data-testid="close-captain-profile-modal-btn"
+                onClick={() => setIsCaptainProfileModalOpen(false)}
+                className="py-2.5 px-3.5 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-200 font-bold text-xs transition-all cursor-pointer"
+              >
+                إغلاق • Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Persistent Message Captain Chat Modal */}
+      {isCaptainChatModalOpen && (
+        <div
+          data-testid="captain-chat-modal"
+          role="dialog"
+          aria-modal="true"
+          aria-label="Message Captain Chat Modal"
+          className="fixed inset-0 bg-black/75 backdrop-blur-xs z-50 flex items-center justify-center p-4 font-['Cairo',sans-serif]"
+        >
+          <div
+            className="bg-slate-900 border border-slate-800 rounded-2xl p-5 max-w-md w-full shadow-2xl flex flex-col gap-3"
+            dir="rtl"
+          >
+            <div className="flex items-center justify-between border-b border-slate-800 pb-3">
+              <div className="flex items-center gap-2.5">
+                <div className="w-9 h-9 rounded-full bg-emerald-500/20 text-emerald-400 flex items-center justify-center border border-emerald-500/30">
+                  <MessageSquare className="w-5 h-5" />
+                </div>
+                <div className="text-right">
+                  <h3 className="text-sm font-black text-white">
+                    Message Captain • محادثة {currentOrderCaptainName}
+                  </h3>
+                  <span className="text-[11px] text-emerald-400 font-bold">
+                    الطلب ({currentTrackedOrder.orderNumber}) • متصل الآن في الباجور
+                  </span>
+                </div>
+              </div>
+              <button
+                type="button"
+                data-testid="close-captain-chat-modal-btn"
+                onClick={() => setIsCaptainChatModalOpen(false)}
+                className="text-slate-400 hover:text-white text-xs font-bold px-3 py-1.5 rounded-xl bg-slate-800 border border-slate-700 cursor-pointer transition-all"
+              >
+                إغلاق ✕
+              </button>
+            </div>
+
+            {/* Chat Messages History */}
+            <div
+              data-testid="captain-chat-messages-list"
+              className="bg-slate-950 border border-slate-800 rounded-xl p-3 max-h-60 overflow-y-auto flex flex-col gap-2 text-xs"
+            >
+              {captainChatMessages.map((msg) => (
+                <div
+                  key={msg.id}
+                  data-testid={`chat-message-${msg.sender}`}
+                  className={`flex flex-col max-w-[85%] rounded-xl px-3 py-2 ${
+                    msg.sender === 'customer'
+                      ? 'self-start bg-emerald-700/25 border border-emerald-500/40 text-emerald-100'
+                      : 'self-end bg-slate-900 border border-slate-700 text-slate-200'
+                  }`}
+                >
+                  <div className="flex items-center justify-between gap-2 mb-0.5">
+                    <span className="text-[10px] font-bold text-emerald-400">
+                      {msg.sender === 'customer' ? 'أنت (Customer)' : currentOrderCaptainName}
+                    </span>
+                    <span className="text-[10px] text-slate-400 font-mono">{msg.time}</span>
+                  </div>
+                  <p className="text-xs font-medium leading-relaxed">{msg.text}</p>
+                </div>
+              ))}
+            </div>
+
+            {/* Predefined Quick Messages */}
+            <div
+              data-testid="captain-chat-quick-messages"
+              className="flex flex-col gap-1.5"
+            >
+              <span className="text-[11px] font-bold text-slate-400">
+                رسائل سريعة جاهزة (Quick Messages):
+              </span>
+              <div className="flex flex-wrap gap-1.5">
+                {PREDEFINED_QUICK_MESSAGES.map((quickText, idx) => (
+                  <button
+                    key={quickText}
+                    type="button"
+                    data-testid={`quick-message-btn-${idx}`}
+                    onClick={() => handleSendCaptainChatMessage(quickText)}
+                    className="px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-emerald-700/30 border border-slate-700 hover:border-emerald-500/50 text-xs font-bold text-emerald-300 transition-all cursor-pointer"
+                  >
+                    {quickText}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Custom Chat Message Input Form */}
+            <form
+              onSubmit={(e) => {
+                e.preventDefault();
+                handleSendCaptainChatMessage(captainChatInput);
+              }}
+              className="flex items-center gap-2 pt-1 border-t border-slate-800"
+            >
+              <input
+                type="text"
+                data-testid="captain-chat-input"
+                aria-label="Message to Captain"
+                value={captainChatInput}
+                onChange={(e) => setCaptainChatInput(e.target.value)}
+                placeholder="اكتب رسالة للكابتن..."
+                className="flex-1 px-3 py-2 rounded-xl bg-slate-950 border border-slate-700 text-xs text-white focus:outline-none focus:border-emerald-400"
+              />
+              <button
+                type="submit"
+                data-testid="send-chat-message-btn"
+                className="px-3.5 py-2 rounded-xl bg-emerald-700 hover:bg-emerald-600 border border-emerald-500/50 text-white text-xs font-bold flex items-center gap-1 cursor-pointer transition-all shadow-sm"
+              >
+                <Send className="w-3.5 h-3.5" />
+                <span>إرسال • Send</span>
+              </button>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* SOS Emergency Assistance Modal */}
+      {isSosModalOpen && (
+        <div
+          data-testid="sos-emergency-modal"
+          role="dialog"
+          aria-modal="true"
+          aria-label="SOS Emergency Assistance in El Bagour"
+          className="fixed inset-0 bg-black/80 backdrop-blur-xs z-50 flex items-center justify-center p-4 font-['Cairo',sans-serif]"
+        >
+          <div
+            className="bg-slate-900 border border-slate-800 rounded-2xl p-6 max-w-md w-full shadow-2xl flex flex-col gap-4"
+            dir="rtl"
+          >
+            <div className="flex items-center justify-between border-b border-slate-800 pb-3">
+              <div className="flex items-center gap-2.5">
+                <div className="w-10 h-10 rounded-full bg-rose-500/20 text-rose-400 flex items-center justify-center border border-rose-500/30">
+                  <AlertTriangle className="w-5 h-5" />
+                </div>
+                <div className="text-right">
+                  <h3 className="text-base font-black text-white">
+                    SOS Emergency • مساعدة الطوارئ والأمان (الباجور)
+                  </h3>
+                  <span className="text-[11px] text-rose-300 font-bold">
+                    الطلب ({currentTrackedOrder.orderNumber}) • موقعك الحي في الباجور جاهز للمشاركة
+                  </span>
+                </div>
+              </div>
+              <button
+                type="button"
+                data-testid="close-sos-modal-btn"
+                onClick={() => setIsSosModalOpen(false)}
+                className="text-slate-400 hover:text-white text-xs font-bold px-3 py-1.5 rounded-xl bg-slate-800 border border-slate-700 cursor-pointer transition-all"
+              >
+                إغلاق ✕
+              </button>
+            </div>
+
+            <div className="space-y-2.5 text-xs">
+              <div className="p-3 rounded-xl bg-slate-950 border border-slate-800 flex flex-col gap-1">
+                <span className="text-slate-400 font-bold">
+                  Pre-configured Emergency Contact in El Bagour • جهة اتصال الطوارئ المسجلة:
+                </span>
+                <span
+                  data-testid="sos-emergency-contact-name"
+                  className="font-black text-white"
+                >
+                  {elBagourEmergencyContact.name}
+                </span>
+                <span
+                  data-testid="sos-emergency-contact-phone"
+                  className="font-mono text-emerald-400 font-bold"
+                >
+                  {elBagourEmergencyContact.phone}
+                </span>
+              </div>
+
+              <div className="p-3 rounded-xl bg-slate-950 border border-slate-800 flex flex-col gap-1">
+                <span className="text-slate-400 font-bold">
+                  Live Route & Coordinates • الموقع الحالي وخط السير:
+                </span>
+                <span
+                  data-testid="sos-live-location-details"
+                  className="font-bold text-amber-300"
+                >
+                  {currentOrderPickup} ← {currentOrderDropoff} ({elBagourEmergencyContact.coordinates})
+                </span>
+              </div>
+            </div>
+
+            {sosLocationShared && (
+              <div
+                data-testid="sos-location-shared-confirmation"
+                className="p-3 rounded-xl bg-emerald-950/50 border border-emerald-500/40 text-xs text-emerald-200 font-bold flex items-center gap-2"
+              >
+                <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+                <span>
+                  Live location shared with {elBagourEmergencyContact.name} ({elBagourEmergencyContact.phone}) in El Bagour! • تم إرسال موقعك الحي وبيانات الكابتن لجهة اتصال الطوارئ بنجاح.
+                </span>
+              </div>
+            )}
+
+            {sosTriggeredService && (
+              <div
+                data-testid="sos-emergency-call-confirmation"
+                className="p-3 rounded-xl bg-rose-950/60 border border-rose-500/40 text-xs text-rose-200 font-bold flex items-center gap-2"
+              >
+                <Phone className="w-4 h-4 text-rose-400 shrink-0" />
+                <span>
+                  Connecting to {sosTriggeredService}... • جاري الاتصال بطوارئ الباجور ({sosTriggeredService})
+                </span>
+              </div>
+            )}
+
+            <div className="flex flex-col gap-2">
+              <button
+                type="button"
+                data-testid="sos-share-live-location-btn"
+                onClick={() => setSosLocationShared(true)}
+                className="w-full py-2.5 px-3.5 rounded-xl bg-amber-600 hover:bg-amber-500 border border-amber-500/50 text-white font-bold text-xs flex items-center justify-center gap-2 shadow-md transition-all cursor-pointer"
+              >
+                <Share2 className="w-4 h-4" />
+                <span>
+                  Share Live Location with Emergency Contact ({elBagourEmergencyContact.phone}) • مشاركة الموقع الحي
+                </span>
+              </button>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                <a
+                  href="tel:122"
+                  data-testid="sos-call-emergency-services-btn"
+                  onClick={() => setSosTriggeredService('النجدة المصرية 122 (Local Emergency Police)')}
+                  className="py-2.5 px-3.5 rounded-xl bg-rose-700 hover:bg-rose-600 border border-rose-500/50 text-white font-bold text-xs flex items-center justify-center gap-1.5 shadow-md transition-all text-center"
+                >
+                  <Phone className="w-3.5 h-3.5" />
+                  <span>Call Local Emergency Services (122 • النجدة)</span>
+                </a>
+                <a
+                  href="tel:123"
+                  data-testid="sos-call-ambulance-btn"
+                  onClick={() => setSosTriggeredService('إسعاف الباجور 123 (El Bagour Ambulance)')}
+                  className="py-2.5 px-3.5 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-700 text-white font-bold text-xs flex items-center justify-center gap-1.5 shadow-sm transition-all text-center"
+                >
+                  <Phone className="w-3.5 h-3.5 text-emerald-400" />
+                  <span>Call Ambulance (123 • إسعاف الباجور)</span>
+                </a>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* View Order Summary Modal */}
+      {isOrderSummaryModalOpen && (
+        <div
+          data-testid="order-summary-modal"
+          role="dialog"
+          aria-modal="true"
+          aria-label="Complete Order Summary Modal"
+          className="fixed inset-0 bg-black/75 backdrop-blur-xs z-50 flex items-center justify-center p-4 font-['Cairo',sans-serif]"
+        >
+          <div
+            className="bg-slate-900 border border-slate-800 rounded-2xl p-6 max-w-md w-full shadow-2xl flex flex-col gap-4"
+            dir="rtl"
+          >
+            <div className="flex items-center justify-between border-b border-slate-800 pb-3">
+              <div className="flex items-center gap-2.5">
+                <div className="w-10 h-10 rounded-full bg-emerald-500/20 text-emerald-400 flex items-center justify-center border border-emerald-500/30">
+                  <Package className="w-5 h-5" />
+                </div>
+                <div className="text-right">
+                  <h3 className="text-base font-black text-white">
+                    Order Summary • ملخص تفاصيل الطلب الكامل
+                  </h3>
+                  <span
+                    data-testid="summary-order-number"
+                    className="text-[11px] text-emerald-400 font-bold"
+                  >
+                    رقم الطلب: {currentTrackedOrder.orderNumber} • الحالة: {currentOrderStatus}
+                  </span>
+                </div>
+              </div>
+              <button
+                type="button"
+                data-testid="close-order-summary-modal-btn"
+                onClick={() => setIsOrderSummaryModalOpen(false)}
+                className="text-slate-400 hover:text-white text-xs font-bold px-3 py-1.5 rounded-xl bg-slate-800 border border-slate-700 cursor-pointer transition-all"
+              >
+                إغلاق ✕
+              </button>
+            </div>
+
+            <div className="space-y-2.5 text-xs">
+              <div className="p-3 rounded-xl bg-slate-950 border border-slate-800 flex flex-col gap-1.5">
+                <div className="flex items-center justify-between">
+                  <span className="text-slate-400 font-bold">Pickup Address • عنوان الاستلام:</span>
+                  <span
+                    data-testid="summary-pickup-address"
+                    className="font-black text-emerald-300"
+                  >
+                    {currentOrderPickup}
+                  </span>
+                </div>
+                <div className="flex items-center justify-between pt-1.5 border-t border-slate-800/80">
+                  <span className="text-slate-400 font-bold">Dropoff Address • عنوان التوصيل:</span>
+                  <span
+                    data-testid="summary-dropoff-address"
+                    className="font-black text-amber-300"
+                  >
+                    {currentOrderDropoff}
+                  </span>
+                </div>
+              </div>
+
+              <div className="p-3 rounded-xl bg-slate-950 border border-slate-800 flex flex-col gap-1">
+                <span className="text-slate-400 font-bold">
+                  Item Description • وصف الشحنة / الطلب:
+                </span>
+                <span
+                  data-testid="summary-item-description"
+                  className="font-bold text-white"
+                >
+                  {currentOrderItemDescription}
+                </span>
+              </div>
+
+              <div
+                data-testid="summary-customer-details"
+                className="p-3 rounded-xl bg-slate-950 border border-slate-800 flex flex-col gap-1.5"
+              >
+                <span className="text-slate-400 font-bold">
+                  Customer Details • بيانات العميل:
+                </span>
+                <div className="flex items-center justify-between">
+                  <span className="text-slate-400">الاسم (Customer Name):</span>
+                  <span
+                    data-testid="summary-customer-name"
+                    className="font-black text-white"
+                  >
+                    {currentOrderCustomerName}
+                  </span>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span className="text-slate-400">رقم الهاتف (Customer Phone):</span>
+                  <span
+                    data-testid="summary-customer-phone"
+                    className="font-mono font-bold text-emerald-300"
+                  >
+                    {currentOrderCustomerPhone}
+                  </span>
+                </div>
+              </div>
+
+              <div className="p-3 rounded-xl bg-slate-950 border border-slate-800 flex items-center justify-between">
+                <div className="flex flex-col">
+                  <span className="text-slate-400 font-bold">الكابتن وطريقة الدفع:</span>
+                  <span className="text-white font-bold">
+                    {currentOrderCaptainName} ({currentOrderPaymentMethod})
+                  </span>
+                </div>
+                <span
+                  data-testid="summary-total-fare"
+                  className="font-mono text-sm font-black text-emerald-400"
+                >
+                  {fareBreakdownTotalEgp.toFixed(2)} EGP
+                </span>
+              </div>
+            </div>
+
+            <button
+              type="button"
+              onClick={() => setIsOrderSummaryModalOpen(false)}
+              className="w-full py-2.5 px-3.5 rounded-xl bg-emerald-700 hover:bg-emerald-600 border border-emerald-500/50 text-white font-bold text-xs transition-all cursor-pointer shadow-md"
+            >
+              حسناً • Close Summary
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Full-Screen Map View Modal */}
+      {isFullScreenMapOpen && (
+        <div
+          data-testid="fullscreen-map-modal"
+          role="dialog"
+          aria-modal="true"
+          aria-label="Full-Screen El Bagour Live Route Map"
+          className="fixed inset-0 bg-slate-950/90 backdrop-blur-sm z-50 flex items-center justify-center p-4 font-['Cairo',sans-serif] animate-m3-slide-in"
+        >
+          <div
+            className="bg-slate-900 border border-slate-800 rounded-2xl p-5 max-w-4xl w-full shadow-2xl flex flex-col gap-4 font-['Cairo',sans-serif]"
+            dir="rtl"
+          >
+            <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-800 pb-3">
+              <div className="flex items-center gap-2.5">
+                <div className="w-10 h-10 rounded-xl bg-slate-800 border border-slate-700 text-amber-400 flex items-center justify-center">
+                  <MapPin className="w-5 h-5" />
+                </div>
+                <div className="text-right">
+                  <h3 className="text-base font-black text-white">
+                    Full-Screen Map View • خريطة التتبع المباشر بملء الشاشة (الباجور)
+                  </h3>
+                  <span className="text-xs text-slate-400 font-bold">
+                    الطلب ({currentTrackedOrder.orderNumber}) • الكابتن: {currentOrderCaptainName}
+                  </span>
+                </div>
+              </div>
+              <button
+                type="button"
+                data-testid="close-fullscreen-map-btn"
+                onClick={() => setIsFullScreenMapOpen(false)}
+                className="min-h-[44px] px-4 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-100 hover:text-amber-300 text-xs font-bold font-['Cairo',sans-serif] flex items-center gap-2 cursor-pointer transition-all"
+              >
+                <span>Thumbnail View • تصغير وإغلاق الخريطة ✕</span>
+              </button>
+            </div>
+
+            <div className="relative w-full h-72 sm:h-96 rounded-2xl overflow-hidden border border-slate-800 bg-slate-950">
+              <img
+                src={elBagourStaticMapSvgUri}
+                alt={`Full-Screen El Bagour Route Map from ${currentOrderPickup} to ${currentOrderDropoff}`}
+                data-testid="fullscreen-map-img"
+                className="w-full h-full object-cover"
+              />
+              <svg
+                viewBox="0 0 280 96"
+                className="absolute inset-0 w-full h-full pointer-events-none"
+                aria-label="Full-Screen Animated Route Path Polyline"
+              >
+                <polyline
+                  points={elBagourRoutePolylinePoints}
+                  fill="none"
+                  stroke="#f59e0b"
+                  strokeOpacity="0.35"
+                  strokeWidth="5"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                />
+                <polyline
+                  points={elBagourRoutePolylinePoints}
+                  fill="none"
+                  stroke="#f59e0b"
+                  strokeWidth="3"
+                  strokeDasharray="8 6"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  className="animate-pulse"
+                >
+                  <animate
+                    attributeName="stroke-dashoffset"
+                    from="28"
+                    to="0"
+                    dur="1.2s"
+                    repeatCount="indefinite"
+                  />
+                </polyline>
+                <circle cx="38" cy="68" r="5" fill="#f59e0b" />
+                <circle cx="242" cy="28" r="5" fill="#fbbf24" />
+                <circle
+                  r="4"
+                  fill="#f59e0b"
+                  stroke="#ffffff"
+                  strokeWidth="1.5"
+                >
+                  <animateMotion
+                    path="M38,68 L96,46 L168,54 L242,28"
+                    dur="3.5s"
+                    repeatCount="indefinite"
+                  />
+                </circle>
+              </svg>
+              <span className="absolute top-3 right-3 z-10 px-3 py-1 rounded-xl bg-slate-950/90 text-xs font-bold font-['Cairo',sans-serif] text-amber-400 border border-amber-500/40">
+                El Bagour Live GPS • مركز الباجور - المنوفية
+              </span>
+              <span className="absolute bottom-3 left-3 z-10 px-3 py-1 rounded-xl bg-slate-950/90 border border-slate-700 text-xs font-bold font-['Cairo',sans-serif] text-amber-300 flex items-center gap-1.5 shadow-md">
+                <Clock className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+                <span>
+                  ~{currentOrderDurationMinutes} min ({currentOrderDurationMinutes} د) • {currentOrderRouteDistanceKm.toFixed(1)} km
+                </span>
+              </span>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-xs">
+              <div className="p-3.5 rounded-xl bg-slate-950 border border-slate-800 flex items-center justify-between gap-2">
+                <div className="flex items-center gap-2 min-w-0">
+                  <MapPin className="w-4 h-4 text-amber-400 shrink-0" />
+                  <span className="text-slate-400 font-bold shrink-0">Pickup (الانطلاق):</span>
+                  <span className="text-white font-bold truncate">{currentOrderPickup}</span>
+                </div>
+                <button
+                  type="button"
+                  onClick={handleCopyPickupAddress}
+                  className="px-2.5 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-200 text-xs font-bold flex items-center gap-1 cursor-pointer"
+                >
+                  {pickupAddressCopied ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5 text-amber-400" />}
+                  <span>نسخ</span>
+                </button>
+              </div>
+              <div className="p-3.5 rounded-xl bg-slate-950 border border-slate-800 flex items-center justify-between gap-2">
+                <div className="flex items-center gap-2 min-w-0">
+                  <Navigation className="w-4 h-4 text-amber-400 shrink-0" />
+                  <span className="text-slate-400 font-bold shrink-0">Dropoff (الوصول):</span>
+                  <span className="text-white font-bold truncate">{currentOrderDropoff}</span>
+                </div>
+                <button
+                  type="button"
+                  onClick={handleCopyDropoffAddress}
+                  className="px-2.5 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-200 text-xs font-bold flex items-center gap-1 cursor-pointer"
+                >
+                  {dropoffAddressCopied ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5 text-amber-400" />}
+                  <span>نسخ</span>
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Passenger Regulatory Notice Modal */}
       {showPassengerModal && (
-        <div className="fixed inset-0 bg-black/70 backdrop-blur-xs z-50 flex items-center justify-center p-4">
-          <div className="bg-slate-900 border border-red-500/40 rounded-2xl p-6 max-w-md w-full text-center shadow-2xl" dir="rtl">
-            <div className="w-12 h-12 rounded-full bg-red-500/20 text-red-400 flex items-center justify-center mx-auto mb-3">
+        <div className="fixed inset-0 bg-black/70 backdrop-blur-xs z-50 flex items-center justify-center p-4 font-['Cairo',sans-serif]">
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 max-w-md w-full text-center shadow-2xl" dir="rtl">
+            <div className="w-12 h-12 rounded-full bg-rose-500/20 text-rose-400 flex items-center justify-center mx-auto mb-3 border border-rose-500/30">
               <AlertTriangle className="w-6 h-6" />
             </div>
             <h3 className="text-base font-bold text-white mb-2">خدمة نقل الركاب معلقة نظامياً</h3>
@@ -1508,7 +4947,7 @@ export default function App() {
             </p>
             <button
               onClick={() => setShowPassengerModal(false)}
-              className="w-full py-2.5 rounded-xl bg-amber-500 text-slate-950 font-bold text-xs"
+              className="w-full py-2.5 px-3.5 rounded-xl bg-amber-600 hover:bg-amber-500 border border-amber-500/50 text-white font-bold text-xs transition-all cursor-pointer"
             >
               فهمت ذلك - العودة للخدمات المتاحة
             </button>
