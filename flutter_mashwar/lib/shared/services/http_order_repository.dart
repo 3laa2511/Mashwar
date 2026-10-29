@@ -69,7 +69,15 @@ class HttpOrderRepository implements IOrderRepository {
     String? quoteId,
     String? quoteSignature,
     String? quoteExpiresAt,
+    int? totalFarePiasters,
   }) async {
+    final token = authTokenProvider?.call();
+    if (token == null || token.trim().isEmpty) {
+      throw StateError('يجب تسجيل الدخول قبل إرسال الطلب.');
+    }
+    if (totalFarePiasters == null || totalFarePiasters < 0) {
+      throw ArgumentError('قيمة التسعيرة الدقيقة بالقروش مطلوبة لإنشاء الطلب.');
+    }
     if (quoteId == null || quoteId.trim().isEmpty ||
         quoteSignature == null || quoteSignature.trim().isEmpty ||
         quoteExpiresAt == null || quoteExpiresAt.trim().isEmpty) {
@@ -87,7 +95,7 @@ class HttpOrderRepository implements IOrderRepository {
       'quoteExpiresAt': quoteExpiresAt,
       'itemDescription': newOrder.itemDescription,
       'specialInstructions': newOrder.notes,
-      'totalFarePiasters': (newOrder.estimatedFareEGP * 100).round(),
+      'totalFarePiasters': totalFarePiasters,
       'pickup': {
         'landmarkName': newOrder.pickupAddress,
         'detailedAddress': newOrder.pickupAddress,
@@ -178,6 +186,9 @@ class HttpOrderRepository implements IOrderRepository {
   Future<FareQuoteModel> getFareQuote({
     required double distanceKm,
     bool isRuralOrVillage = false,
+    String serviceTypeId = 'package',
+    String? cityId,
+    String? zoneId,
   }) async {
     final response = await client.post(
       Uri.parse('$baseUrl/quotes'),
@@ -186,9 +197,11 @@ class HttpOrderRepository implements IOrderRepository {
         'Accept': 'application/json',
       },
       body: jsonEncode({
-        'serviceTypeId': 'package',
+        'serviceTypeId': serviceTypeId,
         'distanceKm': distanceKm,
         'isRuralOrVillage': isRuralOrVillage,
+        if (cityId != null) 'cityId': cityId,
+        if (zoneId != null) 'zoneId': zoneId,
       }),
     );
 
@@ -202,6 +215,7 @@ class HttpOrderRepository implements IOrderRepository {
         ruralOrUnpavedSurcharge: (data['ruralSurchargePiasters'] as num) / 100.0,
         platformFee: (data['platformFeePiasters'] as num) / 100.0,
         totalFare: (data['totalFarePiasters'] as num) / 100.0,
+        totalFarePiasters: (data['totalFarePiasters'] as num).toInt(),
         estimatedDurationMinutes: data['estimatedDurationMinutes'] ?? '15-20',
         currency: data['currency'] == 'EGP' ? 'ج.م' : (data['currency'] ?? 'ج.م'),
         quoteId: data['quoteId']?.toString(),
