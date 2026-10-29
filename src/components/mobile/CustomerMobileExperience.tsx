@@ -40,9 +40,18 @@ import {
   DollarSign,
   Copy,
   Check,
-  Activity
+  Activity,
+  Maximize2,
+  Minimize2,
+  Layers,
+  Sun,
+  Moon,
+  Volume2,
+  VolumeX,
+  RotateCcw
 } from 'lucide-react';
 import { EgyptianMapCanvas } from './EgyptianMapCanvas';
+import { PinchZoomPan } from '../common/PinchZoomPan';
 import {
   useMarketplace,
   StoreItem,
@@ -51,6 +60,50 @@ import {
   EL_BAGOUR_LANDMARKS_LIST,
   formatHumanReadableAcceptedTimestamp
 } from '../../store/marketplaceStore';
+
+// Subtle Web Audio API notification chime for mobile simulator order status updates
+function playMobileOrderStatusSound(): boolean {
+  try {
+    if (typeof window === 'undefined') return false;
+    const AudioCtx =
+      window.AudioContext ||
+      (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+    if (!AudioCtx) return false;
+    const ctx = new AudioCtx();
+    const now = ctx.currentTime;
+
+    const osc1 = ctx.createOscillator();
+    const gain1 = ctx.createGain();
+    osc1.type = 'sine';
+    osc1.frequency.setValueAtTime(587.33, now); // D5
+    gain1.gain.setValueAtTime(0.001, now);
+    gain1.gain.exponentialRampToValueAtTime(0.09, now + 0.02);
+    gain1.gain.exponentialRampToValueAtTime(0.0001, now + 0.22);
+    osc1.connect(gain1);
+    gain1.connect(ctx.destination);
+    osc1.start(now);
+    osc1.stop(now + 0.23);
+
+    const osc2 = ctx.createOscillator();
+    const gain2 = ctx.createGain();
+    osc2.type = 'triangle';
+    osc2.frequency.setValueAtTime(880, now + 0.11); // A5
+    gain2.gain.setValueAtTime(0.001, now + 0.11);
+    gain2.gain.exponentialRampToValueAtTime(0.11, now + 0.14);
+    gain2.gain.exponentialRampToValueAtTime(0.0001, now + 0.42);
+    osc2.connect(gain2);
+    gain2.connect(ctx.destination);
+    osc2.start(now + 0.11);
+    osc2.stop(now + 0.44);
+
+    window.setTimeout(() => {
+      ctx.close().catch(() => {});
+    }, 600);
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 interface CustomerMobileExperienceProps {
   onSwitchToCaptain?: () => void;
@@ -93,6 +146,7 @@ export const CustomerMobileExperience: React.FC<CustomerMobileExperienceProps> =
     submitNewOrder,
     submitRideOrPackageOrder,
     simulateInstantCaptainAccept,
+    captainUpdateStep,
     customerCancelOrder,
     rateOrderCaptain,
     updateOrderNotes,
@@ -210,19 +264,99 @@ export const CustomerMobileExperience: React.FC<CustomerMobileExperienceProps> =
     mobileEtaSeconds % 60
   ).padStart(2, '0')}`;
 
-  // Manual Refresh with visual progress bar feedback inside mobile app
+  // Manual Refresh with visual progress bar & skeleton loading inside mobile app
   const [isRefreshingMobile, setIsRefreshingMobile] = useState(false);
   const [mobileRefreshProgress, setMobileRefreshProgress] = useState(0);
   const [mobileRefreshDone, setMobileRefreshDone] = useState(false);
 
+  // Interactive Map States inside Mobile Simulator (Dark/Light, Satellite/Terrain, Zoom, Fullscreen, Copy Address)
+  const [isMobileMapDarkMode, setIsMobileMapDarkMode] = useState<boolean>(false);
+  const [mobileMapLayerStyle, setMobileMapLayerStyle] = useState<'route' | 'satellite'>('route');
+  const [mobileMapZoomScale, setMobileMapZoomScale] = useState<number>(1);
+  const [isMobileFullScreenMap, setIsMobileFullScreenMap] = useState<boolean>(false);
+  const [mobileCopiedAddressField, setMobileCopiedAddressField] = useState<'pickup' | 'dropoff' | null>(null);
+
+  // Haptic Feedback Simulation inside Mobile Simulator
+  const [isMobileHapticShaking, setIsMobileHapticShaking] = useState<boolean>(false);
+  const triggerMobileHapticFeedback = () => {
+    try {
+      if (typeof navigator !== 'undefined' && typeof navigator.vibrate === 'function') {
+        navigator.vibrate(12);
+      }
+    } catch {
+      // Ignore vibration API restrictions
+    }
+    setIsMobileHapticShaking(false);
+    window.requestAnimationFrame(() => {
+      setIsMobileHapticShaking(true);
+    });
+  };
+
+  useEffect(() => {
+    if (!isMobileHapticShaking) return;
+    const t = window.setTimeout(() => setIsMobileHapticShaking(false), 320);
+    return () => window.clearTimeout(t);
+  }, [isMobileHapticShaking]);
+
+  // Subtle Sound Notification Cue + Slide-In Entrance Animation on Status Updates inside Mobile App
+  const [isMobileSoundEnabled, setIsMobileSoundEnabled] = useState<boolean>(true);
+  const [mobileAudioCueText, setMobileAudioCueText] = useState<string | null>(null);
+  const [isMobileStatusSlideIn, setIsMobileStatusSlideIn] = useState<boolean>(false);
+
+  const handleCopyMobileAddress = (type: 'pickup' | 'dropoff', text: string) => {
+    triggerMobileHapticFeedback();
+    if (typeof navigator !== 'undefined' && navigator.clipboard?.writeText) {
+      navigator.clipboard.writeText(text).catch(() => {});
+    }
+    setMobileCopiedAddressField(type);
+    window.setTimeout(() => {
+      setMobileCopiedAddressField((prev) => (prev === type ? null : prev));
+    }, 2000);
+  };
+
+  const handleMobileZoomIn = () => {
+    triggerMobileHapticFeedback();
+    setMobileMapZoomScale((prev) => Math.min(3, Number((prev + 0.4).toFixed(2))));
+  };
+
+  const handleMobileZoomOut = () => {
+    triggerMobileHapticFeedback();
+    setMobileMapZoomScale((prev) => Math.max(1, Number((prev - 0.4).toFixed(2))));
+  };
+
+  const handleMobileZoomReset = () => {
+    triggerMobileHapticFeedback();
+    setMobileMapZoomScale(1);
+  };
+
+  // Advance Active Order Status directly inside Mobile Simulator to test timeline, pin pulse & sound
+  const handleAdvanceMobileOrderStatus = () => {
+    if (!activeCustomerOrder) return;
+    triggerMobileHapticFeedback();
+    const st = activeCustomerOrder.status;
+    if (st === 'created' || st === 'searching_captain' || st === 'accepted_by_store' || st === 'preparing' || st === 'ready_for_pickup') {
+      simulateInstantCaptainAccept(activeCustomerOrder.id);
+    } else if (st === 'captain_assigned') {
+      captainUpdateStep(activeCustomerOrder.id, 'at_pickup');
+    } else if (st === 'at_pickup') {
+      captainUpdateStep(activeCustomerOrder.id, 'picked_up');
+    } else if (st === 'picked_up') {
+      captainUpdateStep(activeCustomerOrder.id, 'in_transit');
+    } else if (st === 'in_transit') {
+      captainUpdateStep(activeCustomerOrder.id, 'delivered');
+    }
+  };
+
   const handleMobileManualRefresh = async () => {
     if (isRefreshingMobile || !activeCustomerOrder) return;
+    triggerMobileHapticFeedback();
     setIsRefreshingMobile(true);
     setMobileRefreshDone(false);
     setMobileRefreshProgress(30);
-    await new Promise((r) => setTimeout(r, 120));
+    await new Promise((r) => setTimeout(r, 220));
     setMobileRefreshProgress(75);
     await refreshOrderStatus(activeCustomerOrder.id);
+    await new Promise((r) => setTimeout(r, 180));
     setMobileRefreshProgress(100);
     setIsRefreshingMobile(false);
     setMobileRefreshDone(true);
@@ -233,7 +367,46 @@ export const CustomerMobileExperience: React.FC<CustomerMobileExperienceProps> =
     }, 1800);
   };
 
-  // Subtle Pulse Animation on Status Timeline whenever order status changes
+  // Pull-to-Refresh Gesture State & Handlers inside Mobile Tracking Sheet
+  const MOBILE_PULL_THRESHOLD = 52;
+  const [mobilePullDistance, setMobilePullDistance] = useState<number>(0);
+  const [isMobilePulling, setIsMobilePulling] = useState<boolean>(false);
+  const mobilePullStartYRef = useRef<number | null>(null);
+  const trackingSheetScrollRef = useRef<HTMLDivElement | null>(null);
+
+  const handleMobilePullTouchStart = (e: React.TouchEvent<HTMLDivElement>) => {
+    if (isRefreshingMobile) return;
+    const scrollTop = trackingSheetScrollRef.current?.scrollTop ?? 0;
+    if (scrollTop > 6) return;
+    if (e.touches.length === 1) {
+      mobilePullStartYRef.current = e.touches[0].clientY;
+      setIsMobilePulling(true);
+    }
+  };
+
+  const handleMobilePullTouchMove = (e: React.TouchEvent<HTMLDivElement>) => {
+    if (!isMobilePulling || mobilePullStartYRef.current === null || isRefreshingMobile) return;
+    const deltaY = e.touches[0].clientY - mobilePullStartYRef.current;
+    if (deltaY > 0) {
+      const damped = Math.min(88, Math.round(deltaY * 0.55));
+      setMobilePullDistance(damped);
+    } else {
+      setMobilePullDistance(0);
+    }
+  };
+
+  const handleMobilePullEnd = () => {
+    if (!isMobilePulling) return;
+    const shouldRefresh = mobilePullDistance >= MOBILE_PULL_THRESHOLD;
+    mobilePullStartYRef.current = null;
+    setIsMobilePulling(false);
+    setMobilePullDistance(0);
+    if (shouldRefresh && !isRefreshingMobile) {
+      handleMobileManualRefresh();
+    }
+  };
+
+  // Subtle Pulse, Slide-In & Sound Notification on Status Timeline whenever order status changes
   const [isTimelinePulsingMobile, setIsTimelinePulsingMobile] = useState(false);
   const prevMobileStatusRef = useRef<string | undefined>(activeCustomerOrder?.status);
 
@@ -244,15 +417,35 @@ export const CustomerMobileExperience: React.FC<CustomerMobileExperienceProps> =
       prevMobileStatusRef.current !== activeCustomerOrder.status
     ) {
       setIsTimelinePulsingMobile(true);
+      setIsMobileStatusSlideIn(true);
+      if (isMobileSoundEnabled) {
+        playMobileOrderStatusSound();
+        setMobileAudioCueText(`🔔 تنبيه صوتي: تقدمت حالة الطلب إلى (${activeCustomerOrder.status})`);
+      }
     }
     prevMobileStatusRef.current = activeCustomerOrder?.status;
-  }, [activeCustomerOrder?.status]);
+  }, [activeCustomerOrder?.status, isMobileSoundEnabled]);
 
   useEffect(() => {
     if (!isTimelinePulsingMobile) return;
     const t = window.setTimeout(() => setIsTimelinePulsingMobile(false), 2200);
     return () => window.clearTimeout(t);
   }, [isTimelinePulsingMobile]);
+
+  useEffect(() => {
+    if (!isMobileStatusSlideIn) return;
+    const t = window.setTimeout(() => setIsMobileStatusSlideIn(false), 550);
+    return () => window.clearTimeout(t);
+  }, [isMobileStatusSlideIn]);
+
+  useEffect(() => {
+    if (!mobileAudioCueText) return;
+    const t = window.setTimeout(() => setMobileAudioCueText(null), 3200);
+    return () => window.clearTimeout(t);
+  }, [mobileAudioCueText]);
+
+  // Order History Empty State preview toggle inside mobile app
+  const [showMobileEmptyHistoryPreview, setShowMobileEmptyHistoryPreview] = useState<boolean>(false);
 
   // Inline Edit Order Notes state inside mobile app
   const [mobileNotesDraft, setMobileNotesDraft] = useState<string>(
@@ -694,8 +887,114 @@ export const CustomerMobileExperience: React.FC<CustomerMobileExperienceProps> =
                     : dropoffLandmark.nameAr
                 }
                 showRoute={true}
+                orderStatus={activeCustomerOrder?.status || 'in_transit'}
+                distanceKm={activeCustomerOrder?.distanceKm || 2.4}
+                durationMinutes={activeDurationMinutes}
+                isDarkMode={isMobileMapDarkMode}
+                onToggleDarkMode={() => {
+                  triggerMobileHapticFeedback();
+                  setIsMobileMapDarkMode((prev) => !prev);
+                }}
+                mapLayerStyle={mobileMapLayerStyle}
+                onToggleMapLayerStyle={() => {
+                  triggerMobileHapticFeedback();
+                  setMobileMapLayerStyle((prev) => (prev === 'route' ? 'satellite' : 'route'));
+                }}
+                isFullScreen={isMobileFullScreenMap}
+                onToggleFullScreen={() => {
+                  triggerMobileHapticFeedback();
+                  setIsMobileFullScreenMap((prev) => !prev);
+                }}
+                onCopyPickup={() =>
+                  handleCopyMobileAddress(
+                    'pickup',
+                    activeCustomerOrder ? activeCustomerOrder.storeAddress : pickupLandmark.nameAr
+                  )
+                }
+                onCopyDropoff={() =>
+                  handleCopyMobileAddress(
+                    'dropoff',
+                    activeCustomerOrder ? activeCustomerOrder.deliveryAddress : dropoffLandmark.nameAr
+                  )
+                }
+                copiedField={mobileCopiedAddressField}
               />
             </div>
+
+            {/* Full-Screen Interactive Map Modal inside Mobile Simulator */}
+            {isMobileFullScreenMap && (
+              <div
+                data-testid="mobile-fullscreen-map-modal"
+                className="absolute inset-0 z-40 bg-slate-950 flex flex-col animate-m3-slide-in"
+              >
+                <div className="flex-1 relative">
+                  <EgyptianMapCanvas
+                    mode="customer"
+                    pickupText={
+                      activeCustomerOrder
+                        ? activeCustomerOrder.storeAddress
+                        : pickupLandmark.nameAr
+                    }
+                    dropoffText={
+                      activeCustomerOrder
+                        ? activeCustomerOrder.deliveryAddress
+                        : dropoffLandmark.nameAr
+                    }
+                    showRoute={true}
+                    orderStatus={activeCustomerOrder?.status || 'in_transit'}
+                    distanceKm={activeCustomerOrder?.distanceKm || 2.4}
+                    durationMinutes={activeDurationMinutes}
+                    isDarkMode={isMobileMapDarkMode}
+                    onToggleDarkMode={() => {
+                      triggerMobileHapticFeedback();
+                      setIsMobileMapDarkMode((prev) => !prev);
+                    }}
+                    mapLayerStyle={mobileMapLayerStyle}
+                    onToggleMapLayerStyle={() => {
+                      triggerMobileHapticFeedback();
+                      setMobileMapLayerStyle((prev) => (prev === 'route' ? 'satellite' : 'route'));
+                    }}
+                    isFullScreen={true}
+                    onToggleFullScreen={() => {
+                      triggerMobileHapticFeedback();
+                      setIsMobileFullScreenMap(false);
+                    }}
+                    onCopyPickup={() =>
+                      handleCopyMobileAddress(
+                        'pickup',
+                        activeCustomerOrder ? activeCustomerOrder.storeAddress : pickupLandmark.nameAr
+                      )
+                    }
+                    onCopyDropoff={() =>
+                      handleCopyMobileAddress(
+                        'dropoff',
+                        activeCustomerOrder ? activeCustomerOrder.deliveryAddress : dropoffLandmark.nameAr
+                      )
+                    }
+                    copiedField={mobileCopiedAddressField}
+                  />
+                </div>
+                <div className="p-3 bg-slate-900 border-t border-slate-800 flex items-center justify-between gap-2 text-white">
+                  <div className="text-[11px] font-bold truncate">
+                    <span>خريطة تتبع مسار الباجور الكاملة</span>
+                    <span className="text-emerald-400 mr-1.5">
+                      (~{activeDurationMinutes} د • {activeCustomerOrder?.distanceKm || 2.4} كم)
+                    </span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      triggerMobileHapticFeedback();
+                      setIsMobileFullScreenMap(false);
+                    }}
+                    className="px-3 py-1.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 text-[11px] font-black flex items-center gap-1 cursor-pointer hover:scale-105 active:scale-95 transition"
+                  >
+                    <Minimize2 className="w-3.5 h-3.5" />
+                    <span>العودة لبطاقة التتبع</span>
+                  </button>
+                </div>
+              </div>
+            )}
 
             {/* If there is an active order in progress AND sheet is minimized: show floating mini-tracker + full Home Service Hub */}
             {activeCustomerOrder && isTrackingSheetMinimized && (
@@ -719,8 +1018,11 @@ export const CustomerMobileExperience: React.FC<CustomerMobileExperienceProps> =
                   </div>
                   <button
                     type="button"
-                    onClick={() => setIsTrackingSheetMinimized(false)}
-                    className="px-3 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-[11px] font-extrabold flex items-center gap-1 shrink-0 shadow-sm cursor-pointer"
+                    onClick={() => {
+                      triggerMobileHapticFeedback();
+                      setIsTrackingSheetMinimized(false);
+                    }}
+                    className="px-3 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-[11px] font-extrabold flex items-center gap-1 shrink-0 shadow-sm cursor-pointer hover:scale-105 active:scale-95 transition"
                   >
                     <span>توسيع التتبع</span>
                     <ChevronUp className="w-3.5 h-3.5" />
@@ -731,28 +1033,124 @@ export const CustomerMobileExperience: React.FC<CustomerMobileExperienceProps> =
 
             {/* If there is an active order in progress and not minimized: show Cohesive Live Tracking Sheet */}
             {activeCustomerOrder && !isTrackingSheetMinimized ? (
-              <div className="relative z-10 mt-auto bg-white rounded-t-3xl p-3.5 shadow-2xl border-t border-slate-100 flex flex-col gap-2.5 max-h-[89%] overflow-y-auto">
-                {/* Sheet Top Bar: Drag Handle + Minimize Toggle + SOS & Refresh */}
-                <div className="flex items-center justify-between gap-2 pb-1 border-b border-slate-100">
+              <div
+                ref={trackingSheetScrollRef}
+                data-testid="mobile-active-order-tracking-sheet"
+                onTouchStart={handleMobilePullTouchStart}
+                onTouchMove={handleMobilePullTouchMove}
+                onTouchEnd={handleMobilePullEnd}
+                className={`relative z-10 mt-auto bg-white rounded-t-3xl p-3.5 shadow-2xl border-t border-slate-100 flex flex-col gap-2.5 max-h-[89%] overflow-y-auto transition-all ${
+                  isMobileStatusSlideIn ? 'animate-m3-slide-in' : ''
+                } ${isMobileHapticShaking ? 'animate-haptic-shake' : ''}`}
+              >
+                {/* Pull-to-Refresh Indicator Banner at Top of Mobile Tracking Sheet */}
+                {(mobilePullDistance > 0 || isRefreshingMobile) && (
+                  <div
+                    data-testid="mobile-pull-to-refresh-indicator"
+                    className="w-full py-1.5 px-3 rounded-xl bg-emerald-50 border border-emerald-200 flex items-center justify-center gap-2 text-[10px] font-extrabold text-emerald-800 transition-all"
+                  >
+                    <RefreshCw
+                      className={`w-3.5 h-3.5 text-emerald-700 ${
+                        isRefreshingMobile || mobilePullDistance >= MOBILE_PULL_THRESHOLD
+                          ? 'animate-spin'
+                          : ''
+                      }`}
+                    />
+                    <span>
+                      {isRefreshingMobile
+                        ? 'جاري تحديث الخريطة والتسلسل الزمني للطلب...'
+                        : mobilePullDistance >= MOBILE_PULL_THRESHOLD
+                        ? 'أفلت الآن لتحديث حالة الطلب فوراً ↻'
+                        : 'اسحب للأسفل لتحديث حالة الطلب (Pull to Refresh)'}
+                    </span>
+                  </div>
+                )}
+
+                {/* Audio Cue Notification Toast inside Mobile Tracking Sheet */}
+                {mobileAudioCueText && (
+                  <div
+                    data-testid="mobile-audio-notification-toast"
+                    className="px-2.5 py-1.5 rounded-xl bg-amber-50 border border-amber-300 text-amber-900 text-[10px] font-extrabold flex items-center justify-between gap-2 animate-m3-slide-in"
+                  >
+                    <div className="flex items-center gap-1.5">
+                      <Volume2 className="w-3.5 h-3.5 text-amber-600 animate-bounce shrink-0" />
+                      <span>{mobileAudioCueText}</span>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setMobileAudioCueText(null)}
+                      className="text-amber-700 hover:text-amber-950 font-black cursor-pointer"
+                    >
+                      ✕
+                    </button>
+                  </div>
+                )}
+
+                {/* Sheet Top Bar: Drag Handle + Minimize Toggle + Sound + Advance Step + Refresh + SOS */}
+                <div className="flex items-center justify-between gap-1.5 pb-1 border-b border-slate-100 flex-wrap">
                   <button
                     type="button"
-                    onClick={() => setIsTrackingSheetMinimized(true)}
-                    className="text-[10px] font-bold text-slate-500 hover:text-slate-800 bg-slate-100 hover:bg-slate-200/80 px-2 py-1 rounded-lg flex items-center gap-1 transition cursor-pointer"
+                    onClick={() => {
+                      triggerMobileHapticFeedback();
+                      setIsTrackingSheetMinimized(true);
+                    }}
+                    className="text-[10px] font-bold text-slate-600 hover:text-slate-900 bg-slate-100 hover:bg-slate-200/80 px-2 py-1 rounded-xl border border-slate-200 flex items-center gap-1 transition cursor-pointer hover:scale-105 active:scale-95"
                     title="تصغير بطاقة التتبع لعرض الخريطة والخدمات"
                   >
                     <ChevronDown className="w-3 h-3" />
-                    <span>تصغير للخريطة</span>
+                    <span>تصغير</span>
                   </button>
 
-                  <div className="w-10 h-1 bg-slate-300 rounded-full" />
+                  {/* Sound Notification Cue Toggle Button */}
+                  <button
+                    type="button"
+                    data-testid="mobile-sound-toggle-btn"
+                    onClick={() => {
+                      triggerMobileHapticFeedback();
+                      const next = !isMobileSoundEnabled;
+                      setIsMobileSoundEnabled(next);
+                      if (next) {
+                        playMobileOrderStatusSound();
+                        setMobileAudioCueText('🔔 تم تفعيل التنبيه الصوتي لتحديثات الطلب');
+                      }
+                    }}
+                    className={`px-2 py-1 rounded-xl border text-[10px] font-extrabold flex items-center gap-1 transition cursor-pointer hover:scale-105 active:scale-95 ${
+                      isMobileSoundEnabled
+                        ? 'bg-amber-50 border-amber-300 text-amber-900'
+                        : 'bg-slate-100 border-slate-200 text-slate-500'
+                    }`}
+                    title="تفعيل أو كتم الصوت عند تقدم مراحل الطلب"
+                  >
+                    {isMobileSoundEnabled ? (
+                      <Volume2 className="w-3 h-3 text-amber-600" />
+                    ) : (
+                      <VolumeX className="w-3 h-3 text-slate-400" />
+                    )}
+                    <span>{isMobileSoundEnabled ? 'صوت التحديث' : 'صامت'}</span>
+                  </button>
 
-                  <div className="flex items-center gap-1.5">
+                  {/* Advance Status Step Button (Simulate Timeline Advance + Audio Cue + Pin Pulse) */}
+                  {activeCustomerOrder.status !== 'delivered' && (
+                    <button
+                      type="button"
+                      data-testid="mobile-advance-status-btn"
+                      onClick={handleAdvanceMobileOrderStatus}
+                      className="px-2 py-1 rounded-xl bg-emerald-700 hover:bg-emerald-600 text-white border border-emerald-600 text-[10px] font-extrabold flex items-center gap-1 transition cursor-pointer hover:scale-105 active:scale-95 shadow-2xs"
+                      title="الانتقال للمرحلة التالية في مسار الطلب مع تنبيه صوتي"
+                    >
+                      <Zap className="w-3 h-3 text-amber-300" />
+                      <span>المرحلة التالية</span>
+                    </button>
+                  )}
+
+                  <div className="flex items-center gap-1">
                     {/* Manual Refresh Button with Progress Bar */}
                     <button
                       type="button"
+                      data-testid="mobile-refresh-order-btn"
                       onClick={handleMobileManualRefresh}
                       disabled={isRefreshingMobile}
-                      className={`relative overflow-hidden px-2.5 py-1 rounded-lg border text-[10px] font-extrabold flex flex-col items-center justify-center transition cursor-pointer ${
+                      className={`relative overflow-hidden px-2 py-1 rounded-xl border text-[10px] font-extrabold flex flex-col items-center justify-center transition cursor-pointer hover:scale-105 active:scale-95 ${
                         isRefreshingMobile
                           ? 'bg-emerald-50 border-emerald-300 text-emerald-800'
                           : mobileRefreshDone
@@ -764,9 +1162,9 @@ export const CustomerMobileExperience: React.FC<CustomerMobileExperienceProps> =
                         <RefreshCw className={`w-3 h-3 text-emerald-700 ${isRefreshingMobile ? 'animate-spin' : ''}`} />
                         <span>
                           {isRefreshingMobile
-                            ? 'جاري التحديث...'
+                            ? 'تحديث...'
                             : mobileRefreshDone
-                            ? 'تم التحديث ✓'
+                            ? 'تم ✓'
                             : 'تحديث'}
                         </span>
                       </div>
@@ -789,15 +1187,16 @@ export const CustomerMobileExperience: React.FC<CustomerMobileExperienceProps> =
                     <button
                       type="button"
                       onClick={() => {
+                        triggerMobileHapticFeedback();
                         setMobileSosLocationShared(false);
                         setMobileSosCalledService(null);
                         setShowSosEmergencyModal(true);
                       }}
-                      className="px-2.5 py-1 rounded-lg bg-rose-50 hover:bg-rose-100 border border-rose-200 text-rose-700 text-[10px] font-black flex items-center gap-1 transition cursor-pointer"
+                      className="px-2 py-1 rounded-xl bg-rose-50 hover:bg-rose-100 border border-rose-200 text-rose-700 text-[10px] font-black flex items-center gap-1 transition cursor-pointer hover:scale-105 active:scale-95"
                       title="طوارئ الباجور ومشاركة الموقع"
                     >
                       <ShieldCheck className="w-3 h-3 text-rose-600" />
-                      <span>SOS طوارئ</span>
+                      <span>SOS</span>
                     </button>
                   </div>
                 </div>
@@ -815,7 +1214,7 @@ export const CustomerMobileExperience: React.FC<CustomerMobileExperienceProps> =
                         'المتجر قبل طلبك ويقوم بتجهيزه الآن 🍳'}
                       {activeCustomerOrder.status === 'ready_for_pickup' && 'الطلب جاهز • بانتظار استلام الكابتن'}
                       {activeCustomerOrder.status === 'captain_assigned' && 'تم تعيين الكابتن • في الطريق للاستلام 🛵'}
-                      {activeCustomerOrder.status === 'at_pickup' && 'الكابتن وصل لنقطة الاستلام'}
+                      {activeCustomerOrder.status === 'at_pickup' && 'الكابتن وصل لنقطة الاستلام 📍'}
                       {activeCustomerOrder.status === 'picked_up' && 'الكابتن استلم الطلب من نقطة الانطلاق 📦'}
                       {activeCustomerOrder.status === 'in_transit' && 'الكابتن في الطريق إليك الآن 🛵'}
                       {activeCustomerOrder.status === 'delivered' && 'تم إتمام المشوار والتسليم بنجاح!'}
@@ -825,6 +1224,450 @@ export const CustomerMobileExperience: React.FC<CustomerMobileExperienceProps> =
                     {activeCustomerOrder.orderNumber}
                   </span>
                 </div>
+
+                {/* =====================================================================
+                    EMBEDDED INTERACTIVE MAP THUMBNAIL INSIDE MOBILE TRACKING SHEET
+                    Includes: Pinch-to-Zoom, Dedicated '+' & '-' Corner Buttons,
+                    Satellite/Terrain Layer Toggle, Dark/Light Map Toggle, Fullscreen,
+                    Travel Time/Distance Badge, Copy Pickup/Dropoff Buttons,
+                    Material 3 Pulsing SVG Pins, and Skeleton Loading State
+                   ===================================================================== */}
+                {isRefreshingMobile ? (
+                  <div
+                    data-testid="mobile-map-skeleton-loader"
+                    className="rounded-2xl border border-slate-200 bg-slate-100 p-3 h-40 flex flex-col justify-between animate-pulse"
+                  >
+                    <div className="flex items-center justify-between">
+                      <div className="h-5 w-28 rounded-lg bg-slate-300" />
+                      <div className="flex items-center gap-1.5">
+                        <div className="h-5 w-20 rounded-lg bg-slate-300" />
+                        <div className="h-5 w-6 rounded-lg bg-slate-300" />
+                        <div className="h-5 w-6 rounded-lg bg-slate-300" />
+                      </div>
+                    </div>
+                    <div className="flex items-center justify-around py-3">
+                      <div className="w-7 h-7 rounded-full bg-emerald-300/70" />
+                      <div className="h-1.5 flex-1 mx-4 rounded-full bg-slate-300" />
+                      <div className="w-7 h-7 rounded-full bg-amber-300/70" />
+                    </div>
+                    <div className="grid grid-cols-2 gap-2">
+                      <div className="h-6 rounded-lg bg-slate-300" />
+                      <div className="h-6 rounded-lg bg-slate-300" />
+                    </div>
+                  </div>
+                ) : (
+                  <div
+                    data-testid="mobile-tracking-sheet-map-thumbnail"
+                    className={`rounded-2xl border overflow-hidden transition-colors duration-300 ${
+                      mobileMapLayerStyle === 'satellite'
+                        ? 'bg-[#0c211b] border-emerald-800/80 text-white'
+                        : isMobileMapDarkMode
+                        ? 'bg-slate-950 border-slate-800 text-white'
+                        : 'bg-slate-100 border-slate-200/90 text-slate-900'
+                    }`}
+                  >
+                    {/* Map Top Header Bar: Layer Toggle (Route / Satellite), Dark/Light Toggle & Fullscreen */}
+                    <div
+                      className={`px-2.5 py-1.5 border-b flex items-center justify-between gap-1.5 text-[10px] ${
+                        mobileMapLayerStyle === 'satellite' || isMobileMapDarkMode
+                          ? 'bg-slate-900/90 border-slate-800 text-slate-200'
+                          : 'bg-white/90 border-slate-200/80 text-slate-700'
+                      }`}
+                    >
+                      <div className="flex items-center gap-1 font-extrabold truncate">
+                        <Navigation className="w-3 h-3 text-emerald-600 shrink-0" />
+                        <span>خريطة مسار الطلب التفاعلية</span>
+                      </div>
+
+                      <div className="flex items-center gap-1 shrink-0">
+                        {/* Satellite / Terrain vs Route Overview Toggle */}
+                        <button
+                          type="button"
+                          data-testid="mobile-map-layer-toggle-btn"
+                          onClick={() => {
+                            triggerMobileHapticFeedback();
+                            setMobileMapLayerStyle((prev) =>
+                              prev === 'route' ? 'satellite' : 'route'
+                            );
+                          }}
+                          className={`px-2 py-0.5 rounded-lg border text-[9px] font-extrabold flex items-center gap-1 transition cursor-pointer hover:scale-105 active:scale-95 ${
+                            mobileMapLayerStyle === 'satellite'
+                              ? 'bg-emerald-700 text-white border-emerald-500'
+                              : isMobileMapDarkMode
+                              ? 'bg-slate-800 text-slate-200 border-slate-700'
+                              : 'bg-slate-100 text-slate-700 border-slate-300'
+                          }`}
+                          title="تبديل طبقة الخريطة (Route Overview / Satellite Terrain)"
+                        >
+                          <Layers className="w-2.5 h-2.5 text-amber-500" />
+                          <span>
+                            {mobileMapLayerStyle === 'satellite'
+                              ? 'تضاريس • Satellite'
+                              : 'مسار • Route'}
+                          </span>
+                        </button>
+
+                        {/* Dark / Light Map Mode Toggle */}
+                        <button
+                          type="button"
+                          data-testid="mobile-map-theme-toggle-btn"
+                          onClick={() => {
+                            triggerMobileHapticFeedback();
+                            setIsMobileMapDarkMode((prev) => !prev);
+                          }}
+                          className={`px-1.5 py-0.5 rounded-lg border text-[9px] font-extrabold flex items-center gap-0.5 transition cursor-pointer hover:scale-105 active:scale-95 ${
+                            isMobileMapDarkMode
+                              ? 'bg-slate-800 text-amber-300 border-slate-700'
+                              : 'bg-slate-100 text-slate-700 border-slate-300'
+                          }`}
+                          title="تبديل ألوان الخريطة (ليلي / نهاري)"
+                        >
+                          {isMobileMapDarkMode ? (
+                            <Sun className="w-2.5 h-2.5 text-amber-400" />
+                          ) : (
+                            <Moon className="w-2.5 h-2.5 text-slate-600" />
+                          )}
+                          <span>{isMobileMapDarkMode ? 'نهاري' : 'ليلي'}</span>
+                        </button>
+
+                        {/* Full-Screen Map View Toggle */}
+                        <button
+                          type="button"
+                          data-testid="mobile-map-fullscreen-toggle-btn"
+                          onClick={() => {
+                            triggerMobileHapticFeedback();
+                            setIsMobileFullScreenMap(true);
+                          }}
+                          className="px-1.5 py-0.5 rounded-lg bg-emerald-700 hover:bg-emerald-600 text-white border border-emerald-600 text-[9px] font-extrabold flex items-center gap-0.5 transition cursor-pointer hover:scale-105 active:scale-95"
+                          title="عرض الخريطة بملء شاشة التطبيق"
+                        >
+                          <Maximize2 className="w-2.5 h-2.5" />
+                          <span>ملء الشاشة</span>
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* Interactive Pinch-to-Zoom & Pan SVG Map Viewport */}
+                    <div className="relative h-32 w-full overflow-hidden">
+                      {/* Corner Travel Time & Distance Estimate Badge */}
+                      <div
+                        data-testid="mobile-sheet-map-estimate-badge"
+                        className="absolute top-2 right-2 z-20 pointer-events-none inline-flex items-center gap-1 px-2 py-0.5 rounded-lg bg-slate-900/90 text-white border border-slate-700 shadow-md text-[9px] font-extrabold"
+                      >
+                        <Clock className="w-2.5 h-2.5 text-amber-400" />
+                        <span>~{activeDurationMinutes} د</span>
+                        <span className="text-slate-400">•</span>
+                        <span className="text-emerald-300">
+                          {activeCustomerOrder.distanceKm || 2.4} كم
+                        </span>
+                      </div>
+
+                      {/* Dedicated Touch-Optimized '+' and '-' Zoom Control Buttons on Corner */}
+                      <div
+                        data-testid="mobile-sheet-map-zoom-controls"
+                        className="absolute bottom-2 left-2 z-20 flex items-center gap-1"
+                      >
+                        <button
+                          type="button"
+                          onClick={handleMobileZoomIn}
+                          disabled={mobileMapZoomScale >= 3}
+                          aria-label="تكبير خريطة الطلب (+)"
+                          title="تكبير الخريطة (+)"
+                          className="w-7 h-7 rounded-xl bg-slate-900/90 hover:bg-slate-800 disabled:opacity-40 text-white border border-slate-700 shadow-md flex items-center justify-center font-black text-xs transition cursor-pointer hover:scale-105 active:scale-95"
+                        >
+                          <Plus className="w-3.5 h-3.5" />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={handleMobileZoomOut}
+                          disabled={mobileMapZoomScale <= 1}
+                          aria-label="تصغير خريطة الطلب (-)"
+                          title="تصغير الخريطة (-)"
+                          className="w-7 h-7 rounded-xl bg-slate-900/90 hover:bg-slate-800 disabled:opacity-40 text-white border border-slate-700 shadow-md flex items-center justify-center font-black text-xs transition cursor-pointer hover:scale-105 active:scale-95"
+                        >
+                          <Minus className="w-3.5 h-3.5" />
+                        </button>
+                        {mobileMapZoomScale > 1.02 && (
+                          <button
+                            type="button"
+                            onClick={handleMobileZoomReset}
+                            title="إعادة ضبط الزووم"
+                            className="px-1.5 h-7 rounded-xl bg-amber-500 text-slate-950 font-black text-[9px] shadow-md flex items-center gap-0.5 cursor-pointer hover:scale-105 active:scale-95"
+                          >
+                            <RotateCcw className="w-2.5 h-2.5" />
+                            <span>{Math.round(mobileMapZoomScale * 100)}%</span>
+                          </button>
+                        )}
+                      </div>
+
+                      <PinchZoomPan
+                        scale={mobileMapZoomScale}
+                        onScaleChange={setMobileMapZoomScale}
+                        showControls={false}
+                        className="w-full h-full"
+                      >
+                        <svg
+                          viewBox="0 0 360 130"
+                          className="w-full h-full object-cover select-none"
+                        >
+                          <defs>
+                            <pattern
+                              id="mobileSheetGrid"
+                              width="24"
+                              height="24"
+                              patternUnits="userSpaceOnUse"
+                            >
+                              <path
+                                d="M 24 0 L 0 0 0 24"
+                                fill="none"
+                                stroke={
+                                  mobileMapLayerStyle === 'satellite'
+                                    ? '#14532d'
+                                    : isMobileMapDarkMode
+                                    ? '#1e293b'
+                                    : '#cbd5e1'
+                                }
+                                strokeWidth="0.8"
+                              />
+                            </pattern>
+                            <filter
+                              id="mobileSheetPinShadow"
+                              x="-40%"
+                              y="-40%"
+                              width="180%"
+                              height="180%"
+                            >
+                              <feDropShadow
+                                dx="0"
+                                dy="2"
+                                stdDeviation="2"
+                                floodColor="#0f172a"
+                                floodOpacity="0.45"
+                              />
+                            </filter>
+                          </defs>
+
+                          {/* Background Fill */}
+                          <rect
+                            width="360"
+                            height="130"
+                            fill={
+                              mobileMapLayerStyle === 'satellite'
+                                ? '#0f2922'
+                                : isMobileMapDarkMode
+                                ? '#0f172a'
+                                : '#f1f5f9'
+                            }
+                          />
+                          <rect width="360" height="130" fill="url(#mobileSheetGrid)" />
+
+                          {/* Satellite Topographic Zones */}
+                          {mobileMapLayerStyle === 'satellite' && (
+                            <g opacity="0.45">
+                              <ellipse
+                                cx="95"
+                                cy="65"
+                                rx="65"
+                                ry="38"
+                                fill="#064e3b"
+                                stroke="#10b981"
+                                strokeWidth="0.8"
+                                strokeDasharray="4 3"
+                              />
+                              <ellipse
+                                cx="265"
+                                cy="60"
+                                rx="70"
+                                ry="42"
+                                fill="#065f46"
+                                stroke="#34d399"
+                                strokeWidth="0.8"
+                                strokeDasharray="4 3"
+                              />
+                            </g>
+                          )}
+
+                          {/* Bagour Canal Ribbon */}
+                          <path
+                            d="M 0 105 Q 130 85 220 55 T 360 25"
+                            fill="none"
+                            stroke={
+                              mobileMapLayerStyle === 'satellite' || isMobileMapDarkMode
+                                ? '#0284c7'
+                                : '#93c5fd'
+                            }
+                            strokeWidth="12"
+                            strokeLinecap="round"
+                            opacity="0.55"
+                          />
+
+                          {/* Route Path */}
+                          <path
+                            d="M 65 88 C 130 88, 165 44, 290 48"
+                            fill="none"
+                            stroke="#10b981"
+                            strokeWidth="4"
+                            strokeLinecap="round"
+                          />
+                          <path
+                            d="M 65 88 C 130 88, 165 44, 290 48"
+                            fill="none"
+                            stroke="#ffffff"
+                            strokeWidth="1.5"
+                            strokeDasharray="4 6"
+                            strokeLinecap="round"
+                          />
+
+                          {/* Pickup Material 3 SVG Map Pin (Pulses when status === 'at_pickup') */}
+                          <g
+                            transform="translate(65, 88)"
+                            filter="url(#mobileSheetPinShadow)"
+                            data-testid="mobile-sheet-pickup-pin"
+                          >
+                            {activeCustomerOrder.status === 'at_pickup' && (
+                              <circle cx="0" cy="-10" r="16" fill="#10b981" opacity="0.35">
+                                <animate
+                                  attributeName="r"
+                                  values="9;20;9"
+                                  dur="1.4s"
+                                  repeatCount="indefinite"
+                                />
+                                <animate
+                                  attributeName="opacity"
+                                  values="0.5;0.05;0.5"
+                                  dur="1.4s"
+                                  repeatCount="indefinite"
+                                />
+                              </circle>
+                            )}
+                            <path
+                              d="M 0 0 C -6 -7 -10 -12 -10 -17 A 10 10 0 1 1 10 -17 C 10 -12 6 -7 0 0 Z"
+                              fill="#047857"
+                              stroke="#ffffff"
+                              strokeWidth="1.8"
+                            />
+                            <circle cx="0" cy="-17" r="3.8" fill="#ffffff" />
+                          </g>
+
+                          {/* Captain Live Scooter Marker on Route */}
+                          <g transform="translate(178, 64)" filter="url(#mobileSheetPinShadow)">
+                            <circle
+                              cx="0"
+                              cy="0"
+                              r="11"
+                              fill="#0f172a"
+                              stroke="#10b981"
+                              strokeWidth="2"
+                            />
+                            <text x="0" y="3.5" textAnchor="middle" fontSize="9">
+                              🛵
+                            </text>
+                          </g>
+
+                          {/* Dropoff Material 3 SVG Map Pin (Pulses when status === 'in_transit') */}
+                          <g
+                            transform="translate(290, 48)"
+                            filter="url(#mobileSheetPinShadow)"
+                            data-testid="mobile-sheet-dropoff-pin"
+                          >
+                            {activeCustomerOrder.status === 'in_transit' && (
+                              <circle cx="0" cy="-10" r="16" fill="#f59e0b" opacity="0.35">
+                                <animate
+                                  attributeName="r"
+                                  values="9;20;9"
+                                  dur="1.4s"
+                                  repeatCount="indefinite"
+                                />
+                                <animate
+                                  attributeName="opacity"
+                                  values="0.5;0.05;0.5"
+                                  dur="1.4s"
+                                  repeatCount="indefinite"
+                                />
+                              </circle>
+                            )}
+                            <path
+                              d="M 0 0 C -6 -7 -10 -12 -10 -17 A 10 10 0 1 1 10 -17 C 10 -12 6 -7 0 0 Z"
+                              fill="#d97706"
+                              stroke="#ffffff"
+                              strokeWidth="1.8"
+                            />
+                            <circle cx="0" cy="-17" r="3.8" fill="#ffffff" />
+                          </g>
+                        </svg>
+                      </PinchZoomPan>
+                    </div>
+
+                    {/* Copy Pickup Address & Copy Dropoff Address Bar inside Mobile Map Card */}
+                    <div
+                      className={`px-2.5 py-1.5 border-t grid grid-cols-2 gap-1.5 text-[10px] ${
+                        mobileMapLayerStyle === 'satellite' || isMobileMapDarkMode
+                          ? 'bg-slate-900/95 border-slate-800'
+                          : 'bg-white border-slate-200/80'
+                      }`}
+                    >
+                      <button
+                        type="button"
+                        data-testid="mobile-copy-pickup-address-btn"
+                        onClick={() =>
+                          handleCopyMobileAddress('pickup', activeCustomerOrder.storeAddress)
+                        }
+                        className={`px-2 py-1 rounded-xl border flex items-center justify-between gap-1 transition cursor-pointer hover:scale-105 active:scale-95 ${
+                          mobileCopiedAddressField === 'pickup'
+                            ? 'bg-emerald-700 text-white border-emerald-600'
+                            : isMobileMapDarkMode || mobileMapLayerStyle === 'satellite'
+                            ? 'bg-slate-800 text-slate-200 border-slate-700 hover:bg-slate-700'
+                            : 'bg-slate-50 text-slate-700 border-slate-200 hover:bg-emerald-50'
+                        }`}
+                        title="نسخ عنوان الاستلام (Copy Pickup Address)"
+                      >
+                        <div className="flex items-center gap-1 min-w-0">
+                          <span className="w-2 h-2 rounded-full bg-emerald-500 shrink-0" />
+                          <span className="font-bold truncate">
+                            {mobileCopiedAddressField === 'pickup'
+                              ? 'تم نسخ الاستلام ✓'
+                              : `استلام: ${activeCustomerOrder.storeAddress}`}
+                          </span>
+                        </div>
+                        {mobileCopiedAddressField === 'pickup' ? (
+                          <Check className="w-3 h-3 shrink-0" />
+                        ) : (
+                          <Copy className="w-3 h-3 text-slate-400 shrink-0" />
+                        )}
+                      </button>
+
+                      <button
+                        type="button"
+                        data-testid="mobile-copy-dropoff-address-btn"
+                        onClick={() =>
+                          handleCopyMobileAddress('dropoff', activeCustomerOrder.deliveryAddress)
+                        }
+                        className={`px-2 py-1 rounded-xl border flex items-center justify-between gap-1 transition cursor-pointer hover:scale-105 active:scale-95 ${
+                          mobileCopiedAddressField === 'dropoff'
+                            ? 'bg-amber-500 text-slate-950 border-amber-400'
+                            : isMobileMapDarkMode || mobileMapLayerStyle === 'satellite'
+                            ? 'bg-slate-800 text-slate-200 border-slate-700 hover:bg-slate-700'
+                            : 'bg-slate-50 text-slate-700 border-slate-200 hover:bg-amber-50'
+                        }`}
+                        title="نسخ عنوان التوصيل (Copy Dropoff Address)"
+                      >
+                        <div className="flex items-center gap-1 min-w-0">
+                          <span className="w-2 h-2 rounded-full bg-amber-500 shrink-0" />
+                          <span className="font-bold truncate">
+                            {mobileCopiedAddressField === 'dropoff'
+                              ? 'تم نسخ الوجهة ✓'
+                              : `وصول: ${activeCustomerOrder.deliveryAddress}`}
+                          </span>
+                        </div>
+                        {mobileCopiedAddressField === 'dropoff' ? (
+                          <Check className="w-3 h-3 shrink-0" />
+                        ) : (
+                          <Copy className="w-3 h-3 text-slate-400 shrink-0" />
+                        )}
+                      </button>
+                    </div>
+                  </div>
+                )}
 
                 {/* Dual Metric Strip: Accepted Timestamp + Dynamic ETA Countdown Timer */}
                 <div className="grid grid-cols-2 gap-2">
@@ -869,205 +1712,223 @@ export const CustomerMobileExperience: React.FC<CustomerMobileExperienceProps> =
                   </div>
                 </div>
 
-                {/* Horizontal Stepper + Expandable Vertical Status Timeline (with Pulse Animation) */}
-                <div
-                  className={`flex flex-col gap-2 rounded-2xl transition-all duration-500 ${
-                    isTimelinePulsingMobile
-                      ? 'ring-2 ring-emerald-500/50 bg-emerald-50/50 p-2 animate-pulse'
-                      : ''
-                  }`}
-                >
-                  {activeCustomerOrder.serviceType === 'restaurant_store' ? (
-                    <div className="grid grid-cols-4 gap-1 text-center text-[9px] font-bold">
-                      <div
-                        className={`p-1.5 rounded-lg ${
-                          ['created', 'accepted_by_store', 'preparing', 'merchant_accepted', 'ready_for_pickup', 'captain_assigned', 'at_pickup', 'picked_up', 'in_transit', 'delivered'].includes(activeCustomerOrder.status)
-                            ? 'bg-emerald-700 text-white'
-                            : 'bg-slate-100 text-slate-400'
-                        }`}
-                      >
-                        ١. إرسال الطلب
-                      </div>
-                      <div
-                        className={`p-1.5 rounded-lg ${
-                          ['accepted_by_store', 'preparing', 'merchant_accepted', 'ready_for_pickup', 'captain_assigned', 'at_pickup', 'picked_up', 'in_transit', 'delivered'].includes(activeCustomerOrder.status)
-                            ? 'bg-emerald-700 text-white'
-                            : 'bg-slate-100 text-slate-400'
-                        }`}
-                      >
-                        ٢. قبول وتجهيز
-                      </div>
-                      <div
-                        className={`p-1.5 rounded-lg ${
-                          ['ready_for_pickup', 'captain_assigned', 'at_pickup', 'picked_up', 'in_transit', 'delivered'].includes(activeCustomerOrder.status)
-                            ? 'bg-emerald-700 text-white'
-                            : 'bg-slate-100 text-slate-400'
-                        }`}
-                      >
-                        ٣. مع الكابتن
-                      </div>
-                      <div
-                        className={`p-1.5 rounded-lg ${
-                          activeCustomerOrder.status === 'delivered'
-                            ? 'bg-emerald-700 text-white'
-                            : 'bg-slate-100 text-slate-400'
-                        }`}
-                      >
-                        ٤. تم التسليم
-                      </div>
+                {/* Horizontal Stepper + Expandable Vertical Status Timeline (with Skeleton Loader & Pulse Animation) */}
+                {isRefreshingMobile ? (
+                  <div
+                    data-testid="mobile-timeline-skeleton-loader"
+                    className="rounded-2xl border border-slate-200 bg-slate-50 p-2.5 flex flex-col gap-2 animate-pulse"
+                  >
+                    <div className="grid grid-cols-4 gap-1">
+                      <div className="h-6 rounded-lg bg-slate-300" />
+                      <div className="h-6 rounded-lg bg-slate-200" />
+                      <div className="h-6 rounded-lg bg-slate-200" />
+                      <div className="h-6 rounded-lg bg-slate-200" />
                     </div>
-                  ) : (
-                    <div className="grid grid-cols-4 gap-1 text-center text-[9px] font-bold">
-                      <div
-                        className={`p-1.5 rounded-lg ${
-                          ['searching_captain', 'captain_assigned', 'at_pickup', 'picked_up', 'in_transit', 'delivered'].includes(activeCustomerOrder.status)
-                            ? 'bg-emerald-700 text-white'
-                            : 'bg-slate-100 text-slate-400'
-                        }`}
-                      >
-                        ١. طلب كابتن
+                    <div className="h-4 w-44 rounded bg-slate-200" />
+                  </div>
+                ) : (
+                  <div
+                    className={`flex flex-col gap-2 rounded-2xl transition-all duration-500 ${
+                      isTimelinePulsingMobile
+                        ? 'ring-2 ring-emerald-500/50 bg-emerald-50/50 p-2 animate-pulse'
+                        : ''
+                    }`}
+                  >
+                    {activeCustomerOrder.serviceType === 'restaurant_store' ? (
+                      <div className="grid grid-cols-4 gap-1 text-center text-[9px] font-bold">
+                        <div
+                          className={`p-1.5 rounded-lg ${
+                            ['created', 'accepted_by_store', 'preparing', 'merchant_accepted', 'ready_for_pickup', 'captain_assigned', 'at_pickup', 'picked_up', 'in_transit', 'delivered'].includes(activeCustomerOrder.status)
+                              ? 'bg-emerald-700 text-white'
+                              : 'bg-slate-100 text-slate-400'
+                          }`}
+                        >
+                          ١. إرسال الطلب
+                        </div>
+                        <div
+                          className={`p-1.5 rounded-lg ${
+                            ['accepted_by_store', 'preparing', 'merchant_accepted', 'ready_for_pickup', 'captain_assigned', 'at_pickup', 'picked_up', 'in_transit', 'delivered'].includes(activeCustomerOrder.status)
+                              ? 'bg-emerald-700 text-white'
+                              : 'bg-slate-100 text-slate-400'
+                          }`}
+                        >
+                          ٢. قبول وتجهيز
+                        </div>
+                        <div
+                          className={`p-1.5 rounded-lg ${
+                            ['ready_for_pickup', 'captain_assigned', 'at_pickup', 'picked_up', 'in_transit', 'delivered'].includes(activeCustomerOrder.status)
+                              ? 'bg-emerald-700 text-white'
+                              : 'bg-slate-100 text-slate-400'
+                          }`}
+                        >
+                          ٣. مع الكابتن
+                        </div>
+                        <div
+                          className={`p-1.5 rounded-lg ${
+                            activeCustomerOrder.status === 'delivered'
+                              ? 'bg-emerald-700 text-white'
+                              : 'bg-slate-100 text-slate-400'
+                          }`}
+                        >
+                          ٤. تم التسليم
+                        </div>
                       </div>
-                      <div
-                        className={`p-1.5 rounded-lg ${
-                          ['captain_assigned', 'at_pickup', 'picked_up', 'in_transit', 'delivered'].includes(activeCustomerOrder.status)
-                            ? 'bg-emerald-700 text-white'
-                            : 'bg-slate-100 text-slate-400'
-                        }`}
-                      >
-                        ٢. قبول الكابتن
+                    ) : (
+                      <div className="grid grid-cols-4 gap-1 text-center text-[9px] font-bold">
+                        <div
+                          className={`p-1.5 rounded-lg ${
+                            ['searching_captain', 'captain_assigned', 'at_pickup', 'picked_up', 'in_transit', 'delivered'].includes(activeCustomerOrder.status)
+                              ? 'bg-emerald-700 text-white'
+                              : 'bg-slate-100 text-slate-400'
+                          }`}
+                        >
+                          ١. طلب كابتن
+                        </div>
+                        <div
+                          className={`p-1.5 rounded-lg ${
+                            ['captain_assigned', 'at_pickup', 'picked_up', 'in_transit', 'delivered'].includes(activeCustomerOrder.status)
+                              ? 'bg-emerald-700 text-white'
+                              : 'bg-slate-100 text-slate-400'
+                          }`}
+                        >
+                          ٢. قبول الكابتن
+                        </div>
+                        <div
+                          className={`p-1.5 rounded-lg ${
+                            ['at_pickup', 'picked_up', 'in_transit', 'delivered'].includes(activeCustomerOrder.status)
+                              ? 'bg-emerald-700 text-white'
+                              : 'bg-slate-100 text-slate-400'
+                          }`}
+                        >
+                          ٣. في الطريق
+                        </div>
+                        <div
+                          className={`p-1.5 rounded-lg ${
+                            activeCustomerOrder.status === 'delivered'
+                              ? 'bg-emerald-700 text-white'
+                              : 'bg-slate-100 text-slate-400'
+                          }`}
+                        >
+                          ٤. الوصول
+                        </div>
                       </div>
-                      <div
-                        className={`p-1.5 rounded-lg ${
-                          ['at_pickup', 'picked_up', 'in_transit', 'delivered'].includes(activeCustomerOrder.status)
-                            ? 'bg-emerald-700 text-white'
-                            : 'bg-slate-100 text-slate-400'
-                        }`}
-                      >
-                        ٣. في الطريق
-                      </div>
-                      <div
-                        className={`p-1.5 rounded-lg ${
-                          activeCustomerOrder.status === 'delivered'
-                            ? 'bg-emerald-700 text-white'
-                            : 'bg-slate-100 text-slate-400'
-                        }`}
-                      >
-                        ٤. الوصول
-                      </div>
-                    </div>
-                  )}
+                    )}
 
-                  {/* Toggle for Detailed Vertical Status Timeline */}
-                  <div className="flex items-center justify-between px-1">
-                    <button
-                      type="button"
-                      onClick={() => setIsVerticalTimelineExpanded((prev) => !prev)}
-                      className="text-[10px] font-extrabold text-emerald-800 hover:text-emerald-950 flex items-center gap-1 cursor-pointer"
-                    >
-                      <Activity className="w-3 h-3 text-emerald-700" />
-                      <span>
-                        {isVerticalTimelineExpanded
-                          ? 'إخفاء التسلسل الزمني المفصل'
-                          : 'عرض التسلسل الزمني لحالات الطلب'}
-                      </span>
-                      {isVerticalTimelineExpanded ? (
-                        <ChevronUp className="w-3 h-3" />
-                      ) : (
-                        <ChevronDown className="w-3 h-3" />
+                    {/* Toggle for Detailed Vertical Status Timeline */}
+                    <div className="flex items-center justify-between px-1">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          triggerMobileHapticFeedback();
+                          setIsVerticalTimelineExpanded((prev) => !prev);
+                        }}
+                        className="text-[10px] font-extrabold text-emerald-800 hover:text-emerald-950 flex items-center gap-1 cursor-pointer"
+                      >
+                        <Activity className="w-3 h-3 text-emerald-700" />
+                        <span>
+                          {isVerticalTimelineExpanded
+                            ? 'إخفاء التسلسل الزمني المفصل'
+                            : 'عرض التسلسل الزمني لحالات الطلب'}
+                        </span>
+                        {isVerticalTimelineExpanded ? (
+                          <ChevronUp className="w-3 h-3" />
+                        ) : (
+                          <ChevronDown className="w-3 h-3" />
+                        )}
+                      </button>
+                      {isTimelinePulsingMobile && (
+                        <span className="text-[10px] font-bold text-emerald-700 animate-pulse">
+                          • تحديث حي للحالة
+                        </span>
                       )}
-                    </button>
-                    {isTimelinePulsingMobile && (
-                      <span className="text-[10px] font-bold text-emerald-700 animate-pulse">
-                        • تحديث حي للحالة
-                      </span>
+                    </div>
+
+                    {/* Expanded Vertical Status Timeline */}
+                    {isVerticalTimelineExpanded && (
+                      <div className="bg-slate-50 rounded-xl p-2.5 border border-slate-200/80 flex flex-col gap-2">
+                        {[
+                          {
+                            key: 'created',
+                            title: 'تم إنشاء الطلب واستلامه',
+                            desc: `وقت الإنشاء: ${activeCustomerOrder.createdAt}`,
+                            done: true,
+                            active: activeCustomerOrder.status === 'created',
+                          },
+                          {
+                            key: 'searching',
+                            title: 'تأكيد المتجر وتوجيه أقرب كابتن بالباجور',
+                            desc: activeAcceptedTimestampText || 'جاري مطابقة أقرب كابتن في نطاق الباجور',
+                            done: ['accepted_by_store', 'preparing', 'merchant_accepted', 'ready_for_pickup', 'captain_assigned', 'at_pickup', 'picked_up', 'in_transit', 'delivered'].includes(activeCustomerOrder.status),
+                            active: ['searching_captain', 'accepted_by_store', 'preparing', 'ready_for_pickup'].includes(activeCustomerOrder.status),
+                          },
+                          {
+                            key: 'at_pickup',
+                            title: 'وصول الكابتن لنقطة الاستلام',
+                            desc: activeCustomerOrder.storeAddress,
+                            done: ['at_pickup', 'picked_up', 'in_transit', 'delivered'].includes(activeCustomerOrder.status),
+                            active: ['captain_assigned', 'at_pickup'].includes(activeCustomerOrder.status),
+                          },
+                          {
+                            key: 'in_transit',
+                            title: 'الكابتن في الطريق إليك الآن',
+                            desc: `الوجهة: ${activeCustomerOrder.deliveryAddress}`,
+                            done: ['in_transit', 'delivered'].includes(activeCustomerOrder.status),
+                            active: ['picked_up', 'in_transit'].includes(activeCustomerOrder.status),
+                          },
+                          {
+                            key: 'delivered',
+                            title: 'إتمام التسليم وتحصيل الحساب',
+                            desc: `${activeCustomerOrder.totalEgp + mobileTipEgp}.00 ج.م`,
+                            done: activeCustomerOrder.status === 'delivered',
+                            active: activeCustomerOrder.status === 'delivered',
+                          },
+                        ].map((step, idx, arr) => (
+                          <div key={step.key} className="relative flex items-start gap-2.5">
+                            {idx < arr.length - 1 && (
+                              <div
+                                className={`absolute right-[9px] top-5 bottom-[-10px] w-0.5 ${
+                                  step.done ? 'bg-emerald-600' : 'bg-slate-200'
+                                }`}
+                              />
+                            )}
+                            <div
+                              className={`relative z-10 w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-black shrink-0 ${
+                                step.active
+                                  ? 'bg-emerald-700 text-white ring-2 ring-emerald-200'
+                                  : step.done
+                                  ? 'bg-emerald-100 text-emerald-800 border border-emerald-300'
+                                  : 'bg-white text-slate-400 border border-slate-200'
+                              }`}
+                            >
+                              {step.done ? '✓' : idx + 1}
+                            </div>
+                            <div className="flex-1 min-w-0">
+                              <div className="flex items-center justify-between">
+                                <span
+                                  className={`text-[11px] font-extrabold ${
+                                    step.active
+                                      ? 'text-emerald-800'
+                                      : step.done
+                                      ? 'text-slate-900'
+                                      : 'text-slate-400'
+                                  }`}
+                                >
+                                  {step.title}
+                                </span>
+                                {step.active && (
+                                  <span className="text-[9px] font-bold px-1.5 py-0.2 rounded bg-emerald-100 text-emerald-800">
+                                    الحالة الحالية
+                                  </span>
+                                )}
+                              </div>
+                              <p className="text-[10px] text-slate-500 truncate">{step.desc}</p>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
                     )}
                   </div>
-
-                  {/* Expanded Vertical Status Timeline */}
-                  {isVerticalTimelineExpanded && (
-                    <div className="bg-slate-50 rounded-xl p-2.5 border border-slate-200/80 flex flex-col gap-2">
-                      {[
-                        {
-                          key: 'created',
-                          title: 'تم إنشاء الطلب واستلامه',
-                          desc: `وقت الإنشاء: ${activeCustomerOrder.createdAt}`,
-                          done: true,
-                          active: activeCustomerOrder.status === 'created',
-                        },
-                        {
-                          key: 'searching',
-                          title: 'تأكيد المتجر وتوجيه أقرب كابتن بالباجور',
-                          desc: activeAcceptedTimestampText || 'جاري مطابقة أقرب كابتن في نطاق الباجور',
-                          done: ['accepted_by_store', 'preparing', 'merchant_accepted', 'ready_for_pickup', 'captain_assigned', 'at_pickup', 'picked_up', 'in_transit', 'delivered'].includes(activeCustomerOrder.status),
-                          active: ['searching_captain', 'accepted_by_store', 'preparing', 'ready_for_pickup'].includes(activeCustomerOrder.status),
-                        },
-                        {
-                          key: 'at_pickup',
-                          title: 'وصول الكابتن لنقطة الاستلام',
-                          desc: activeCustomerOrder.storeAddress,
-                          done: ['at_pickup', 'picked_up', 'in_transit', 'delivered'].includes(activeCustomerOrder.status),
-                          active: ['captain_assigned', 'at_pickup'].includes(activeCustomerOrder.status),
-                        },
-                        {
-                          key: 'in_transit',
-                          title: 'الكابتن في الطريق إليك الآن',
-                          desc: `الوجهة: ${activeCustomerOrder.deliveryAddress}`,
-                          done: ['in_transit', 'delivered'].includes(activeCustomerOrder.status),
-                          active: ['picked_up', 'in_transit'].includes(activeCustomerOrder.status),
-                        },
-                        {
-                          key: 'delivered',
-                          title: 'إتمام التسليم وتحصيل الحساب',
-                          desc: `${activeCustomerOrder.totalEgp + mobileTipEgp}.00 ج.م`,
-                          done: activeCustomerOrder.status === 'delivered',
-                          active: activeCustomerOrder.status === 'delivered',
-                        },
-                      ].map((step, idx, arr) => (
-                        <div key={step.key} className="relative flex items-start gap-2.5">
-                          {idx < arr.length - 1 && (
-                            <div
-                              className={`absolute right-[9px] top-5 bottom-[-10px] w-0.5 ${
-                                step.done ? 'bg-emerald-600' : 'bg-slate-200'
-                              }`}
-                            />
-                          )}
-                          <div
-                            className={`relative z-10 w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-black shrink-0 ${
-                              step.active
-                                ? 'bg-emerald-700 text-white ring-2 ring-emerald-200'
-                                : step.done
-                                ? 'bg-emerald-100 text-emerald-800 border border-emerald-300'
-                                : 'bg-white text-slate-400 border border-slate-200'
-                            }`}
-                          >
-                            {step.done ? '✓' : idx + 1}
-                          </div>
-                          <div className="flex-1 min-w-0">
-                            <div className="flex items-center justify-between">
-                              <span
-                                className={`text-[11px] font-extrabold ${
-                                  step.active
-                                    ? 'text-emerald-800'
-                                    : step.done
-                                    ? 'text-slate-900'
-                                    : 'text-slate-400'
-                                }`}
-                              >
-                                {step.title}
-                              </span>
-                              {step.active && (
-                                <span className="text-[9px] font-bold px-1.5 py-0.2 rounded bg-emerald-100 text-emerald-800">
-                                  الحالة الحالية
-                                </span>
-                              )}
-                            </div>
-                            <p className="text-[10px] text-slate-500 truncate">{step.desc}</p>
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </div>
+                )}
 
                 {/* Searching Captain Instant Simulation & Cancel Actions */}
                 {(activeCustomerOrder.status === 'searching_captain' || activeCustomerOrder.status === 'created') && (
@@ -1153,12 +2014,18 @@ export const CustomerMobileExperience: React.FC<CustomerMobileExperienceProps> =
                   </div>
                 )}
 
-                {/* Organized 4-Action Quick Control Bar (Same Mashwar Design Language) */}
-                <div className="grid grid-cols-4 gap-1.5">
+                {/* Organized 4-Action Quick Control Bar (Cohesive Rounded-XL + Hover Scale + Haptic Feedback) */}
+                <div
+                  data-testid="mobile-active-order-actions-grid"
+                  className="grid grid-cols-4 gap-2"
+                >
                   <button
                     type="button"
-                    onClick={() => setSummarySheetOrder(activeCustomerOrder)}
-                    className="p-2 rounded-xl bg-slate-50 hover:bg-emerald-50 border border-slate-200/90 hover:border-emerald-200 flex flex-col items-center justify-center gap-1 text-slate-700 hover:text-emerald-900 transition cursor-pointer"
+                    onClick={() => {
+                      triggerMobileHapticFeedback();
+                      setSummarySheetOrder(activeCustomerOrder);
+                    }}
+                    className="p-2 rounded-xl bg-slate-50 hover:bg-emerald-50 border border-slate-200/90 hover:border-emerald-200 flex flex-col items-center justify-center gap-1 text-slate-700 hover:text-emerald-900 transition-all duration-200 hover:scale-105 active:scale-95 cursor-pointer"
                   >
                     <Package className="w-3.5 h-3.5 text-emerald-700" />
                     <span className="text-[10px] font-extrabold">ملخص الطلب</span>
@@ -1166,10 +2033,11 @@ export const CustomerMobileExperience: React.FC<CustomerMobileExperienceProps> =
 
                   <button
                     type="button"
-                    onClick={() =>
-                      setActiveInlineTool((prev) => (prev === 'notes' ? 'none' : 'notes'))
-                    }
-                    className={`p-2 rounded-xl border flex flex-col items-center justify-center gap-1 transition cursor-pointer ${
+                    onClick={() => {
+                      triggerMobileHapticFeedback();
+                      setActiveInlineTool((prev) => (prev === 'notes' ? 'none' : 'notes'));
+                    }}
+                    className={`p-2 rounded-xl border flex flex-col items-center justify-center gap-1 transition-all duration-200 hover:scale-105 active:scale-95 cursor-pointer ${
                       activeInlineTool === 'notes'
                         ? 'bg-emerald-700 text-white border-emerald-700'
                         : 'bg-slate-50 hover:bg-emerald-50 border-slate-200/90 text-slate-700'
@@ -1181,10 +2049,11 @@ export const CustomerMobileExperience: React.FC<CustomerMobileExperienceProps> =
 
                   <button
                     type="button"
-                    onClick={() =>
-                      setActiveInlineTool((prev) => (prev === 'tip' ? 'none' : 'tip'))
-                    }
-                    className={`p-2 rounded-xl border flex flex-col items-center justify-center gap-1 transition cursor-pointer ${
+                    onClick={() => {
+                      triggerMobileHapticFeedback();
+                      setActiveInlineTool((prev) => (prev === 'tip' ? 'none' : 'tip'));
+                    }}
+                    className={`p-2 rounded-xl border flex flex-col items-center justify-center gap-1 transition-all duration-200 hover:scale-105 active:scale-95 cursor-pointer ${
                       activeInlineTool === 'tip' || mobileTipEgp > 0
                         ? 'bg-emerald-700 text-white border-emerald-700'
                         : 'bg-slate-50 hover:bg-emerald-50 border-slate-200/90 text-slate-700'
@@ -1198,10 +2067,11 @@ export const CustomerMobileExperience: React.FC<CustomerMobileExperienceProps> =
 
                   <button
                     type="button"
-                    onClick={() =>
-                      setActiveInlineTool((prev) => (prev === 'share' ? 'none' : 'share'))
-                    }
-                    className={`p-2 rounded-xl border flex flex-col items-center justify-center gap-1 transition cursor-pointer ${
+                    onClick={() => {
+                      triggerMobileHapticFeedback();
+                      setActiveInlineTool((prev) => (prev === 'share' ? 'none' : 'share'));
+                    }}
+                    className={`p-2 rounded-xl border flex flex-col items-center justify-center gap-1 transition-all duration-200 hover:scale-105 active:scale-95 cursor-pointer ${
                       activeInlineTool === 'share'
                         ? 'bg-emerald-700 text-white border-emerald-700'
                         : 'bg-slate-50 hover:bg-emerald-50 border-slate-200/90 text-slate-700'
@@ -2200,22 +3070,68 @@ export const CustomerMobileExperience: React.FC<CustomerMobileExperienceProps> =
         )}
 
         {/* ========================================================
-            TAB 4: ORDER & TRIP HISTORY (WITH 1-5 STAR RATING & FEEDBACK)
+            TAB 4: ORDER & TRIP HISTORY (WITH 1-5 STAR RATING, FEEDBACK & EMPTY STATE)
            ======================================================== */}
         {activeTab === 'history' && (
-          <div className="flex-1 p-4 overflow-y-auto flex flex-col gap-3 pb-16">
-            <div className="flex items-center justify-between">
+          <div
+            data-testid="mobile-order-history-section"
+            className="flex-1 p-4 overflow-y-auto flex flex-col gap-3 pb-16"
+          >
+            <div className="flex items-center justify-between gap-2 flex-wrap">
               <div>
                 <h2 className="font-extrabold text-base text-slate-900">سجل المشاوير والطلبات</h2>
                 <p className="text-[10px] text-slate-500">تقييم الكباتن ومراجعة الفواتير السابقة بالباجور</p>
               </div>
-              <span className="text-[11px] font-bold text-emerald-800 bg-emerald-50 px-2.5 py-0.5 rounded-full border border-emerald-200">
-                {customerOrders.length} طلبات
-              </span>
+              <div className="flex items-center gap-1.5">
+                <button
+                  type="button"
+                  data-testid="mobile-toggle-empty-history-btn"
+                  onClick={() => {
+                    triggerMobileHapticFeedback();
+                    setShowMobileEmptyHistoryPreview((prev) => !prev);
+                  }}
+                  className={`px-2 py-0.5 rounded-full text-[10px] font-bold border transition cursor-pointer ${
+                    showMobileEmptyHistoryPreview
+                      ? 'bg-amber-500 text-slate-950 border-amber-400'
+                      : 'bg-slate-100 text-slate-600 border-slate-200 hover:bg-slate-200'
+                  }`}
+                >
+                  {showMobileEmptyHistoryPreview ? 'عرض الطلبات السابقة' : 'معاينة السجل الفارغ'}
+                </button>
+                <span className="text-[11px] font-bold text-emerald-800 bg-emerald-50 px-2.5 py-0.5 rounded-full border border-emerald-200">
+                  {showMobileEmptyHistoryPreview ? 0 : customerOrders.length} طلبات
+                </span>
+              </div>
             </div>
-            {customerOrders.length === 0 ? (
-              <div className="bg-white p-6 rounded-2xl border border-slate-100 text-center text-xs text-slate-500">
-                لا توجد طلبات سابقة مسجلة لهذا الحساب حالياً.
+            {customerOrders.length === 0 || showMobileEmptyHistoryPreview ? (
+              <div
+                data-testid="mobile-order-history-empty-state"
+                className="bg-white p-6 rounded-2xl border border-slate-200/90 shadow-2xs text-center flex flex-col items-center justify-center gap-3 my-2 animate-m3-slide-in"
+              >
+                <div className="w-14 h-14 rounded-2xl bg-slate-100 border border-slate-200 flex items-center justify-center text-slate-500 shadow-inner">
+                  <Package className="w-7 h-7 text-emerald-700" />
+                </div>
+                <div className="space-y-1 max-w-[240px]">
+                  <h3 className="font-extrabold text-sm text-slate-900">
+                    لا توجد طلبات توصيل في السجل
+                  </h3>
+                  <p className="text-[11px] text-slate-500 leading-relaxed">
+                    لم تقم بحجز أي مشوار أو طلب توصيل حتى الآن. ابدأ بحجز مشوارك الأول داخل الباجور والقرى المجاورة!
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  data-testid="mobile-empty-history-book-btn"
+                  onClick={() => {
+                    triggerMobileHapticFeedback();
+                    setShowMobileEmptyHistoryPreview(false);
+                    setActiveTab('ride_booking');
+                  }}
+                  className="mt-1 px-4 py-2.5 rounded-xl bg-emerald-700 hover:bg-emerald-600 text-white font-extrabold text-xs border border-emerald-600 shadow-sm flex items-center gap-2 transition-all duration-200 hover:scale-105 active:scale-95 cursor-pointer"
+                >
+                  <Bike className="w-4 h-4 text-amber-300" />
+                  <span>حجز توصيل جديد • Book New Delivery</span>
+                </button>
               </div>
             ) : (
               <div className="flex flex-col gap-3">

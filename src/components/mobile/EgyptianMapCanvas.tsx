@@ -1,331 +1,713 @@
-import React from 'react';
-import { MapPin, Navigation, Bike, Car, Compass, Layers, Shield } from 'lucide-react';
+import React, { useState, useRef } from 'react';
+import {
+  Plus,
+  Minus,
+  RotateCcw,
+  Layers,
+  Sun,
+  Moon,
+  Maximize2,
+  Minimize2,
+  Clock,
+  Copy,
+  Check,
+} from 'lucide-react';
 
 interface EgyptianMapCanvasProps {
-  mode: 'customer' | 'captain';
+  mode: 'customer' | 'captain' | 'admin';
   pickupText?: string;
   dropoffText?: string;
   showRoute?: boolean;
+  orderStatus?: string;
+  distanceKm?: number;
+  durationMinutes?: number;
+  isDarkMode?: boolean;
+  onToggleDarkMode?: () => void;
+  mapLayerStyle?: 'route' | 'satellite';
+  onToggleMapLayerStyle?: () => void;
+  isFullScreen?: boolean;
+  onToggleFullScreen?: () => void;
+  onCopyPickup?: () => void;
+  onCopyDropoff?: () => void;
+  copiedField?: 'pickup' | 'dropoff' | null;
   isCaptainOnline?: boolean;
   hasIncomingRequest?: boolean;
   activeDeliveryStep?: number;
-  onMapClick?: () => void;
 }
 
 export const EgyptianMapCanvas: React.FC<EgyptianMapCanvasProps> = ({
   mode,
-  pickupText = 'ميدان المحطة - وسط الباجور',
-  dropoffText = 'مستشفى الباجور العام',
+  pickupText = 'ميدان المحطة - الباجور',
+  dropoffText = 'شارع الجيش - أمام مجلس المدينة',
   showRoute = true,
-  isCaptainOnline = true,
-  hasIncomingRequest = false,
-  activeDeliveryStep = 1,
-  onMapClick,
+  orderStatus = 'in_transit',
+  distanceKm = 2.4,
+  durationMinutes = 18,
+  isDarkMode: externalDarkMode,
+  onToggleDarkMode,
+  mapLayerStyle: externalLayerStyle,
+  onToggleMapLayerStyle,
+  isFullScreen = false,
+  onToggleFullScreen,
+  onCopyPickup,
+  onCopyDropoff,
+  copiedField: externalCopiedField,
 }) => {
+  // Internal fallbacks if parent doesn't control state
+  const [internalDarkMode, setInternalDarkMode] = useState(false);
+  const [internalLayerStyle, setInternalLayerStyle] = useState<'route' | 'satellite'>('route');
+  const [internalCopied, setInternalCopied] = useState<'pickup' | 'dropoff' | null>(null);
+  const [zoomScale, setZoomScale] = useState<number>(1);
+  const [panOffset, setPanOffset] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
+  const isDraggingRef = useRef(false);
+  const dragStartRef = useRef<{ x: number; y: number }>({ x: 0, y: 0 });
+
+  const isDark = externalDarkMode !== undefined ? externalDarkMode : internalDarkMode;
+  const layerStyle = externalLayerStyle !== undefined ? externalLayerStyle : internalLayerStyle;
+  const activeCopied = externalCopiedField !== undefined ? externalCopiedField : internalCopied;
+
+  const isPickupPulsing = orderStatus === 'at_pickup';
+  const isDropoffPulsing = orderStatus === 'in_transit';
+
+  const handleToggleDark = () => {
+    if (onToggleDarkMode) onToggleDarkMode();
+    else setInternalDarkMode((prev) => !prev);
+  };
+
+  const handleToggleLayer = () => {
+    if (onToggleMapLayerStyle) onToggleMapLayerStyle();
+    else setInternalLayerStyle((prev) => (prev === 'route' ? 'satellite' : 'route'));
+  };
+
+  const handleZoomIn = () => {
+    setZoomScale((prev) => Math.min(2.6, Number((prev + 0.35).toFixed(2))));
+  };
+
+  const handleZoomOut = () => {
+    setZoomScale((prev) => {
+      const next = Math.max(1, Number((prev - 0.35).toFixed(2)));
+      if (next <= 1) setPanOffset({ x: 0, y: 0 });
+      return next;
+    });
+  };
+
+  const handleResetZoom = () => {
+    setZoomScale(1);
+    setPanOffset({ x: 0, y: 0 });
+  };
+
+  const handleCopyAddress = (type: 'pickup' | 'dropoff', text: string) => {
+    if (type === 'pickup' && onCopyPickup) {
+      onCopyPickup();
+      return;
+    }
+    if (type === 'dropoff' && onCopyDropoff) {
+      onCopyDropoff();
+      return;
+    }
+    if (typeof navigator !== 'undefined' && navigator.clipboard?.writeText) {
+      navigator.clipboard.writeText(text).catch(() => {});
+    }
+    setInternalCopied(type);
+    setTimeout(() => {
+      setInternalCopied((prev) => (prev === type ? null : prev));
+    }, 2000);
+  };
+
+  const handlePointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (zoomScale <= 1) return;
+    isDraggingRef.current = true;
+    dragStartRef.current = { x: e.clientX - panOffset.x, y: e.clientY - panOffset.y };
+  };
+
+  const handlePointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (!isDraggingRef.current || zoomScale <= 1) return;
+    const maxPan = (zoomScale - 1) * 90;
+    const nextX = Math.max(-maxPan, Math.min(maxPan, e.clientX - dragStartRef.current.x));
+    const nextY = Math.max(-maxPan, Math.min(maxPan, e.clientY - dragStartRef.current.y));
+    setPanOffset({ x: nextX, y: nextY });
+  };
+
+  const handlePointerUp = () => {
+    isDraggingRef.current = false;
+  };
+
   return (
     <div
-      onClick={onMapClick}
-      className="relative w-full h-full bg-[#E5E9EC] overflow-hidden select-none cursor-grab active:cursor-grabbing"
-      style={{
-        backgroundImage: `
-          radial-gradient(#CBD5E1 1.5px, transparent 1.5px),
-          linear-gradient(to right, rgba(226, 232, 240, 0.6) 1px, transparent 1px),
-          linear-gradient(to bottom, rgba(226, 232, 240, 0.6) 1px, transparent 1px)
-        `,
-        backgroundSize: '24px 24px, 48px 48px, 48px 48px',
-      }}
+      data-testid="mobile-interactive-map-canvas"
+      onPointerDown={handlePointerDown}
+      onPointerMove={handlePointerMove}
+      onPointerUp={handlePointerUp}
+      onPointerCancel={handlePointerUp}
+      className={`relative w-full h-full overflow-hidden select-none font-['Cairo',sans-serif] transition-colors duration-300 ${
+        layerStyle === 'satellite'
+          ? 'bg-[#0c211b]'
+          : isDark
+          ? 'bg-slate-950'
+          : 'bg-[#EDEAE2]'
+      }`}
     >
-      {/* SVG Vector Map Layer representing El Bagour streets, railways, and Nile Delta canal */}
-      <svg className="absolute inset-0 w-full h-full pointer-events-none" viewBox="0 0 400 600" preserveAspectRatio="xMidYMid slice">
-        <defs>
-          {/* Subtle canal gradient */}
-          <linearGradient id="canalGradient" x1="0%" y1="0%" x2="100%" y2="100%">
-            <stop offset="0%" stopColor="#93C5FD" stopOpacity="0.7" />
-            <stop offset="100%" stopColor="#60A5FA" stopOpacity="0.7" />
-          </linearGradient>
-
-          {/* Route path gradient */}
-          <linearGradient id="routeGradient" x1="0%" y1="0%" x2="100%" y2="100%">
-            <stop offset="0%" stopColor="#059669" />
-            <stop offset="100%" stopColor="#10B981" />
-          </linearGradient>
-
-          {/* Heat map radial gradients for captain mode */}
-          <radialGradient id="demandGlow1" cx="50%" cy="50%" r="50%">
-            <stop offset="0%" stopColor="#EF4444" stopOpacity="0.45" />
-            <stop offset="70%" stopColor="#F59E0B" stopOpacity="0.2" />
-            <stop offset="100%" stopColor="#F59E0B" stopOpacity="0" />
-          </radialGradient>
-          <radialGradient id="demandGlow2" cx="50%" cy="50%" r="50%">
-            <stop offset="0%" stopColor="#F59E0B" stopOpacity="0.4" />
-            <stop offset="100%" stopColor="#F59E0B" stopOpacity="0" />
-          </radialGradient>
-        </defs>
-
-        {/* Agricultural green belts surrounding the town */}
-        <path d="M 0 0 L 110 0 L 80 140 L 0 160 Z" fill="#DCFCE7" opacity="0.6" />
-        <path d="M 310 0 L 400 0 L 400 220 L 330 180 Z" fill="#DCFCE7" opacity="0.5" />
-        <path d="M 0 440 L 90 410 L 120 600 L 0 600 Z" fill="#DCFCE7" opacity="0.6" />
-        <path d="M 300 480 L 400 450 L 400 600 L 320 600 Z" fill="#DCFCE7" opacity="0.5" />
-
-        {/* Waterway (ترعة الباجور الرئيسية) */}
-        <path
-          d="M 60 0 Q 75 180 110 300 T 145 600"
-          fill="none"
-          stroke="url(#canalGradient)"
-          strokeWidth="12"
-          strokeLinecap="round"
-        />
-
-        {/* Railway line (خط سكة حديد منوف - بنها) */}
-        <path
-          d="M 330 0 L 290 260 L 250 600"
-          fill="none"
-          stroke="#94A3B8"
-          strokeWidth="3"
-          strokeDasharray="6,5"
-        />
-
-        {/* Secondary residential grid lines */}
-        <g stroke="#CBD5E1" strokeWidth="4" strokeLinecap="round">
-          <line x1="20" y1="120" x2="380" y2="120" />
-          <line x1="30" y1="210" x2="370" y2="210" />
-          <line x1="20" y1="360" x2="380" y2="360" />
-          <line x1="40" y1="460" x2="360" y2="460" />
-          <line x1="160" y1="50" x2="160" y2="550" />
-          <line x1="240" y1="70" x2="240" y2="530" />
-          <line x1="90" y1="80" x2="310" y2="300" strokeWidth="2" strokeDasharray="4,4" />
-        </g>
-
-        {/* Main Thoroughfares (شارع الجيش، شارع الجمهورية، طريق بنها الزراعي) */}
-        {/* Shara'a El-Gaysh */}
-        <path
-          d="M 20 280 L 150 280 L 280 290 L 380 270"
-          fill="none"
-          stroke="#FFFFFF"
-          strokeWidth="16"
-          strokeLinecap="round"
-        />
-        <path
-          d="M 20 280 L 150 280 L 280 290 L 380 270"
-          fill="none"
-          stroke="#F8FAFC"
-          strokeWidth="12"
-          strokeLinecap="round"
-        />
-
-        {/* Shara'a El-Gomhouriya */}
-        <path
-          d="M 200 40 L 200 230 L 210 390 L 205 570"
-          fill="none"
-          stroke="#FFFFFF"
-          strokeWidth="18"
-          strokeLinecap="round"
-        />
-        <path
-          d="M 200 40 L 200 230 L 210 390 L 205 570"
-          fill="none"
-          stroke="#F1F5F9"
-          strokeWidth="13"
-          strokeLinecap="round"
-        />
-
-        {/* Central Square Ring (ميدان المحطة) */}
-        <circle cx="205" cy="285" r="32" fill="#FFFFFF" stroke="#CBD5E1" strokeWidth="4" />
-        <circle cx="205" cy="285" r="16" fill="#047857" opacity="0.12" />
-
-        {/* High Demand Heatspots (Captain Mode Only) */}
-        {mode === 'captain' && isCaptainOnline && (
-          <g>
-            <circle cx="205" cy="285" r="70" fill="url(#demandGlow1)" />
-            <circle cx="210" cy="420" r="45" fill="url(#demandGlow2)" />
-          </g>
-        )}
-
-        {/* Active Route Polyline (Customer Booking / Captain Active Trip) */}
-        {showRoute && (
-          <g>
-            {/* Route Shadow / Glow */}
-            <path
-              d="M 205 285 L 205 380 L 215 440 L 260 455"
-              fill="none"
-              stroke="#047857"
-              strokeWidth="10"
-              strokeOpacity="0.25"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-            />
-            {/* Route Line with animated flow */}
-            <path
-              d="M 205 285 L 205 380 L 215 440 L 260 455"
-              fill="none"
-              stroke="url(#routeGradient)"
-              strokeWidth="5"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              strokeDasharray="10 6"
-            >
-              <animate
-                attributeName="stroke-dashoffset"
-                from="32"
-                to="0"
-                dur="1.4s"
-                repeatCount="indefinite"
+      {/* Zoomable & Pannable Vector Map Layer */}
+      <div
+        className="w-full h-full transition-transform duration-200 ease-out origin-center"
+        style={{
+          transform: `translate(${panOffset.x}px, ${panOffset.y}px) scale(${zoomScale})`,
+        }}
+      >
+        <svg
+          viewBox="0 0 400 700"
+          className="w-full h-full object-cover"
+          preserveAspectRatio="xMidYMid slice"
+        >
+          <defs>
+            <pattern id="cairoGridLight" width="45" height="45" patternUnits="userSpaceOnUse">
+              <path
+                d="M 45 0 L 0 0 0 45"
+                fill="none"
+                stroke="#DCD7CC"
+                strokeWidth="1"
               />
-            </path>
-            {/* Animated Live Captain Rider Marker moving along route */}
-            <circle r="6" fill="#047857" stroke="#ffffff" strokeWidth="2">
-              <animateMotion
-                path="M 205 285 L 205 380 L 215 440 L 260 455"
-                dur="4.5s"
-                repeatCount="indefinite"
+            </pattern>
+            <pattern id="cairoGridDark" width="45" height="45" patternUnits="userSpaceOnUse">
+              <path
+                d="M 45 0 L 0 0 0 45"
+                fill="none"
+                stroke="#1e293b"
+                strokeWidth="1"
               />
-            </circle>
+            </pattern>
+            <pattern id="satelliteTerrainGrid" width="36" height="36" patternUnits="userSpaceOnUse">
+              <rect width="36" height="36" fill="#0f2922" />
+              <circle cx="9" cy="9" r="1.2" fill="#34d399" opacity="0.22" />
+              <circle cx="27" cy="24" r="1.5" fill="#10b981" opacity="0.18" />
+              <path
+                d="M 36 0 L 0 0 0 36"
+                fill="none"
+                stroke="#14532d"
+                strokeWidth="0.8"
+                opacity="0.55"
+              />
+            </pattern>
+            <linearGradient id="nileWater" x1="0" y1="0" x2="1" y2="1">
+              <stop
+                offset="0%"
+                stopColor={
+                  layerStyle === 'satellite'
+                    ? '#0369a1'
+                    : isDark
+                    ? '#0c4a6e'
+                    : '#93C5FD'
+                }
+              />
+              <stop
+                offset="100%"
+                stopColor={
+                  layerStyle === 'satellite'
+                    ? '#0284c7'
+                    : isDark
+                    ? '#075985'
+                    : '#60A5FA'
+                }
+              />
+            </linearGradient>
+            <linearGradient id="routeStroke" x1="0" y1="0" x2="1" y2="1">
+              <stop offset="0%" stopColor="#047857" />
+              <stop offset="50%" stopColor="#10B981" />
+              <stop offset="100%" stopColor="#F59E0B" />
+            </linearGradient>
+            {/* Material 3 Drop Shadow for Map Pins */}
+            <filter id="mobilePinShadow" x="-35%" y="-35%" width="170%" height="170%">
+              <feDropShadow dx="0" dy="3" stdDeviation="2.5" floodColor="#0f172a" floodOpacity="0.45" />
+            </filter>
+          </defs>
+
+          {/* Base Urban Blocks */}
+          <rect
+            width="400"
+            height="700"
+            fill={
+              layerStyle === 'satellite'
+                ? 'url(#satelliteTerrainGrid)'
+                : isDark
+                ? 'url(#cairoGridDark)'
+                : 'url(#cairoGridLight)'
+            }
+          />
+
+          {/* Satellite Topographic Contour Rings when in Satellite/Terrain mode */}
+          {layerStyle === 'satellite' && (
+            <g opacity="0.4">
+              <ellipse
+                cx="120"
+                cy="210"
+                rx="95"
+                ry="55"
+                fill="#064e3b"
+                stroke="#10b981"
+                strokeWidth="0.9"
+                strokeDasharray="5 4"
+              />
+              <ellipse
+                cx="290"
+                cy="430"
+                rx="110"
+                ry="65"
+                fill="#065f46"
+                stroke="#34d399"
+                strokeWidth="0.9"
+                strokeDasharray="4 4"
+              />
+            </g>
+          )}
+
+          {/* Green Agricultural Delta Zones around El-Bagour */}
+          <path
+            d="M 0 0 L 140 0 L 110 180 L 0 210 Z"
+            fill={
+              layerStyle === 'satellite'
+                ? '#064e3b'
+                : isDark
+                ? '#064e3b'
+                : '#D9EAD3'
+            }
+            opacity={isDark || layerStyle === 'satellite' ? '0.55' : '0.7'}
+          />
+          <path
+            d="M 270 420 L 400 390 L 400 700 L 240 700 Z"
+            fill={
+              layerStyle === 'satellite'
+                ? '#065f46'
+                : isDark
+                ? '#064e3b'
+                : '#D9EAD3'
+            }
+            opacity={isDark || layerStyle === 'satellite' ? '0.5' : '0.65'}
+          />
+          <circle
+            cx="320"
+            cy="150"
+            r="55"
+            fill={
+              layerStyle === 'satellite'
+                ? '#047857'
+                : isDark
+                ? '#065f46'
+                : '#D1E7DD'
+            }
+            opacity="0.55"
+          />
+
+          {/* Bagour Canal (ترعة الباجورية) */}
+          <path
+            d="M -20 110 Q 120 150, 195 310 T 420 560"
+            fill="none"
+            stroke="url(#nileWater)"
+            strokeWidth="26"
+            strokeLinecap="round"
+            opacity="0.85"
+          />
+          <path
+            d="M -20 110 Q 120 150, 195 310 T 420 560"
+            fill="none"
+            stroke={layerStyle === 'satellite' || isDark ? '#38bdf8' : '#DBEAFE'}
+            strokeWidth="3"
+            strokeDasharray="8 8"
+            opacity="0.55"
+          />
+
+          {/* Secondary Local Roads */}
+          <g
+            stroke={
+              layerStyle === 'satellite'
+                ? '#1e3a2f'
+                : isDark
+                ? '#1e293b'
+                : '#FFFFFF'
+            }
+            strokeWidth="7"
+            fill="none"
+            strokeLinecap="round"
+            opacity="0.9"
+          >
+            <path d="M 40 0 L 95 700" />
+            <path d="M 0 240 L 400 190" />
+            <path d="M 0 380 L 400 330" />
+            <path d="M 160 0 L 260 700" />
+            <path d="M 310 0 L 290 700" />
+            <path d="M 0 510 L 400 470" />
           </g>
-        )}
-      </svg>
 
-      {/* Street and Landmark Text Labels (Realistic Egyptian Cartography) */}
-      <div className="absolute top-[38px] left-[155px] -translate-x-1/2 bg-white/90 backdrop-blur-xs px-2 py-0.5 rounded shadow-xs text-[10px] font-bold text-slate-700 pointer-events-none">
-        طريق بنها الزراعي
+          {/* Major Arterial Highways (شارع الجيش / طريق شبين الكوم - الباجور / طريق بنها) */}
+          <g
+            stroke={
+              layerStyle === 'satellite'
+                ? '#d97706'
+                : isDark
+                ? '#334155'
+                : '#FDE68A'
+            }
+            strokeWidth="12"
+            fill="none"
+            strokeLinecap="round"
+          >
+            <path d="M -10 440 Q 180 350, 410 270" />
+            <path d="M 190 -10 Q 210 340, 145 710" />
+          </g>
+          <g
+            stroke={
+              layerStyle === 'satellite'
+                ? '#fbbf24'
+                : isDark
+                ? '#475569'
+                : '#F59E0B'
+            }
+            strokeWidth="1.5"
+            strokeDasharray="6 6"
+            fill="none"
+          >
+            <path d="M -10 440 Q 180 350, 410 270" />
+            <path d="M 190 -10 Q 210 340, 145 710" />
+          </g>
+
+          {/* Neighborhood Arabic Labels on Map */}
+          <g
+            className="font-['Cairo',sans-serif]"
+            fill={
+              layerStyle === 'satellite'
+                ? '#a7f3d0'
+                : isDark
+                ? '#94a3b8'
+                : '#64748B'
+            }
+            fontSize="10"
+            fontWeight="700"
+            textAnchor="middle"
+          >
+            <text x="95" y="95">حي المحطة</text>
+            <text x="305" y="135">شارع الجيش</text>
+            <text x="115" y="295">كوبري الباجور</text>
+            <text x="295" y="255">مجلس المدينة</text>
+            <text x="85" y="485">طريق شبين الكوم</text>
+            <text x="295" y="495">حي السلام</text>
+            <text x="210" y="175" fill={layerStyle === 'satellite' || isDark ? '#38bdf8' : '#2563EB'} fontSize="9">
+              ترعة الباجورية
+            </text>
+          </g>
+
+          {/* Active Trip Route Polyline */}
+          {showRoute && (
+            <>
+              {/* Route Shadow */}
+              <path
+                d="M 125 225 C 165 235, 195 270, 205 315 C 215 355, 255 365, 280 355"
+                fill="none"
+                stroke="#064E3B"
+                strokeWidth="9"
+                strokeLinecap="round"
+                opacity="0.22"
+              />
+              {/* Main Animated Route Line */}
+              <path
+                d="M 125 225 C 165 235, 195 270, 205 315 C 215 355, 255 365, 280 355"
+                fill="none"
+                stroke="url(#routeStroke)"
+                strokeWidth="5"
+                strokeLinecap="round"
+              />
+              {/* Animated Directional Dashes */}
+              <path
+                d="M 125 225 C 165 235, 195 270, 205 315 C 215 355, 255 365, 280 355"
+                fill="none"
+                stroke="#FFFFFF"
+                strokeWidth="2"
+                strokeDasharray="4 8"
+                strokeLinecap="round"
+              />
+
+              {/* Pickup Material 3 SVG Pin Marker (pulses on at_pickup) */}
+              <g
+                transform="translate(125, 225)"
+                filter="url(#mobilePinShadow)"
+                data-testid="mobile-map-pickup-pin"
+              >
+                {isPickupPulsing && (
+                  <>
+                    <circle cx="0" cy="0" r="24" fill="#10B981" opacity="0.28">
+                      <animate attributeName="r" values="12;28;12" dur="1.5s" repeatCount="indefinite" />
+                      <animate attributeName="opacity" values="0.45;0.05;0.45" dur="1.5s" repeatCount="indefinite" />
+                    </circle>
+                    <circle cx="0" cy="0" r="16" fill="none" stroke="#34D399" strokeWidth="2.5">
+                      <animate attributeName="r" values="9;21;9" dur="1.5s" repeatCount="indefinite" />
+                    </circle>
+                  </>
+                )}
+                <circle cx="0" cy="2" r="4" fill="#0f172a" opacity="0.3" />
+                <path
+                  d="M 0 0 C -8 -9 -13 -16 -13 -23 A 13 13 0 1 1 13 -23 C 13 -16 8 -9 0 0 Z"
+                  fill="#047857"
+                  stroke="#FFFFFF"
+                  strokeWidth="2"
+                />
+                <circle cx="0" cy="-23" r="5" fill="#FFFFFF" />
+              </g>
+
+              {/* Dropoff Material 3 SVG Pin Marker (pulses on in_transit) */}
+              <g
+                transform="translate(280, 355)"
+                filter="url(#mobilePinShadow)"
+                data-testid="mobile-map-dropoff-pin"
+              >
+                {isDropoffPulsing && (
+                  <>
+                    <circle cx="0" cy="0" r="24" fill="#F59E0B" opacity="0.3">
+                      <animate attributeName="r" values="12;28;12" dur="1.5s" repeatCount="indefinite" />
+                      <animate attributeName="opacity" values="0.5;0.05;0.5" dur="1.5s" repeatCount="indefinite" />
+                    </circle>
+                    <circle cx="0" cy="0" r="16" fill="none" stroke="#FBBF24" strokeWidth="2.5">
+                      <animate attributeName="r" values="9;21;9" dur="1.5s" repeatCount="indefinite" />
+                    </circle>
+                  </>
+                )}
+                <circle cx="0" cy="2" r="4" fill="#0f172a" opacity="0.3" />
+                <path
+                  d="M 0 0 C -8 -9 -13 -16 -13 -23 A 13 13 0 1 1 13 -23 C 13 -16 8 -9 0 0 Z"
+                  fill="#D97706"
+                  stroke="#FFFFFF"
+                  strokeWidth="2"
+                />
+                <circle cx="0" cy="-23" r="5" fill="#FFFFFF" />
+              </g>
+            </>
+          )}
+
+          {/* Nearby Available Captain Markers (Motorcycles & Cars) */}
+          <g transform="translate(198, 300)">
+            <circle cx="0" cy="0" r="16" fill="#0F172A" stroke="#10B981" strokeWidth="2.5" />
+            <text x="0" y="4" textAnchor="middle" fontSize="12">🛵</text>
+          </g>
+
+          <g transform="translate(155, 165)">
+            <circle cx="0" cy="0" r="13" fill="#FFFFFF" stroke="#047857" strokeWidth="2" />
+            <text x="0" y="4" textAnchor="middle" fontSize="10">🛵</text>
+          </g>
+
+          <g transform="translate(255, 265)">
+            <circle cx="0" cy="0" r="13" fill="#FFFFFF" stroke="#D97706" strokeWidth="2" />
+            <text x="0" y="4" textAnchor="middle" fontSize="10">🚗</text>
+          </g>
+
+          {mode === 'admin' && (
+            <>
+              <g transform="translate(90, 340)">
+                <circle cx="0" cy="0" r="13" fill="#FFFFFF" stroke="#047857" strokeWidth="2" />
+                <text x="0" y="4" textAnchor="middle" fontSize="10">🛵</text>
+              </g>
+              <g transform="translate(310, 420)">
+                <circle cx="0" cy="0" r="13" fill="#FFFFFF" stroke="#047857" strokeWidth="2" />
+                <text x="0" y="4" textAnchor="middle" fontSize="10">📦</text>
+              </g>
+            </>
+          )}
+        </svg>
       </div>
-      <div className="absolute top-[252px] left-[55px] bg-white/90 backdrop-blur-xs px-2 py-0.5 rounded shadow-xs text-[10px] font-bold text-slate-700 pointer-events-none">
-        شارع الجيش
-      </div>
-      <div className="absolute top-[320px] left-[125px] bg-white/90 backdrop-blur-xs px-2 py-0.5 rounded shadow-xs text-[10px] font-bold text-slate-600 pointer-events-none">
-        ميدان المحطة
-      </div>
-      <div className="absolute top-[465px] left-[245px] bg-white/90 backdrop-blur-xs px-2 py-0.5 rounded shadow-xs text-[10px] font-bold text-slate-700 pointer-events-none">
-        شارع الجمهورية
-      </div>
 
-      {/* High-Demand Surge Tag (Captain Mode) */}
-      {mode === 'captain' && isCaptainOnline && (
-        <div className="absolute top-[215px] left-[165px] bg-rose-600 text-white font-extrabold text-[10px] px-2 py-0.5 rounded-full shadow-md animate-bounce pointer-events-none flex items-center gap-1">
-          <span>+٢٥٪ طلب عالي</span>
-        </div>
-      )}
-
-      {/* Customer Mode: Nearby Captain Pins Moving on Map */}
-      {mode === 'customer' && (
-        <>
-          {/* Captain 1 (Scooter near Station Square) */}
-          <div className="absolute top-[240px] left-[250px] -translate-x-1/2 -translate-y-1/2 pointer-events-none transition-all duration-700">
-            <div className="relative group">
-              <div className="w-8 h-8 rounded-full bg-slate-900 text-emerald-400 flex items-center justify-center shadow-lg border-2 border-white ring-2 ring-emerald-500/30">
-                <Bike className="w-4 h-4 text-emerald-400" />
-              </div>
-              <div className="absolute -top-5 left-1/2 -translate-x-1/2 bg-slate-900/90 text-white text-[9px] font-bold px-1.5 py-0.2 rounded whitespace-nowrap">
-                ٣ دقيقة
-              </div>
-            </div>
-          </div>
-
-          {/* Captain 2 (Scooter on Shara'a El-Gaysh) */}
-          <div className="absolute top-[295px] left-[120px] -translate-x-1/2 -translate-y-1/2 pointer-events-none">
-            <div className="w-7 h-7 rounded-full bg-slate-900 text-emerald-400 flex items-center justify-center shadow-lg border-2 border-white">
-              <Bike className="w-3.5 h-3.5 text-emerald-400" />
-            </div>
-          </div>
-
-          {/* Captain 3 (Car for light cargo on Gomhouriya street) */}
-          <div className="absolute top-[160px] left-[200px] -translate-x-1/2 -translate-y-1/2 pointer-events-none">
-            <div className="relative">
-              <div className="w-8 h-8 rounded-full bg-emerald-800 text-white flex items-center justify-center shadow-lg border-2 border-white">
-                <Car className="w-4 h-4" />
-              </div>
-              <div className="absolute -top-5 left-1/2 -translate-x-1/2 bg-emerald-950 text-white text-[9px] font-bold px-1.5 py-0.2 rounded whitespace-nowrap">
-                ٦ دقيقة
-              </div>
-            </div>
-          </div>
-        </>
-      )}
-
-      {/* Pickup Location Marker (Green Pin with Pulsing Ripple) */}
-      <div className="absolute top-[285px] left-[205px] -translate-x-1/2 -translate-y-1/2 pointer-events-none">
-        <div className="relative flex items-center justify-center">
-          <div className="absolute w-12 h-12 rounded-full bg-emerald-600/20 animate-ping" />
-          <div className="w-9 h-9 rounded-full bg-emerald-600 text-white flex items-center justify-center shadow-xl border-3 border-white z-10">
-            <div className="w-3 h-3 rounded-full bg-white" />
-          </div>
-          {/* Pickup floating pill */}
-          <div className="absolute -bottom-7 left-1/2 -translate-x-1/2 bg-emerald-900 text-white text-[10px] font-bold px-2 py-0.5 rounded-full shadow-md whitespace-nowrap flex items-center gap-1 z-20">
-            <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
-            <span>نقطة الانطلاق (أنت هنا)</span>
-          </div>
-        </div>
-      </div>
-
-      {/* Destination Location Marker (Dropoff Pin) */}
+      {/* Floating Route Pill on Map Top with Copy Pickup & Copy Dropoff Buttons */}
       {showRoute && (
-        <div className="absolute top-[455px] left-[260px] -translate-x-1/2 -translate-y-1/2 pointer-events-none">
-          <div className="relative flex items-center justify-center">
-            <div className="w-9 h-9 rounded-full bg-rose-600 text-white flex items-center justify-center shadow-xl border-3 border-white z-10">
-              <MapPin className="w-4 h-4" />
+        <div
+          className="absolute top-2.5 inset-x-2.5 z-10 pointer-events-auto"
+          dir="rtl"
+        >
+          <div
+            className={`backdrop-blur-md rounded-2xl px-2.5 py-2 shadow-md border flex items-center justify-between gap-1.5 text-[10px] ${
+              isDark || layerStyle === 'satellite'
+                ? 'bg-slate-900/90 border-slate-700 text-slate-100'
+                : 'bg-white/95 border-slate-200/90 text-slate-800'
+            }`}
+          >
+            {/* Pickup Address + Copy Button */}
+            <div className="flex items-center gap-1 min-w-0 flex-1">
+              <span
+                className={`w-2 h-2 rounded-full bg-emerald-600 shrink-0 ${
+                  isPickupPulsing ? 'animate-ping' : ''
+                }`}
+              />
+              <span className="font-bold truncate">{pickupText}</span>
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  handleCopyAddress('pickup', pickupText);
+                }}
+                title="نسخ عنوان الاستلام (Copy Pickup Address)"
+                className={`p-1 rounded-lg border transition shrink-0 cursor-pointer hover:scale-105 active:scale-95 ${
+                  activeCopied === 'pickup'
+                    ? 'bg-emerald-600 text-white border-emerald-500'
+                    : isDark || layerStyle === 'satellite'
+                    ? 'bg-slate-800 text-slate-200 border-slate-700 hover:bg-slate-700'
+                    : 'bg-slate-100 text-slate-700 border-slate-200 hover:bg-slate-200'
+                }`}
+              >
+                {activeCopied === 'pickup' ? (
+                  <Check className="w-2.5 h-2.5" />
+                ) : (
+                  <Copy className="w-2.5 h-2.5" />
+                )}
+              </button>
             </div>
-            {/* Dropoff floating pill */}
-            <div className="absolute -bottom-7 left-1/2 -translate-x-1/2 bg-slate-900 text-white text-[10px] font-bold px-2 py-0.5 rounded-full shadow-md whitespace-nowrap z-20">
-              <span>الوجهة ({dropoffText.split('-')[0].trim()})</span>
+
+            <span className="text-slate-400 font-bold shrink-0">←</span>
+
+            {/* Dropoff Address + Copy Button */}
+            <div className="flex items-center gap-1 min-w-0 flex-1 justify-end">
+              <span
+                className={`w-2 h-2 rounded-full bg-amber-500 shrink-0 ${
+                  isDropoffPulsing ? 'animate-ping' : ''
+                }`}
+              />
+              <span className="font-bold truncate">{dropoffText}</span>
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  handleCopyAddress('dropoff', dropoffText);
+                }}
+                title="نسخ عنوان التوصيل (Copy Dropoff Address)"
+                className={`p-1 rounded-lg border transition shrink-0 cursor-pointer hover:scale-105 active:scale-95 ${
+                  activeCopied === 'dropoff'
+                    ? 'bg-amber-500 text-slate-950 border-amber-400'
+                    : isDark || layerStyle === 'satellite'
+                    ? 'bg-slate-800 text-slate-200 border-slate-700 hover:bg-slate-700'
+                    : 'bg-slate-100 text-slate-700 border-slate-200 hover:bg-slate-200'
+                }`}
+              >
+                {activeCopied === 'dropoff' ? (
+                  <Check className="w-2.5 h-2.5" />
+                ) : (
+                  <Copy className="w-2.5 h-2.5" />
+                )}
+              </button>
             </div>
           </div>
         </div>
       )}
 
-      {/* Captain Self Location & Orientation Pin (Captain Mode) */}
-      {mode === 'captain' && (
-        <div className="absolute top-[285px] left-[205px] -translate-x-1/2 -translate-y-1/2 pointer-events-none">
-          <div className="relative flex items-center justify-center">
-            {isCaptainOnline ? (
-              <>
-                <div className="absolute w-16 h-16 rounded-full bg-emerald-500/25 animate-ping" />
-                <div className="w-10 h-10 rounded-full bg-emerald-700 text-white flex items-center justify-center shadow-2xl border-3 border-white z-10">
-                  <Navigation className="w-5 h-5 text-white transform rotate-45" />
-                </div>
-                <div className="absolute -bottom-7 left-1/2 -translate-x-1/2 bg-emerald-900 text-white text-[10px] font-bold px-2.5 py-0.5 rounded-full shadow whitespace-nowrap z-20">
-                  موقعك الحالي (متصل)
-                </div>
-              </>
+      {/* Map Corner Controls Bar (Top-Right & Top-Left under Route Pill): Travel Estimate Badge + Layer/Theme/Fullscreen Toggles */}
+      <div
+        className="absolute top-14 inset-x-2.5 z-10 flex items-center justify-between gap-1.5 pointer-events-none"
+        dir="rtl"
+      >
+        {/* Estimated Travel Time & Distance Badge Overlay */}
+        <div
+          data-testid="mobile-map-travel-estimate-badge"
+          className="pointer-events-auto inline-flex items-center gap-1 px-2.5 py-1 rounded-xl bg-slate-900/90 text-white border border-slate-700/80 shadow-md backdrop-blur-md text-[10px] font-extrabold"
+        >
+          <Clock className="w-3 h-3 text-amber-400 shrink-0" />
+          <span>~{durationMinutes} د</span>
+          <span className="text-slate-400">•</span>
+          <span className="text-emerald-300">{distanceKm} كم</span>
+        </div>
+
+        {/* Map Layer Style (Satellite/Terrain vs Route) + Dark Mode + Full-Screen Toggles */}
+        <div className="pointer-events-auto flex items-center gap-1">
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              handleToggleLayer();
+            }}
+            title="تبديل طبقة الخريطة (Route Overview / Satellite Terrain)"
+            className={`px-2 py-1 rounded-xl border text-[10px] font-extrabold flex items-center gap-1 shadow-md backdrop-blur-md transition cursor-pointer hover:scale-105 active:scale-95 ${
+              layerStyle === 'satellite'
+                ? 'bg-emerald-700 text-white border-emerald-500'
+                : 'bg-slate-900/90 text-slate-100 border-slate-700/80 hover:bg-slate-800'
+            }`}
+          >
+            <Layers className="w-3 h-3 text-amber-400 shrink-0" />
+            <span>{layerStyle === 'satellite' ? 'تضاريس • Satellite' : 'مسار • Route'}</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              handleToggleDark();
+            }}
+            title="تبديل الوضع الليلي/النهاري للخريطة"
+            className="w-7 h-7 rounded-xl bg-slate-900/90 hover:bg-slate-800 text-white border border-slate-700/80 shadow-md backdrop-blur-md flex items-center justify-center transition cursor-pointer hover:scale-105 active:scale-95"
+          >
+            {isDark ? (
+              <Sun className="w-3.5 h-3.5 text-amber-400" />
             ) : (
-              <>
-                <div className="w-10 h-10 rounded-full bg-slate-600 text-white flex items-center justify-center shadow-xl border-3 border-white z-10">
-                  <Navigation className="w-5 h-5 text-slate-300" />
-                </div>
-                <div className="absolute -bottom-7 left-1/2 -translate-x-1/2 bg-slate-800 text-slate-200 text-[10px] font-bold px-2.5 py-0.5 rounded-full shadow whitespace-nowrap z-20">
-                  غير متصل
-                </div>
-              </>
+              <Moon className="w-3.5 h-3.5 text-slate-200" />
             )}
-          </div>
-        </div>
-      )}
+          </button>
 
-      {/* Floating Map Utility Buttons (Recenter / GPS & Layer Toggle) */}
-      <div className="absolute top-4 left-4 flex flex-col gap-2 z-10">
-        <button
-          onClick={(e) => {
-            e.stopPropagation();
-          }}
-          className="w-9 h-9 rounded-full bg-white/95 text-slate-700 shadow-md flex items-center justify-center hover:bg-white active:scale-95 transition-transform"
-          title="موقعي الحالي"
-        >
-          <Compass className="w-4 h-4 text-emerald-700" />
-        </button>
-        <button
-          onClick={(e) => {
-            e.stopPropagation();
-          }}
-          className="w-9 h-9 rounded-full bg-white/95 text-slate-700 shadow-md flex items-center justify-center hover:bg-white active:scale-95 transition-transform"
-          title="طبقات الخريطة"
-        >
-          <Layers className="w-4 h-4 text-slate-600" />
-        </button>
+          {onToggleFullScreen && (
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                onToggleFullScreen();
+              }}
+              title={isFullScreen ? 'تصغير الخريطة' : 'ملء الشاشة للخريطة'}
+              className="w-7 h-7 rounded-xl bg-slate-900/90 hover:bg-slate-800 text-white border border-slate-700/80 shadow-md backdrop-blur-md flex items-center justify-center transition cursor-pointer hover:scale-105 active:scale-95"
+            >
+              {isFullScreen ? (
+                <Minimize2 className="w-3.5 h-3.5 text-amber-400" />
+              ) : (
+                <Maximize2 className="w-3.5 h-3.5 text-emerald-400" />
+              )}
+            </button>
+          )}
+        </div>
       </div>
 
-      {/* El Bagour Local Hub Tag */}
-      <div className="absolute top-4 right-4 bg-white/95 backdrop-blur-xs px-2.5 py-1 rounded-full shadow-md text-xs font-bold text-slate-800 flex items-center gap-1.5 z-10 border border-slate-100">
-        <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
-        <span>الباجور • المنوفية</span>
+      {/* Dedicated Touch-Optimized '+' and '-' Zoom Control Buttons on Map Corner */}
+      <div
+        data-testid="mobile-map-zoom-controls"
+        className="absolute left-2.5 top-24 z-10 flex flex-col gap-1.5 pointer-events-auto"
+      >
+        <button
+          type="button"
+          onClick={(e) => {
+            e.stopPropagation();
+            handleZoomIn();
+          }}
+          disabled={zoomScale >= 2.6}
+          aria-label="تكبير الخريطة (Zoom In +)"
+          title="تكبير الخريطة (+)"
+          className="w-8 h-8 rounded-xl bg-slate-900/90 hover:bg-slate-800 disabled:opacity-40 text-white border border-slate-700/80 shadow-lg flex items-center justify-center font-black text-sm transition cursor-pointer hover:scale-105 active:scale-95"
+        >
+          <Plus className="w-4 h-4" />
+        </button>
+
+        <button
+          type="button"
+          onClick={(e) => {
+            e.stopPropagation();
+            handleZoomOut();
+          }}
+          disabled={zoomScale <= 1}
+          aria-label="تصغير الخريطة (Zoom Out -)"
+          title="تصغير الخريطة (-)"
+          className="w-8 h-8 rounded-xl bg-slate-900/90 hover:bg-slate-800 disabled:opacity-40 text-white border border-slate-700/80 shadow-lg flex items-center justify-center font-black text-sm transition cursor-pointer hover:scale-105 active:scale-95"
+        >
+          <Minus className="w-4 h-4" />
+        </button>
+
+        {zoomScale > 1.02 && (
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              handleResetZoom();
+            }}
+            title="إعادة ضبط الزووم (1x)"
+            className="w-8 h-7 rounded-xl bg-amber-500/95 hover:bg-amber-400 text-slate-950 border border-amber-300 shadow-lg flex items-center justify-center text-[10px] font-black transition cursor-pointer hover:scale-105 active:scale-95"
+          >
+            <RotateCcw className="w-3.5 h-3.5" />
+          </button>
+        )}
       </div>
     </div>
   );

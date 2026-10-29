@@ -6,6 +6,8 @@ export interface PinchZoomPanProps {
   initialScale?: number;
   scale?: number;
   onScaleChange?: (nextScale: number) => void;
+  pan?: { x: number; y: number };
+  onPanChange?: (nextPan: { x: number; y: number }) => void;
   showControls?: boolean;
   isDarkMode?: boolean;
   className?: string;
@@ -34,16 +36,26 @@ export function PinchZoomPan({
   initialScale = 1,
   scale: controlledScale,
   onScaleChange,
+  pan: controlledPan,
+  onPanChange,
   showControls = true,
   isDarkMode = true,
   className = '',
   children,
 }: PinchZoomPanProps) {
   const [internalScale, setInternalScale] = useState<number>(initialScale);
-  const [pan, setPan] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
+  const [internalPan, setInternalPan] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
   const [isDragging, setIsDragging] = useState<boolean>(false);
 
   const scale = typeof controlledScale === 'number' ? controlledScale : internalScale;
+  const pan = controlledPan ?? internalPan;
+
+  const updatePan = (nextPan: { x: number; y: number }) => {
+    setInternalPan(nextPan);
+    if (onPanChange) {
+      onPanChange(nextPan);
+    }
+  };
 
   const updateScale = (updater: number | ((prev: number) => number)) => {
     const nextRaw = typeof updater === 'function' ? updater(scale) : updater;
@@ -53,7 +65,7 @@ export function PinchZoomPan({
       onScaleChange(nextClamped);
     }
     if (nextClamped <= 1) {
-      setPan({ x: 0, y: 0 });
+      updatePan({ x: 0, y: 0 });
     }
   };
 
@@ -73,7 +85,7 @@ export function PinchZoomPan({
   const handleResetZoomPan = (e: React.MouseEvent) => {
     e.stopPropagation();
     updateScale(1);
-    setPan({ x: 0, y: 0 });
+    updatePan({ x: 0, y: 0 });
   };
 
   const handleWheel = (e: React.WheelEvent<HTMLDivElement>) => {
@@ -97,8 +109,8 @@ export function PinchZoomPan({
     if (!isDragging || !dragStartRef.current) return;
     const dx = e.clientX - dragStartRef.current.x;
     const dy = e.clientY - dragStartRef.current.y;
-    const maxOffset = Math.max(24, (scale - 1) * 90);
-    setPan({
+    const maxOffset = Math.max(48, (scale - 1) * 90);
+    updatePan({
       x: clamp(dragStartRef.current.panX + dx, -maxOffset, maxOffset),
       y: clamp(dragStartRef.current.panY + dy, -maxOffset, maxOffset),
     });
@@ -135,8 +147,8 @@ export function PinchZoomPan({
     } else if (e.touches.length === 1 && dragStartRef.current) {
       const dx = e.touches[0].clientX - dragStartRef.current.x;
       const dy = e.touches[0].clientY - dragStartRef.current.y;
-      const maxOffset = Math.max(24, (scale - 1) * 90);
-      setPan({
+      const maxOffset = Math.max(48, (scale - 1) * 90);
+      updatePan({
         x: clamp(dragStartRef.current.panX + dx, -maxOffset, maxOffset),
         y: clamp(dragStartRef.current.panY + dy, -maxOffset, maxOffset),
       });
@@ -151,7 +163,7 @@ export function PinchZoomPan({
   const handleDoubleClick = () => {
     if (scale > 1) {
       updateScale(1);
-      setPan({ x: 0, y: 0 });
+      updatePan({ x: 0, y: 0 });
     } else {
       updateScale(1.8);
     }
