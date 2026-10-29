@@ -68,12 +68,23 @@ class HttpOrderRepository implements IOrderRepository {
     OrderModel newOrder, {
     String? quoteId,
     String? quoteSignature,
+    String? quoteExpiresAt,
   }) async {
+    if (quoteId == null || quoteId.trim().isEmpty ||
+        quoteSignature == null || quoteSignature.trim().isEmpty ||
+        quoteExpiresAt == null || quoteExpiresAt.trim().isEmpty) {
+      throw ArgumentError('يلزم تقديم تسعيرة صادرة من الخادم قبل إنشاء الطلب.');
+    }
+    final expiry = DateTime.tryParse(quoteExpiresAt);
+    if (expiry == null || !expiry.isAfter(DateTime.now().toUtc())) {
+      throw ArgumentError('انتهت صلاحية التسعيرة. احسب التسعيرة من جديد قبل تأكيد الطلب.');
+    }
     final idempotencyKey = 'idemp_${DateTime.now().millisecondsSinceEpoch}_${newOrder.id}';
     final payload = {
       'serviceTypeId': _serviceTypeToBackend(newOrder.serviceType),
-      'quoteId': quoteId ?? 'quote_default',
+      'quoteId': quoteId,
       'quoteSignature': quoteSignature,
+      'quoteExpiresAt': quoteExpiresAt,
       'itemDescription': newOrder.itemDescription,
       'specialInstructions': newOrder.notes,
       'totalFarePiasters': (newOrder.estimatedFareEGP * 100).round(),
@@ -181,7 +192,7 @@ class HttpOrderRepository implements IOrderRepository {
       }),
     );
 
-    if (response.statusCode == 200) {
+    if (response.statusCode == 200 || response.statusCode == 201) {
       final decoded = jsonDecode(response.body);
       final data = decoded['data'];
       return FareQuoteModel(
@@ -192,10 +203,16 @@ class HttpOrderRepository implements IOrderRepository {
         platformFee: (data['platformFeePiasters'] as num) / 100.0,
         totalFare: (data['totalFarePiasters'] as num) / 100.0,
         estimatedDurationMinutes: data['estimatedDurationMinutes'] ?? '15-20',
-        currency: 'ج.م',
+        currency: data['currency'] == 'EGP' ? 'ج.م' : (data['currency'] ?? 'ج.م'),
+        quoteId: data['quoteId']?.toString(),
+        signature: data['signature']?.toString(),
+        expiresAt: data['expiresAt']?.toString(),
+        serviceTypeId: data['serviceTypeId']?.toString(),
+        cityId: data['cityId']?.toString(),
+        zoneId: data['zoneId']?.toString(),
       );
     } else {
-      throw Exception('فشل حساب التسعيرة من الخادم');
+      throw Exception('فشل حساب التسعيرة من الخادم (${response.statusCode})');
     }
   }
 
