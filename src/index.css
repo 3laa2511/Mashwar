@@ -14,3 +14,28 @@
 .animate-m3-slide-in {
   animation: m3-slide-in-entrance 380ms cubic-bezier(0.05, 0.7, 0.1, 1) forwards;
 }
+
+@keyframes m3-haptic-vibration {
+  0% {
+    transform: translate3d(0, 0, 0);
+  }
+  20% {
+    transform: translate3d(-2px, 0.5px, 0);
+  }
+  40% {
+    transform: translate3d(2px, -0.5px, 0);
+  }
+  60% {
+    transform: translate3d(-1.5px, 0, 0);
+  }
+  80% {
+    transform: translate3d(1.5px, 0, 0);
+  }
+  100% {
+    transform: translate3d(0, 0, 0);
+  }
+}
+
+.animate-haptic-shake {
+  animation: m3-haptic-vibration 190ms cubic-bezier(0.36, 0.07, 0.19, 0.97) both;
+}

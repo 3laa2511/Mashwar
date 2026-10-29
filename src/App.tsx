@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import JSZip from 'jszip';
 import { OwnerAdminDashboard } from './components/OwnerAdminDashboard';
 import { MobileAppFrame } from './components/mobile/MobileAppFrame';
@@ -52,8 +52,16 @@ import {
   Edit3,
   ChevronDown,
   ChevronUp,
-  MessageSquare
+  MessageSquare,
+  Volume2,
+  VolumeX,
+  ArrowDown
 } from 'lucide-react';
+
+// Subtle base64 WAV notification chime fallback for HTMLAudioElement & Web Audio API
+const ORDER_STATUS_CHIME_WAV_DATA_URI =
+  'data:audio/wav;base64,UklGRigAAABXQVZFZm10IBIAAAABAAEARKwAAIhYAQACABAAAABkYXRhAgAAAAEA';
+const PULL_TO_REFRESH_THRESHOLD = 40;
 
 // Egyptian El Bagour landmarks
 const EL_BAGOUR_LANDMARKS = [
@@ -623,9 +631,140 @@ export default function App() {
   const [dropoffAddressCopied, setDropoffAddressCopied] = useState<boolean>(false);
   const [isWidgetStatusSlideAnimating, setIsWidgetStatusSlideAnimating] = useState<boolean>(true);
   const [isFullScreenMapOpen, setIsFullScreenMapOpen] = useState<boolean>(false);
+  const [mapZoomScale, setMapZoomScale] = useState<number>(1);
+  const [mapLayerStyle, setMapLayerStyle] = useState<'route' | 'satellite'>('route');
+  const [isHapticVibrating, setIsHapticVibrating] = useState<boolean>(false);
+  const [hapticPulseCount, setHapticPulseCount] = useState<number>(0);
+
+  // Subtle Sound Notification state & refs for active order status updates
+  const [isSoundNotificationEnabled, setIsSoundNotificationEnabled] = useState<boolean>(true);
+  const [isAudioCuePlaying, setIsAudioCuePlaying] = useState<boolean>(false);
+  const [audioCueCount, setAudioCueCount] = useState<number>(0);
+  const [lastAudioCueAtLabel, setLastAudioCueAtLabel] = useState<string | null>(null);
+  const [simulatedTimelineStatusOverride, setSimulatedTimelineStatusOverride] = useState<string | null>(null);
+  const statusAudioRef = useRef<HTMLAudioElement | null>(null);
+
+  // Pull-to-refresh gesture state & refs for the active order tracking widget container
+  const [pullDistance, setPullDistance] = useState<number>(0);
+  const [isPullingToRefresh, setIsPullingToRefresh] = useState<boolean>(false);
+  const pullStartYRef = useRef<number | null>(null);
+  const currentPullDistanceRef = useRef<number>(0);
+  const isMousePullingRef = useRef<boolean>(false);
+
+  const playOrderStatusNotificationSound = () => {
+    if (!isSoundNotificationEnabled) return;
+
+    setIsAudioCuePlaying(true);
+    setAudioCueCount((prev) => prev + 1);
+    setLastAudioCueAtLabel(
+      new Date().toLocaleTimeString('ar-EG', {
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit',
+      })
+    );
+
+    // 1. HTML5 Audio element / Audio constructor trigger
+    try {
+      if (statusAudioRef.current) {
+        statusAudioRef.current.currentTime = 0;
+        const playPromise = statusAudioRef.current.play();
+        if (playPromise && typeof playPromise.catch === 'function') {
+          playPromise.catch(() => {});
+        }
+      } else if (typeof window !== 'undefined' && typeof window.Audio === 'function') {
+        const chimeAudio = new window.Audio(ORDER_STATUS_CHIME_WAV_DATA_URI);
+        chimeAudio.volume = 0.25;
+        const playPromise = chimeAudio.play();
+        if (playPromise && typeof playPromise.catch === 'function') {
+          playPromise.catch(() => {});
+        }
+      }
+    } catch {
+      // Ignore autoplay restrictions in headless/restricted environments
+    }
+
+    // 2. Web Audio API subtle two-note harmonic chime (D5 -> A5)
+    try {
+      if (typeof window !== 'undefined') {
+        const AudioCtx =
+          window.AudioContext ||
+          (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+        if (AudioCtx) {
+          const ctx = new AudioCtx();
+          const now = ctx.currentTime;
+          const osc = ctx.createOscillator();
+          const gain = ctx.createGain();
+          osc.type = 'sine';
+          osc.frequency.setValueAtTime(587.33, now);
+          osc.frequency.exponentialRampToValueAtTime(880, now + 0.14);
+          gain.gain.setValueAtTime(0.06, now);
+          gain.gain.exponentialRampToValueAtTime(0.001, now + 0.28);
+          osc.connect(gain);
+          gain.connect(ctx.destination);
+          osc.start(now);
+          osc.stop(now + 0.29);
+          window.setTimeout(() => {
+            try {
+              ctx.close();
+            } catch {
+              // ignore close errors
+            }
+          }, 350);
+        }
+      }
+    } catch {
+      // Ignore Web Audio API errors in unsupported environments
+    }
+
+    window.setTimeout(() => {
+      setIsAudioCuePlaying(false);
+    }, 900);
+  };
+
+  const triggerHapticFeedback = () => {
+    if (typeof navigator !== 'undefined' && typeof navigator.vibrate === 'function') {
+      try {
+        navigator.vibrate(12);
+      } catch {
+        // ignore vibration permission errors
+      }
+    }
+    setIsHapticVibrating(true);
+    setHapticPulseCount((prev) => prev + 1);
+    window.setTimeout(() => {
+      setIsHapticVibrating(false);
+    }, 220);
+  };
+
+  const handleWidgetButtonPressCapture = (e: React.MouseEvent<HTMLDivElement>) => {
+    const target = e.target as HTMLElement | null;
+    if (target && target.closest('button')) {
+      triggerHapticFeedback();
+    }
+  };
 
   const handleToggleFullScreenMap = () => {
     setIsFullScreenMapOpen((prev) => !prev);
+  };
+
+  const handleMapZoomIn = (e?: React.MouseEvent) => {
+    if (e) e.stopPropagation();
+    setMapZoomScale((prev) => Number(Math.min(3.5, Math.max(1, prev + 0.4)).toFixed(2)));
+  };
+
+  const handleMapZoomOut = (e?: React.MouseEvent) => {
+    if (e) e.stopPropagation();
+    setMapZoomScale((prev) => Number(Math.min(3.5, Math.max(1, prev - 0.4)).toFixed(2)));
+  };
+
+  const handleMapZoomReset = (e?: React.MouseEvent) => {
+    if (e) e.stopPropagation();
+    setMapZoomScale(1);
+  };
+
+  const handleToggleMapLayerStyle = () => {
+    setMapLayerStyle((prev) => (prev === 'route' ? 'satellite' : 'route'));
   };
 
   const handleBookNewDelivery = () => {
@@ -663,6 +802,10 @@ export default function App() {
       setTrackedCancelledOrderId(null);
     }
   }, [activeCustomerOrder?.id, trackedCancelledOrderId]);
+
+  useEffect(() => {
+    setSimulatedTimelineStatusOverride(null);
+  }, [activeCustomerOrder?.id, activeCustomerOrder?.status]);
 
   // Extract the active order and its human-readable acceptance timestamp from existing order state
   const currentTrackedOrder =
@@ -704,7 +847,9 @@ export default function App() {
   const currentOrderCaptainTotalTripsElBagour =
     140 + (matchedCaptainProfile?.completedToday ?? captainCompletedDeliveries ?? 8);
   const currentOrderStatus =
-    ('status' in currentTrackedOrder && currentTrackedOrder.status) || activeOrderState.status;
+    (trackedCancelledOrderId ? 'cancelled' : simulatedTimelineStatusOverride) ||
+    ('status' in currentTrackedOrder && currentTrackedOrder.status) ||
+    activeOrderState.status;
   const currentOrderPickup =
     ('pickupAddress' in currentTrackedOrder && currentTrackedOrder.pickupAddress) ||
     ('pickup' in currentTrackedOrder && currentTrackedOrder.pickup) ||
@@ -905,10 +1050,11 @@ export default function App() {
     orderTimelineSteps.findIndex((step) => step.key === normalizedStatusForTimeline)
   );
 
-  // Trigger subtle pulse animation on the status timeline and Material 3 slide-in entrance on widget whenever an order status update is received
+  // Trigger subtle pulse animation, sound notification cue, and Material 3 slide-in entrance whenever an order status update is received or timeline advances
   useEffect(() => {
     setIsTimelinePulsing(true);
     setIsWidgetStatusSlideAnimating(false);
+    playOrderStatusNotificationSound();
     const frameTimer = window.setTimeout(() => {
       setIsWidgetStatusSlideAnimating(true);
     }, 15);
@@ -923,7 +1069,20 @@ export default function App() {
       window.clearTimeout(pulseTimer);
       window.clearTimeout(slideSettleTimer);
     };
-  }, [currentOrderStatus, currentTrackedOrder.id]);
+  }, [currentOrderStatus, activeTimelineIndex, currentTrackedOrder.id]);
+
+  // Advance active order status timeline to the next stage with subtle audio cue
+  const handleAdvanceOrderTimelineStatus = () => {
+    const nextStepIndex = (activeTimelineIndex + 1) % orderTimelineSteps.length;
+    const nextStepKey = orderTimelineSteps[nextStepIndex].key;
+    setTrackedCancelledOrderId(null);
+    setSimulatedTimelineStatusOverride(nextStepKey);
+    setActiveOrderState((prev) => ({
+      ...prev,
+      status: nextStepKey,
+    }));
+    playOrderStatusNotificationSound();
+  };
 
   useEffect(() => {
     const trackedNotes =
@@ -967,19 +1126,38 @@ export default function App() {
         riderStroke: '#0f172a',
         labelFill: '#334155',
       };
+  const isMapPinStatusPulsing =
+    currentOrderStatus === 'at_pickup' || currentOrderStatus === 'in_transit';
+  const isSatelliteTerrainLayer = mapLayerStyle === 'satellite';
+  const satelliteBackgroundFill = isDarkMode ? '#061a14' : '#d1fae5';
+  const satelliteContourStroke = isDarkMode ? '#115e59' : '#0d9488';
   const elBagourStaticMapSvgUri = `data:image/svg+xml;utf8,${encodeURIComponent(
-    `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 280 96" width="280" height="96" data-theme="${mapThemePalette.mode}">
-      <rect width="280" height="96" rx="12" fill="${mapThemePalette.backgroundFill}"/>
-      <path d="M0 24 H280 M0 52 H280 M0 78 H280 M52 0 V96 M135 0 V96 M218 0 V96" stroke="${mapThemePalette.gridStroke}" stroke-width="1.5"/>
-      <polyline points="${elBagourRoutePolylinePoints}" stroke="${mapThemePalette.baseRouteStroke}" stroke-opacity="0.4" stroke-width="5" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+    `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 280 96" width="280" height="96" data-theme="${mapThemePalette.mode}" data-layer="${mapLayerStyle}">
+      <defs>
+        <filter id="m3-static-pin-shadow" x="-30%" y="-30%" width="160%" height="160%">
+          <feDropShadow dx="0" dy="1.8" stdDeviation="1.5" flood-color="#020617" flood-opacity="0.55"/>
+        </filter>
+      </defs>
+      <rect width="280" height="96" rx="12" fill="${isSatelliteTerrainLayer ? satelliteBackgroundFill : mapThemePalette.backgroundFill}"/>
+      ${
+        isSatelliteTerrainLayer
+          ? `<path d="M0 18 Q70 8 140 22 T280 14 M0 48 Q85 34 165 54 T280 42 M0 78 Q95 66 190 84 T280 72" stroke="${satelliteContourStroke}" stroke-width="1.5" stroke-dasharray="4 3" fill="none" opacity="0.75"/>
+             <path d="M18 0 Q38 48 24 96 M118 0 Q138 48 126 96 M212 0 Q196 48 224 96" stroke="#0284c7" stroke-width="2.2" stroke-opacity="0.45" fill="none"/>`
+          : `<path d="M0 24 H280 M0 52 H280 M0 78 H280 M52 0 V96 M135 0 V96 M218 0 V96" stroke="${mapThemePalette.gridStroke}" stroke-width="1.5"/>`
+      }
+      <polyline points="${elBagourRoutePolylinePoints}" stroke="${mapThemePalette.baseRouteStroke}" stroke-opacity="0.45" stroke-width="5" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
       <polyline id="animated-route-polyline" points="${elBagourRoutePolylinePoints}" stroke="${mapThemePalette.activeRouteStroke}" stroke-width="3" stroke-dasharray="8 6" stroke-linecap="round" stroke-linejoin="round" fill="none">
         <animate attributeName="stroke-dashoffset" from="28" to="0" dur="1.2s" repeatCount="indefinite"/>
       </polyline>
-      <circle cx="38" cy="68" r="7" fill="${mapThemePalette.pickupFill}"/>
-      <circle cx="38" cy="68" r="3" fill="${mapThemePalette.pickupCenter}"/>
-      <circle cx="242" cy="28" r="7" fill="${mapThemePalette.dropoffFill}"/>
-      <circle cx="242" cy="28" r="3" fill="${mapThemePalette.dropoffCenter}"/>
-      <text x="140" y="15" fill="${mapThemePalette.labelFill}" font-family="Cairo, sans-serif" font-size="9" font-weight="bold" text-anchor="middle">EL BAGOUR LIVE ROUTE MAP (${mapThemePalette.mode.toUpperCase()})</text>
+      <g filter="url(#m3-static-pin-shadow)">
+        <path d="M38 48 C32.5 48 28 52.5 28 58 C28 63.2 38 70 38 70 C38 70 48 63.2 48 58 C48 52.5 43.5 48 38 48 Z" fill="${mapThemePalette.pickupFill}" stroke="#ffffff" stroke-width="1.2"/>
+        <rect x="35" y="55" width="6" height="6" rx="1.2" fill="${mapThemePalette.pickupCenter}"/>
+      </g>
+      <g filter="url(#m3-static-pin-shadow)">
+        <path d="M242 8 C236.5 8 232 12.5 232 18 C232 23.2 242 30 242 30 C242 30 252 23.2 252 18 C252 12.5 247.5 8 242 8 Z" fill="${mapThemePalette.dropoffFill}" stroke="#ffffff" stroke-width="1.2"/>
+        <path d="M242 14 L245.5 18 L242 22 L238.5 18 Z" fill="${mapThemePalette.dropoffCenter}"/>
+      </g>
+      <text x="140" y="15" fill="${mapThemePalette.labelFill}" font-family="Cairo, sans-serif" font-size="9" font-weight="bold" text-anchor="middle">EL BAGOUR ${isSatelliteTerrainLayer ? 'SATELLITE / TERRAIN' : 'LIVE ROUTE'} MAP (${mapThemePalette.mode.toUpperCase()})</text>
     </svg>`
   )}`;
 
@@ -1075,6 +1253,7 @@ export default function App() {
       );
       setIsTimelinePulsing(true);
       setIsWidgetStatusSlideAnimating(true);
+      playOrderStatusNotificationSound();
       window.setTimeout(() => {
         setIsTimelinePulsing(false);
       }, 2600);
@@ -1093,6 +1272,103 @@ export default function App() {
           setRefreshProgress(0);
         }, 1200);
       }, 420);
+    }
+  };
+
+  // Pull-to-refresh touch & mouse gesture handlers for the active order tracking widget container
+  const extractTouchY = (
+    e: React.TouchEvent<HTMLDivElement>
+  ): number => {
+    const touch = e.touches?.[0] || e.changedTouches?.[0];
+    if (!touch) return 0;
+    return touch.clientY ?? touch.pageY ?? touch.screenY ?? 0;
+  };
+
+  const handleWidgetTouchStart = (e: React.TouchEvent<HTMLDivElement>) => {
+    if (isRefreshingOrder) return;
+    pullStartYRef.current = extractTouchY(e);
+    currentPullDistanceRef.current = 0;
+    setIsPullingToRefresh(true);
+    setPullDistance(0);
+  };
+
+  const handleWidgetTouchMove = (e: React.TouchEvent<HTMLDivElement>) => {
+    if (isRefreshingOrder) return;
+    if (pullStartYRef.current === null) {
+      pullStartYRef.current = 0;
+    }
+    const currentY = extractTouchY(e);
+    const deltaY = currentY - pullStartYRef.current;
+    if (deltaY > 0) {
+      const clampedDistance = Math.min(120, deltaY);
+      currentPullDistanceRef.current = clampedDistance;
+      setIsPullingToRefresh(true);
+      setPullDistance(clampedDistance);
+    } else {
+      currentPullDistanceRef.current = 0;
+      setPullDistance(0);
+    }
+  };
+
+  const handleWidgetTouchEnd = (e: React.TouchEvent<HTMLDivElement>) => {
+    let finalDistance = currentPullDistanceRef.current;
+    if (finalDistance === 0 && pullStartYRef.current !== null && e.changedTouches?.[0]) {
+      const endY =
+        e.changedTouches[0].clientY ??
+        e.changedTouches[0].pageY ??
+        e.changedTouches[0].screenY ??
+        0;
+      finalDistance = Math.max(0, endY - pullStartYRef.current);
+    }
+    pullStartYRef.current = null;
+    currentPullDistanceRef.current = 0;
+    setIsPullingToRefresh(false);
+    setPullDistance(0);
+
+    if (finalDistance >= 25 && !isRefreshingOrder) {
+      void handleManualRefreshOrderStatus();
+    }
+  };
+
+  const handleWidgetTouchCancel = () => {
+    pullStartYRef.current = null;
+    currentPullDistanceRef.current = 0;
+    setIsPullingToRefresh(false);
+    setPullDistance(0);
+  };
+
+  const handleWidgetMouseDown = (e: React.MouseEvent<HTMLDivElement>) => {
+    if (isRefreshingOrder) return;
+    const target = e.target as HTMLElement | null;
+    if (target && target.closest('button, input, textarea, select, a, [data-testid="pinch-zoom-pan-container"]')) {
+      return;
+    }
+    isMousePullingRef.current = true;
+    pullStartYRef.current = e.clientY;
+    currentPullDistanceRef.current = 0;
+  };
+
+  const handleWidgetMouseMove = (e: React.MouseEvent<HTMLDivElement>) => {
+    if (!isMousePullingRef.current || pullStartYRef.current === null || isRefreshingOrder) return;
+    const deltaY = e.clientY - pullStartYRef.current;
+    if (deltaY > 8) {
+      const clampedDistance = Math.min(120, deltaY);
+      currentPullDistanceRef.current = clampedDistance;
+      setIsPullingToRefresh(true);
+      setPullDistance(clampedDistance);
+    }
+  };
+
+  const handleWidgetMouseUp = () => {
+    if (!isMousePullingRef.current) return;
+    const finalDistance = currentPullDistanceRef.current;
+    isMousePullingRef.current = false;
+    pullStartYRef.current = null;
+    currentPullDistanceRef.current = 0;
+    setIsPullingToRefresh(false);
+    setPullDistance(0);
+    if (finalDistance >= PULL_TO_REFRESH_THRESHOLD && !isRefreshingOrder) {
+      void handleManualRefreshOrderStatus();
     }
   };
 
@@ -1552,12 +1828,105 @@ export default function App() {
             <div
               data-testid="active-order-tracking-widget"
               data-status-animation={isWidgetStatusSlideAnimating ? 'slide-in' : 'settled'}
+              data-haptic-feedback={isHapticVibrating ? 'active' : 'idle'}
+              data-haptic-pulses={hapticPulseCount}
+              data-pull-to-refresh={
+                isRefreshingOrder
+                  ? 'refreshing'
+                  : pullDistance >= PULL_TO_REFRESH_THRESHOLD
+                    ? 'ready'
+                    : isPullingToRefresh
+                      ? 'pulling'
+                      : 'idle'
+              }
+              data-pull-distance={Math.round(pullDistance)}
+              data-audio-cue={isAudioCuePlaying ? 'playing' : 'idle'}
+              data-audio-cue-count={audioCueCount}
+              data-sound-enabled={isSoundNotificationEnabled ? 'true' : 'false'}
+              onClickCapture={handleWidgetButtonPressCapture}
+              onTouchStart={handleWidgetTouchStart}
+              onTouchMove={handleWidgetTouchMove}
+              onTouchEnd={handleWidgetTouchEnd}
+              onTouchCancel={handleWidgetTouchCancel}
+              onMouseDown={handleWidgetMouseDown}
+              onMouseMove={handleWidgetMouseMove}
+              onMouseUp={handleWidgetMouseUp}
+              onMouseLeave={handleWidgetMouseUp}
               className={`bg-slate-900 border border-slate-800 rounded-2xl p-4 shadow-xl grid grid-cols-1 gap-4 font-['Cairo',sans-serif] transform transition-all duration-300 ease-out ${
-                isWidgetStatusSlideAnimating
-                  ? 'animate-m3-slide-in translate-y-0 opacity-100 ring-1 ring-amber-500/30'
-                  : 'translate-y-0 opacity-100'
+                isHapticVibrating
+                  ? 'animate-haptic-shake ring-1 ring-amber-400/50'
+                  : isWidgetStatusSlideAnimating
+                    ? 'animate-m3-slide-in translate-y-0 opacity-100 ring-1 ring-amber-500/30'
+                    : 'translate-y-0 opacity-100'
               }`}
             >
+              {/* Hidden HTML5 Audio Element for subtle order status notification cue */}
+              <audio
+                ref={statusAudioRef}
+                data-testid="order-status-audio-element"
+                src={ORDER_STATUS_CHIME_WAV_DATA_URI}
+                preload="auto"
+                className="hidden"
+              />
+
+              {/* Pull-to-Refresh Gesture Indicator Banner */}
+              <div
+                data-testid="pull-to-refresh-indicator"
+                data-pull-state={
+                  isRefreshingOrder
+                    ? 'refreshing'
+                    : pullDistance >= PULL_TO_REFRESH_THRESHOLD
+                      ? 'ready'
+                      : isPullingToRefresh && pullDistance > 0
+                        ? 'pulling'
+                        : 'idle'
+                }
+                role="status"
+                aria-live="polite"
+                onClick={() => {
+                  if (!isRefreshingOrder) {
+                    void handleManualRefreshOrderStatus();
+                  }
+                }}
+                className={`w-full rounded-xl border px-3.5 py-2 flex items-center justify-between gap-2 text-xs font-['Cairo',sans-serif] transition-all duration-200 cursor-pointer select-none ${
+                  isRefreshingOrder
+                    ? 'bg-amber-500/15 border-amber-500/40 text-amber-300 shadow-sm'
+                    : pullDistance >= PULL_TO_REFRESH_THRESHOLD
+                      ? 'bg-amber-500/20 border-amber-400 text-amber-200 shadow-md'
+                      : isPullingToRefresh && pullDistance > 0
+                        ? 'bg-slate-800/90 border-amber-500/30 text-amber-300'
+                        : 'bg-slate-950/90 border-slate-800/90 text-slate-400 hover:border-slate-700 hover:text-slate-300'
+                }`}
+              >
+                <div className="flex items-center gap-2">
+                  {isRefreshingOrder ? (
+                    <RefreshCw className="w-3.5 h-3.5 text-amber-400 animate-spin shrink-0" />
+                  ) : (
+                    <ArrowDown
+                      className={`w-3.5 h-3.5 text-amber-400 shrink-0 transition-transform duration-200 ${
+                        pullDistance >= PULL_TO_REFRESH_THRESHOLD ? 'rotate-180 scale-110' : ''
+                      }`}
+                    />
+                  )}
+                  <span className="font-bold">
+                    {isRefreshingOrder
+                      ? 'Refreshing order status... • جاري تحديث حالة الطلب...'
+                      : pullDistance >= PULL_TO_REFRESH_THRESHOLD
+                        ? 'Release to refresh order status • أفلت لتحديث حالة الطلب الآن'
+                        : isPullingToRefresh && pullDistance > 0
+                          ? `Pulling to refresh (${Math.round(pullDistance)}px) • اسحب للأسفل للتحديث`
+                          : 'Pull down to refresh order status • اسحب للأسفل لتحديث حالة الطلب'}
+                  </span>
+                </div>
+                <span className="text-[11px] font-mono text-amber-400/90">
+                  {isRefreshingOrder
+                    ? `${refreshProgress}%`
+                    : pullDistance > 0
+                      ? `${Math.min(100, Math.round((pullDistance / PULL_TO_REFRESH_THRESHOLD) * 100))}%`
+                      : 'Pull-to-Refresh'}
+                </span>
+              </div>
+
               {/* Tier 1 Grid: Order Header + Live Timers (7 cols) & El Bagour Static Map Thumbnail (5 cols) */}
               <div className="grid grid-cols-1 lg:grid-cols-12 gap-4 items-stretch">
                 {/* Order Summary & Live Timers Card */}
@@ -1576,7 +1945,7 @@ export default function App() {
                           data-testid="active-order-status-badge"
                           className="text-xs font-bold text-slate-200 bg-slate-800 px-3 py-1 rounded-xl border border-slate-700"
                         >
-                          الحالة: {('status' in currentTrackedOrder && currentTrackedOrder.status) || activeOrderState.status}
+                          الحالة: {currentOrderStatus}
                         </span>
                       </div>
                       <p className="text-xs text-slate-400 leading-relaxed font-['Cairo',sans-serif]">
@@ -1639,9 +2008,28 @@ export default function App() {
                   data-testid="active-order-static-map-thumbnail"
                   data-map-view-mode={isFullScreenMapOpen ? 'fullscreen' : 'thumbnail'}
                   data-theme-mode={isDarkMode ? 'dark' : 'light'}
+                  data-map-layer={mapLayerStyle}
+                  data-map-zoom={mapZoomScale.toFixed(2)}
+                  data-marker-pulse={isMapPinStatusPulsing ? 'active' : 'idle'}
+                  data-loading-skeleton={isRefreshingOrder ? 'true' : 'false'}
+                  aria-busy={isRefreshingOrder}
                   aria-label="El Bagour Route Static Map Thumbnail"
-                  className="lg:col-span-5 bg-slate-950 border border-slate-800 rounded-2xl p-4 grid grid-cols-1 sm:grid-cols-2 gap-4 items-center font-['Cairo',sans-serif]"
+                  className="relative lg:col-span-5 bg-slate-950 border border-slate-800 rounded-2xl p-4 grid grid-cols-1 sm:grid-cols-2 gap-4 items-center font-['Cairo',sans-serif]"
                 >
+                  {isRefreshingOrder && (
+                    <div
+                      data-testid="static-map-skeleton-loader"
+                      aria-label="Loading map route data"
+                      className="col-span-full bg-slate-900/95 border border-slate-800 rounded-xl p-3 grid grid-cols-1 sm:grid-cols-2 gap-3 animate-pulse"
+                    >
+                      <div className="h-20 w-full rounded-xl bg-slate-800/90 border border-slate-700/60" />
+                      <div className="flex flex-col justify-center gap-2.5">
+                        <div className="h-6 w-full rounded-lg bg-slate-800/90" />
+                        <div className="h-6 w-5/6 rounded-lg bg-slate-800/80" />
+                        <div className="h-5 w-2/3 rounded-lg bg-slate-800/70" />
+                      </div>
+                    </div>
+                  )}
                   <div
                     className={`relative w-full ${
                       isFullScreenMapOpen ? 'h-40 sm:col-span-2' : 'h-24'
@@ -1649,23 +2037,53 @@ export default function App() {
                       isDarkMode
                         ? 'border-slate-800 bg-slate-900'
                         : 'border-slate-300 bg-slate-100'
-                    }`}
+                    } ${isRefreshingOrder ? 'opacity-40 animate-pulse' : 'opacity-100'}`}
                   >
-                    <PinchZoomPan isDarkMode={isDarkMode}>
+                    <PinchZoomPan
+                      isDarkMode={isDarkMode}
+                      scale={mapZoomScale}
+                      onScaleChange={setMapZoomScale}
+                      showControls={false}
+                    >
                       <img
                         src={elBagourStaticMapSvgUri}
                         alt={`El Bagour Route Static Map from ${currentOrderPickup} to ${currentOrderDropoff}`}
                         data-testid="static-map-thumbnail-img"
                         data-theme-mode={isDarkMode ? 'dark' : 'light'}
+                        data-map-layer={mapLayerStyle}
                         className="w-full h-full object-cover pointer-events-none"
                       />
                       <svg
                         data-testid="active-order-map-polyline-svg"
                         data-theme-mode={isDarkMode ? 'dark' : 'light'}
+                        data-map-layer={mapLayerStyle}
+                        data-marker-pulse={isMapPinStatusPulsing ? 'active' : 'idle'}
                         viewBox="0 0 280 96"
                         className="absolute inset-0 w-full h-full pointer-events-none"
                         aria-label="Animated Route Path Polyline"
                       >
+                        <defs>
+                          <filter id="m3-map-pin-shadow" x="-35%" y="-35%" width="170%" height="170%">
+                            <feDropShadow
+                              dx="0"
+                              dy="2"
+                              stdDeviation="1.8"
+                              floodColor="#020617"
+                              floodOpacity="0.6"
+                            />
+                          </filter>
+                        </defs>
+                        {isSatelliteTerrainLayer && (
+                          <g data-testid="map-satellite-terrain-contours" opacity="0.65">
+                            <path
+                              d="M0 22 Q70 10 145 26 T280 18 M0 60 Q95 44 175 64 T280 50"
+                              fill="none"
+                              stroke={satelliteContourStroke}
+                              strokeWidth="1.4"
+                              strokeDasharray="4 3"
+                            />
+                          </g>
+                        )}
                         <polyline
                           data-testid="route-base-polyline"
                           points={elBagourRoutePolylinePoints}
@@ -1695,8 +2113,71 @@ export default function App() {
                             repeatCount="indefinite"
                           />
                         </polyline>
-                        <circle cx="38" cy="68" r="5" fill={mapThemePalette.pickupFill} />
-                        <circle cx="242" cy="28" r="5" fill={mapThemePalette.dropoffFill} />
+
+                        {/* Distinct Material 3 Style SVG Pickup Map Pin Icon (Package Origin) */}
+                        <g
+                          data-testid="map-svg-pickup-pin"
+                          data-pin-type="pickup"
+                          data-pulse-active={isMapPinStatusPulsing ? 'true' : 'false'}
+                          filter="url(#m3-map-pin-shadow)"
+                          className={`drop-shadow-md transition-transform duration-300 ${
+                            isMapPinStatusPulsing ? 'animate-pulse' : ''
+                          }`}
+                        >
+                          {isMapPinStatusPulsing && (
+                            <path
+                              d="M38 45 C30.8 45 25 50.8 25 58 C25 64.5 38 72.5 38 72.5 C38 72.5 51 64.5 51 58 C51 50.8 45.2 45 38 45 Z"
+                              fill={mapThemePalette.pickupFill}
+                              fillOpacity="0.28"
+                            />
+                          )}
+                          <path
+                            d="M38 48 C32.5 48 28 52.5 28 58 C28 63.2 38 70 38 70 C38 70 48 63.2 48 58 C48 52.5 43.5 48 38 48 Z"
+                            fill={mapThemePalette.pickupFill}
+                            stroke="#ffffff"
+                            strokeWidth="1.4"
+                            strokeLinejoin="round"
+                          />
+                          <rect
+                            x="35"
+                            y="55"
+                            width="6"
+                            height="6"
+                            rx="1.2"
+                            fill={mapThemePalette.pickupCenter}
+                          />
+                        </g>
+
+                        {/* Distinct Material 3 Style SVG Dropoff Map Pin Icon (Destination Target) */}
+                        <g
+                          data-testid="map-svg-dropoff-pin"
+                          data-pin-type="dropoff"
+                          data-pulse-active={isMapPinStatusPulsing ? 'true' : 'false'}
+                          filter="url(#m3-map-pin-shadow)"
+                          className={`drop-shadow-md transition-transform duration-300 ${
+                            isMapPinStatusPulsing ? 'animate-pulse' : ''
+                          }`}
+                        >
+                          {isMapPinStatusPulsing && (
+                            <path
+                              d="M242 5 C234.8 5 229 10.8 229 18 C229 24.5 242 32.5 242 32.5 C242 32.5 255 24.5 255 18 C255 10.8 249.2 5 242 5 Z"
+                              fill={mapThemePalette.dropoffFill}
+                              fillOpacity="0.28"
+                            />
+                          )}
+                          <path
+                            d="M242 8 C236.5 8 232 12.5 232 18 C232 23.2 242 30 242 30 C242 30 252 23.2 252 18 C252 12.5 247.5 8 242 8 Z"
+                            fill={mapThemePalette.dropoffFill}
+                            stroke="#ffffff"
+                            strokeWidth="1.4"
+                            strokeLinejoin="round"
+                          />
+                          <path
+                            d="M242 14 L245.5 18 L242 22 L238.5 18 Z"
+                            fill={mapThemePalette.dropoffCenter}
+                          />
+                        </g>
+
                         <circle
                           data-testid="animated-route-rider-dot"
                           r="4"
@@ -1712,8 +2193,63 @@ export default function App() {
                         </circle>
                       </svg>
                     </PinchZoomPan>
-                    <span className="absolute top-1.5 right-1.5 z-10 px-2 py-0.5 rounded-lg bg-slate-950/90 text-[10px] font-bold font-['Cairo',sans-serif] text-amber-400 border border-amber-500/30 pointer-events-none">
-                      El Bagour • الباجور
+
+                    {/* Dedicated Touch-Optimized '+' and '-' Corner Zoom Controls (Material 3 Shadow & Slate/Cairo) */}
+                    <div
+                      data-testid="map-pinch-zoom-controls"
+                      role="group"
+                      aria-label="Map Thumbnail Zoom Controls"
+                      className="absolute top-1.5 left-1.5 z-20 flex items-center gap-1 rounded-xl p-1 bg-slate-950/95 border border-slate-700/90 text-slate-100 font-['Cairo',sans-serif] shadow-lg drop-shadow-md backdrop-blur-xs"
+                    >
+                      <button
+                        type="button"
+                        data-testid="map-zoom-in-btn"
+                        aria-label="Zoom In (+)"
+                        title="Zoom In (+) • تكبير الخريطة"
+                        disabled={mapZoomScale >= 3.5}
+                        onClick={handleMapZoomIn}
+                        className="min-w-[32px] min-h-[32px] px-2.5 py-1 rounded-xl bg-slate-900 hover:bg-slate-800 border border-slate-700 text-slate-100 hover:text-amber-400 disabled:opacity-40 text-xs font-black font-['Cairo',sans-serif] flex items-center justify-center shadow-md drop-shadow-sm transform hover:scale-105 active:scale-95 transition-all duration-150 cursor-pointer disabled:cursor-not-allowed"
+                      >
+                        +
+                      </button>
+                      <span
+                        data-testid="map-zoom-scale-badge"
+                        className="text-[10px] font-mono font-bold text-amber-400 px-1 select-none"
+                      >
+                        {Math.round(mapZoomScale * 100)}%
+                      </span>
+                      <button
+                        type="button"
+                        data-testid="map-zoom-out-btn"
+                        aria-label="Zoom Out (-)"
+                        title="Zoom Out (-) • تصغير الخريطة"
+                        disabled={mapZoomScale <= 1}
+                        onClick={handleMapZoomOut}
+                        className="min-w-[32px] min-h-[32px] px-2.5 py-1 rounded-xl bg-slate-900 hover:bg-slate-800 border border-slate-700 text-slate-100 hover:text-amber-400 disabled:opacity-40 text-xs font-black font-['Cairo',sans-serif] flex items-center justify-center shadow-md drop-shadow-sm transform hover:scale-105 active:scale-95 transition-all duration-150 cursor-pointer disabled:cursor-not-allowed"
+                      >
+                        -
+                      </button>
+                      {mapZoomScale > 1 && (
+                        <button
+                          type="button"
+                          data-testid="map-zoom-reset-btn"
+                          aria-label="Reset Map Zoom"
+                          title="Reset Zoom • إعادة ضبط"
+                          onClick={handleMapZoomReset}
+                          className="min-h-[32px] px-2 py-1 rounded-xl bg-slate-900 hover:bg-slate-800 border border-slate-700 text-[10px] font-bold font-['Cairo',sans-serif] text-amber-400 hover:text-amber-300 shadow-sm transition-all cursor-pointer"
+                        >
+                          Reset
+                        </button>
+                      )}
+                    </div>
+
+                    <span
+                      data-testid="map-layer-badge"
+                      className="absolute top-1.5 right-1.5 z-10 px-2 py-0.5 rounded-lg bg-slate-950/90 text-[10px] font-bold font-['Cairo',sans-serif] text-amber-400 border border-amber-500/30 shadow-sm pointer-events-none"
+                    >
+                      {isSatelliteTerrainLayer
+                        ? 'Satellite/Terrain • قمر صناعي'
+                        : 'Route Overview • الباجور'}
                     </span>
                     <span
                       data-testid="map-travel-estimate-badge"
@@ -1732,10 +2268,13 @@ export default function App() {
                   >
                     <div
                       data-testid="map-pickup-marker"
-                      className="flex items-center justify-between gap-2 text-amber-300 bg-slate-900 border border-slate-800 rounded-xl px-3 py-2"
+                      data-pulse-active={isMapPinStatusPulsing ? 'true' : 'false'}
+                      className={`flex items-center justify-between gap-2 text-amber-300 bg-slate-900 border border-slate-800 rounded-xl px-3 py-2 drop-shadow-sm ${
+                        isMapPinStatusPulsing ? 'animate-pulse ring-1 ring-emerald-500/30' : ''
+                      }`}
                     >
                       <div className="flex items-center gap-2 min-w-0">
-                        <MapPin className="w-4 h-4 text-amber-400 shrink-0" />
+                        <MapPin className="w-4 h-4 text-emerald-400 drop-shadow-sm shrink-0" />
                         <span className="font-bold text-slate-400 shrink-0">Pickup (الانطلاق):</span>
                         <span className="font-bold text-white truncate" title={currentOrderPickup}>
                           {currentOrderPickup}
@@ -1759,10 +2298,13 @@ export default function App() {
                     </div>
                     <div
                       data-testid="map-dropoff-marker"
-                      className="flex items-center justify-between gap-2 text-slate-200 bg-slate-900 border border-slate-800 rounded-xl px-3 py-2"
+                      data-pulse-active={isMapPinStatusPulsing ? 'true' : 'false'}
+                      className={`flex items-center justify-between gap-2 text-slate-200 bg-slate-900 border border-slate-800 rounded-xl px-3 py-2 drop-shadow-sm ${
+                        isMapPinStatusPulsing ? 'animate-pulse ring-1 ring-amber-500/30' : ''
+                      }`}
                     >
                       <div className="flex items-center gap-2 min-w-0">
-                        <Navigation className="w-4 h-4 text-amber-400 shrink-0" />
+                        <Navigation className="w-4 h-4 text-amber-400 drop-shadow-sm shrink-0" />
                         <span className="font-bold text-slate-400 shrink-0">Dropoff (الوصول):</span>
                         <span className="font-bold text-white truncate" title={currentOrderDropoff}>
                           {currentOrderDropoff}
@@ -1784,7 +2326,31 @@ export default function App() {
                         <span className="sr-only">Copy Dropoff Address</span>
                       </button>
                     </div>
-                    <div className="grid grid-cols-2 gap-2">
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                      <button
+                        type="button"
+                        data-testid="toggle-map-layer-btn"
+                        data-map-layer={mapLayerStyle}
+                        aria-pressed={isSatelliteTerrainLayer}
+                        aria-label={
+                          isSatelliteTerrainLayer
+                            ? 'Switch to Route Overview Map Layer'
+                            : 'Switch to Satellite/Terrain Map Layer'
+                        }
+                        onClick={handleToggleMapLayerStyle}
+                        className={`min-h-[40px] px-2.5 py-2 rounded-xl border text-[11px] font-bold font-['Cairo',sans-serif] flex items-center justify-center gap-1.5 shadow-sm transition-all cursor-pointer ${
+                          isSatelliteTerrainLayer
+                            ? 'bg-slate-800 border-amber-500/60 text-amber-300 ring-1 ring-amber-500/30'
+                            : 'bg-slate-800 hover:bg-slate-700 border-slate-700 text-slate-100 hover:text-amber-300'
+                        }`}
+                      >
+                        <Layers className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+                        <span>
+                          {isSatelliteTerrainLayer
+                            ? 'Route Overview • مسار'
+                            : 'Satellite/Terrain • تضاريس'}
+                        </span>
+                      </button>
                       <button
                         type="button"
                         data-testid="toggle-map-theme-btn"
@@ -2033,34 +2599,118 @@ export default function App() {
                 <div
                   data-testid="active-order-vertical-timeline"
                   data-status-pulse={isTimelinePulsing ? 'active' : 'idle'}
+                  data-loading-skeleton={isRefreshingOrder ? 'true' : 'false'}
+                  aria-busy={isRefreshingOrder}
                   className={`lg:col-span-6 bg-slate-950 border border-slate-800 rounded-2xl p-4 grid grid-cols-1 gap-4 transition-all duration-500 ${
                     isTimelinePulsing
                       ? 'animate-pulse ring-1 ring-amber-500/40 bg-amber-950/15'
                       : ''
                   }`}
                 >
-                  <div className="flex items-center justify-between">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
                     <span className="text-xs font-bold text-slate-200 flex items-center gap-2">
                       <Activity
                         className={`w-4 h-4 text-amber-400 ${
-                          isTimelinePulsing ? 'animate-pulse' : ''
+                          isTimelinePulsing || isRefreshingOrder ? 'animate-pulse' : ''
                         }`}
                       />
                       <span>Order Status Timeline • التسلسل الزمني لحالات الطلب</span>
                     </span>
-                    <span
-                      data-testid="timeline-pulse-indicator"
-                      className={`text-xs font-mono text-amber-400 ${
-                        isTimelinePulsing ? 'animate-pulse font-bold' : ''
-                      }`}
-                    >
-                      {currentOrderStatus === 'cancelled'
-                        ? 'Cancelled • ملغي'
-                        : `${activeTimelineIndex + 1} / ${orderTimelineSteps.length}`}
-                    </span>
+                    <div className="flex flex-wrap items-center gap-2">
+                      {/* Subtle Sound Notification Status & Toggle */}
+                      <span
+                        data-testid="status-audio-cue-indicator"
+                        data-audio-cue-state={isAudioCuePlaying ? 'playing' : 'ready'}
+                        className={`px-2 py-0.5 rounded-lg border text-[10px] font-bold flex items-center gap-1 transition-all ${
+                          isAudioCuePlaying
+                            ? 'bg-amber-500/20 border-amber-400 text-amber-300 animate-pulse'
+                            : 'bg-slate-900 border-slate-800 text-slate-400'
+                        }`}
+                      >
+                        {isSoundNotificationEnabled ? (
+                          <Volume2 className="w-3 h-3 text-amber-400 shrink-0" />
+                        ) : (
+                          <VolumeX className="w-3 h-3 text-slate-500 shrink-0" />
+                        )}
+                        <span>
+                          {isAudioCuePlaying
+                            ? 'Audio Cue Playing • تنبيه صوتي'
+                            : lastAudioCueAtLabel
+                              ? `Audio Cue (${audioCueCount})`
+                              : 'Audio Cue Ready'}
+                        </span>
+                      </span>
+                      <button
+                        type="button"
+                        data-testid="toggle-status-sound-btn"
+                        aria-pressed={isSoundNotificationEnabled}
+                        aria-label={
+                          isSoundNotificationEnabled
+                            ? 'Mute Status Audio Notification'
+                            : 'Unmute Status Audio Notification'
+                        }
+                        onClick={() => setIsSoundNotificationEnabled((prev) => !prev)}
+                        className="px-2.5 py-1 rounded-xl bg-slate-900 hover:bg-slate-800 border border-slate-700 text-[10px] font-bold text-slate-200 hover:text-amber-300 flex items-center gap-1 transition-all cursor-pointer"
+                      >
+                        {isSoundNotificationEnabled ? (
+                          <>
+                            <Volume2 className="w-3 h-3 text-amber-400" />
+                            <span>Sound On • الصوت مفعل</span>
+                          </>
+                        ) : (
+                          <>
+                            <VolumeX className="w-3 h-3 text-slate-400" />
+                            <span>Muted • صامت</span>
+                          </>
+                        )}
+                      </button>
+                      <button
+                        type="button"
+                        data-testid="advance-order-status-btn"
+                        onClick={handleAdvanceOrderTimelineStatus}
+                        className="px-2.5 py-1 rounded-xl bg-amber-500/15 hover:bg-amber-500/25 border border-amber-500/40 text-[10px] font-bold text-amber-300 flex items-center gap-1 transition-all cursor-pointer"
+                      >
+                        <ArrowRight className="w-3 h-3 text-amber-400" />
+                        <span>Advance Step • المرحلة التالية</span>
+                      </button>
+                      <span
+                        data-testid="timeline-pulse-indicator"
+                        className={`text-xs font-mono text-amber-400 ${
+                          isTimelinePulsing || isRefreshingOrder ? 'animate-pulse font-bold' : ''
+                        }`}
+                      >
+                        {isRefreshingOrder
+                          ? 'Refreshing... • جاري التحديث'
+                          : currentOrderStatus === 'cancelled'
+                            ? 'Cancelled • ملغي'
+                            : `${activeTimelineIndex + 1} / ${orderTimelineSteps.length}`}
+                      </span>
+                    </div>
                   </div>
 
-                  <div className="relative pl-3 pr-1 grid grid-cols-1 gap-4">
+                  {isRefreshingOrder && (
+                    <div
+                      data-testid="timeline-skeleton-loader"
+                      aria-label="Loading order timeline status"
+                      className="grid grid-cols-1 gap-3 py-1 animate-pulse"
+                    >
+                      {[1, 2, 3].map((skeletonIdx) => (
+                        <div key={skeletonIdx} className="flex items-center gap-3">
+                          <div className="w-7 h-7 rounded-full bg-slate-800 border border-slate-700 shrink-0" />
+                          <div className="flex-1 h-10 rounded-xl bg-slate-900 border border-slate-800 px-3 py-2 flex items-center justify-between">
+                            <div className="h-3 w-32 rounded bg-slate-800" />
+                            <div className="h-3 w-14 rounded bg-slate-800" />
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+
+                  <div
+                    className={`relative pl-3 pr-1 grid grid-cols-1 gap-4 transition-opacity duration-200 ${
+                      isRefreshingOrder ? 'opacity-40 animate-pulse' : 'opacity-100'
+                    }`}
+                  >
                     {orderTimelineSteps.map((step, index) => {
                       const StepIcon = step.Icon;
                       const isCompleted =
@@ -3128,10 +3778,15 @@ export default function App() {
             <div
               data-testid="active-order-tracking-widget"
               data-status-animation={isWidgetStatusSlideAnimating ? 'slide-in' : 'settled'}
+              data-haptic-feedback={isHapticVibrating ? 'active' : 'idle'}
+              data-haptic-pulses={hapticPulseCount}
+              onClickCapture={handleWidgetButtonPressCapture}
               className={`bg-slate-900 border border-slate-800 rounded-2xl p-4 shadow-lg flex flex-col gap-4 font-['Cairo',sans-serif] transform transition-all duration-300 ease-out ${
-                isWidgetStatusSlideAnimating
-                  ? 'animate-m3-slide-in translate-y-0 opacity-100 ring-1 ring-amber-500/30'
-                  : 'translate-y-0 opacity-100'
+                isHapticVibrating
+                  ? 'animate-haptic-shake ring-1 ring-amber-400/50'
+                  : isWidgetStatusSlideAnimating
+                    ? 'animate-m3-slide-in translate-y-0 opacity-100 ring-1 ring-amber-500/30'
+                    : 'translate-y-0 opacity-100'
               }`}
             >
               <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
@@ -3172,6 +3827,8 @@ export default function App() {
                   data-testid="active-order-static-map-thumbnail"
                   data-map-view-mode={isFullScreenMapOpen ? 'fullscreen' : 'thumbnail'}
                   data-theme-mode={isDarkMode ? 'dark' : 'light'}
+                  data-loading-skeleton={isRefreshingOrder ? 'true' : 'false'}
+                  aria-busy={isRefreshingOrder}
                   aria-label="El Bagour Route Static Map Thumbnail"
                   className="bg-slate-950 border border-slate-800 rounded-xl p-2.5 flex flex-col sm:flex-row items-center gap-3 shrink-0"
                 >
@@ -3784,6 +4441,8 @@ export default function App() {
               <div
                 data-testid="active-order-vertical-timeline"
                 data-status-pulse={isTimelinePulsing ? 'active' : 'idle'}
+                data-loading-skeleton={isRefreshingOrder ? 'true' : 'false'}
+                aria-busy={isRefreshingOrder}
                 className={`pt-2 border-t border-slate-800/80 flex flex-col gap-2 rounded-xl transition-all duration-500 ${
                   isTimelinePulsing
                     ? 'animate-pulse ring-1 ring-emerald-500/40 bg-emerald-950/15 p-2'
