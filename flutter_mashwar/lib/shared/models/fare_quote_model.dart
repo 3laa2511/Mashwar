@@ -5,6 +5,8 @@ class FareQuoteModel {
   final double ruralOrUnpavedSurcharge;
   final double platformFee;
   final double totalFare;
+  /// Exact server-calculated amount in integer Egyptian piasters.
+  final int? totalFarePiasters;
   final String currency;
   final String estimatedDurationMinutes;
 
@@ -24,6 +26,7 @@ class FareQuoteModel {
     required this.ruralOrUnpavedSurcharge,
     required this.platformFee,
     required this.totalFare,
+    this.totalFarePiasters,
     this.currency = 'ج.م',
     required this.estimatedDurationMinutes,
     this.quoteId,
@@ -55,6 +58,7 @@ class FareQuoteModel {
         'ruralOrUnpavedSurcharge': ruralOrUnpavedSurcharge,
         'platformFee': platformFee,
         'totalFare': totalFare,
+        'totalFarePiasters': totalFarePiasters,
         'currency': currency,
         'estimatedDurationMinutes': estimatedDurationMinutes,
         'quoteId': quoteId,
