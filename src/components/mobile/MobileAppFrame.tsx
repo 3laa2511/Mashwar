@@ -13,11 +13,13 @@ import {
   MapPin,
   ShieldCheck,
   KeyRound,
-  ShieldAlert
+  ShieldAlert,
+  Navigation
 } from 'lucide-react';
 import { CustomerMobileExperience } from './CustomerMobileExperience';
 import { CaptainMobileExperience } from './CaptainMobileExperience';
 import { MerchantMobileExperience } from './MerchantMobileExperience';
+import { OrderTrackingScreen } from './OrderTrackingScreen';
 import { DemoAuthModal } from '../common/DemoAuthModal';
 import { useMarketplace, DEMO_PERSONAS, DemoUser } from '../../store/marketplaceStore';
 
@@ -28,8 +30,9 @@ interface MobileAppFrameProps {
 export const MobileAppFrame: React.FC<MobileAppFrameProps> = ({
   onOpenOperationsDashboard,
 }) => {
-  const { currentUser, switchDemoUser, isAuthModalOpen, setIsAuthModalOpen } = useMarketplace();
+  const { currentUser, switchDemoUser, isAuthModalOpen, setIsAuthModalOpen, activeCustomerOrder } = useMarketplace();
   const [deviceModel, setDeviceModel] = useState<'iphone' | 'android' | 'fluid'>('iphone');
+  const [mobileCustomerView, setMobileCustomerView] = useState<'experience' | 'tracking_screen'>('experience');
 
   // Handle persona selection
   const handleSelectRole = (role: 'customer' | 'captain' | 'merchant') => {
@@ -116,6 +119,44 @@ export const MobileAppFrame: React.FC<MobileAppFrameProps> = ({
           </div>
         </div>
 
+        {/* Customer Screen Switcher (Main App vs Integrated Order Tracking Screen) */}
+        {currentUser.role === 'customer' && (
+          <div className="flex items-center gap-2">
+            <span className="text-xs font-bold text-slate-400 hidden sm:inline">شاشة التطبيق:</span>
+            <div className="bg-slate-950 p-1 rounded-xl flex items-center border border-slate-800 gap-1">
+              <button
+                type="button"
+                data-testid="mobile-frame-switch-app-btn"
+                onClick={() => setMobileCustomerView('experience')}
+                className={`px-2.5 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer ${
+                  mobileCustomerView === 'experience'
+                    ? 'bg-emerald-700 text-white shadow-md'
+                    : 'text-slate-400 hover:text-white'
+                }`}
+              >
+                <Store className="w-3.5 h-3.5" />
+                <span>الرئيسية والسوق</span>
+              </button>
+              <button
+                type="button"
+                data-testid="mobile-frame-switch-tracking-btn"
+                onClick={() => setMobileCustomerView('tracking_screen')}
+                className={`px-2.5 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer ${
+                  mobileCustomerView === 'tracking_screen'
+                    ? 'bg-amber-500 text-slate-950 shadow-md font-black'
+                    : 'text-slate-400 hover:text-amber-300'
+                }`}
+              >
+                <Navigation className="w-3.5 h-3.5" />
+                <span>تتبع الطلب بالخريطة</span>
+                {activeCustomerOrder && (
+                  <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse mr-0.5" />
+                )}
+              </button>
+            </div>
+          </div>
+        )}
+
         {/* Viewport & Device Frame Toggle */}
         <div className="flex items-center gap-2">
           <span className="text-xs font-bold text-slate-400 hidden sm:inline">إطار العرض:</span>
@@ -188,10 +229,18 @@ export const MobileAppFrame: React.FC<MobileAppFrameProps> = ({
             {/* Screen Component */}
             <div className="flex-1 w-full overflow-hidden flex flex-col">
               {currentUser.role === 'customer' && (
-                <CustomerMobileExperience
-                  onSwitchToCaptain={() => handleSelectRole('captain')}
-                  onOpenAuthModal={() => setIsAuthModalOpen(true)}
-                />
+                mobileCustomerView === 'tracking_screen' ? (
+                  <OrderTrackingScreen
+                    order={activeCustomerOrder}
+                    onBackToHome={() => setMobileCustomerView('experience')}
+                  />
+                ) : (
+                  <CustomerMobileExperience
+                    onSwitchToCaptain={() => handleSelectRole('captain')}
+                    onOpenAuthModal={() => setIsAuthModalOpen(true)}
+                    onOpenOrderTrackingScreen={() => setMobileCustomerView('tracking_screen')}
+                  />
+                )
               )}
               {currentUser.role === 'captain' && (
                 <CaptainMobileExperience
@@ -269,10 +318,18 @@ export const MobileAppFrame: React.FC<MobileAppFrameProps> = ({
               {/* Mobile Screen Experience */}
               <div className="flex-1 w-full overflow-hidden flex flex-col">
                 {currentUser.role === 'customer' && (
-                  <CustomerMobileExperience
-                    onSwitchToCaptain={() => handleSelectRole('captain')}
-                    onOpenAuthModal={() => setIsAuthModalOpen(true)}
-                  />
+                  mobileCustomerView === 'tracking_screen' ? (
+                    <OrderTrackingScreen
+                      order={activeCustomerOrder}
+                      onBackToHome={() => setMobileCustomerView('experience')}
+                    />
+                  ) : (
+                    <CustomerMobileExperience
+                      onSwitchToCaptain={() => handleSelectRole('captain')}
+                      onOpenAuthModal={() => setIsAuthModalOpen(true)}
+                      onOpenOrderTrackingScreen={() => setMobileCustomerView('tracking_screen')}
+                    />
+                  )
                 )}
                 {currentUser.role === 'captain' && (
                   <CaptainMobileExperience

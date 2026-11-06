@@ -52,6 +52,7 @@ import {
 } from 'lucide-react';
 import { EgyptianMapCanvas } from './EgyptianMapCanvas';
 import { PinchZoomPan } from '../common/PinchZoomPan';
+import { OrderTrackingScreen } from './OrderTrackingScreen';
 import {
   useMarketplace,
   StoreItem,
@@ -108,6 +109,7 @@ function playMobileOrderStatusSound(): boolean {
 interface CustomerMobileExperienceProps {
   onSwitchToCaptain?: () => void;
   onOpenAuthModal?: () => void;
+  onOpenOrderTrackingScreen?: () => void;
 }
 
 interface QuotePreviewData {
@@ -127,7 +129,9 @@ interface QuotePreviewData {
 export const CustomerMobileExperience: React.FC<CustomerMobileExperienceProps> = ({
   onSwitchToCaptain,
   onOpenAuthModal,
+  onOpenOrderTrackingScreen,
 }) => {
+  const [isViewingOrderTrackingScreen, setIsViewingOrderTrackingScreen] = useState<boolean>(false);
   const {
     currentUser,
     stores,
@@ -782,6 +786,17 @@ export const CustomerMobileExperience: React.FC<CustomerMobileExperienceProps> =
     ? formatHumanReadableAcceptedTimestamp(activeCustomerOrder.acceptedAtIso, activeCustomerOrder.acceptedAt)
     : null;
 
+  if (isViewingOrderTrackingScreen && activeCustomerOrder) {
+    return (
+      <div className="relative w-full h-full flex flex-col bg-[#FAFAF9] text-slate-800 font-['Cairo',sans-serif] overflow-hidden select-none" dir="rtl">
+        <OrderTrackingScreen
+          order={activeCustomerOrder}
+          onBackToHome={() => setIsViewingOrderTrackingScreen(false)}
+        />
+      </div>
+    );
+  }
+
   return (
     <div className="relative w-full h-full flex flex-col bg-[#FAFAF9] text-slate-800 font-['Cairo',sans-serif] overflow-hidden select-none" dir="rtl">
       {/* Top Mobile App Bar */}
@@ -1035,7 +1050,22 @@ export const CustomerMobileExperience: React.FC<CustomerMobileExperienceProps> =
             {activeCustomerOrder && !isTrackingSheetMinimized ? (
               <div
                 ref={trackingSheetScrollRef}
-                data-testid="mobile-active-order-tracking-sheet"
+                data-testid="active-order-tracking-widget"
+                data-sheet-role="mobile-active-order-tracking-sheet"
+                data-status-animation={isMobileStatusSlideIn ? 'slide-in' : 'settled'}
+                data-haptic-feedback={isMobileHapticShaking ? 'active' : 'idle'}
+                data-pull-to-refresh={
+                  isRefreshingMobile
+                    ? 'refreshing'
+                    : mobilePullDistance >= MOBILE_PULL_THRESHOLD
+                    ? 'ready'
+                    : mobilePullDistance > 0
+                    ? 'pulling'
+                    : 'idle'
+                }
+                data-pull-distance={Math.round(mobilePullDistance)}
+                data-audio-cue={mobileAudioCueText ? 'playing' : 'idle'}
+                data-sound-enabled={isMobileSoundEnabled ? 'true' : 'false'}
                 onTouchStart={handleMobilePullTouchStart}
                 onTouchMove={handleMobilePullTouchMove}
                 onTouchEnd={handleMobilePullEnd}
@@ -1086,20 +1116,40 @@ export const CustomerMobileExperience: React.FC<CustomerMobileExperienceProps> =
                   </div>
                 )}
 
-                {/* Sheet Top Bar: Drag Handle + Minimize Toggle + Sound + Advance Step + Refresh + SOS */}
+                {/* Sheet Top Bar: Drag Handle + Minimize Toggle + Full Screen View + Sound + Advance Step + Refresh + SOS */}
                 <div className="flex items-center justify-between gap-1.5 pb-1 border-b border-slate-100 flex-wrap">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      triggerMobileHapticFeedback();
-                      setIsTrackingSheetMinimized(true);
-                    }}
-                    className="text-[10px] font-bold text-slate-600 hover:text-slate-900 bg-slate-100 hover:bg-slate-200/80 px-2 py-1 rounded-xl border border-slate-200 flex items-center gap-1 transition cursor-pointer hover:scale-105 active:scale-95"
-                    title="تصغير بطاقة التتبع لعرض الخريطة والخدمات"
-                  >
-                    <ChevronDown className="w-3 h-3" />
-                    <span>تصغير</span>
-                  </button>
+                  <div className="flex items-center gap-1">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        triggerMobileHapticFeedback();
+                        setIsTrackingSheetMinimized(true);
+                      }}
+                      className="text-[10px] font-bold text-slate-600 hover:text-slate-900 bg-slate-100 hover:bg-slate-200/80 px-2 py-1 rounded-xl border border-slate-200 flex items-center gap-1 transition cursor-pointer hover:scale-105 active:scale-95"
+                      title="تصغير بطاقة التتبع لعرض الخريطة والخدمات"
+                    >
+                      <ChevronDown className="w-3 h-3" />
+                      <span>تصغير</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      data-testid="open-order-tracking-screen-btn"
+                      onClick={() => {
+                        triggerMobileHapticFeedback();
+                        if (onOpenOrderTrackingScreen) {
+                          onOpenOrderTrackingScreen();
+                        } else {
+                          setIsViewingOrderTrackingScreen(true);
+                        }
+                      }}
+                      className="text-[10px] font-extrabold text-amber-300 bg-slate-900 hover:bg-slate-800 px-2.5 py-1 rounded-xl border border-slate-700 flex items-center gap-1 transition cursor-pointer hover:scale-105 active:scale-95 shadow-2xs"
+                      title="فتح شاشة التتبع المخصصة الكاملة (OrderTrackingScreen)"
+                    >
+                      <Navigation className="w-3 h-3 text-emerald-400" />
+                      <span>شاشة التتبع</span>
+                    </button>
+                  </div>
 
                   {/* Sound Notification Cue Toggle Button */}
                   <button
@@ -1234,7 +1284,7 @@ export const CustomerMobileExperience: React.FC<CustomerMobileExperienceProps> =
                    ===================================================================== */}
                 {isRefreshingMobile ? (
                   <div
-                    data-testid="mobile-map-skeleton-loader"
+                    data-testid="static-map-skeleton-loader"
                     className="rounded-2xl border border-slate-200 bg-slate-100 p-3 h-40 flex flex-col justify-between animate-pulse"
                   >
                     <div className="flex items-center justify-between">
@@ -1257,7 +1307,20 @@ export const CustomerMobileExperience: React.FC<CustomerMobileExperienceProps> =
                   </div>
                 ) : (
                   <div
-                    data-testid="mobile-tracking-sheet-map-thumbnail"
+                    data-testid="active-order-static-map-thumbnail"
+                    data-map-layer={mobileMapLayerStyle}
+                    data-map-zoom={mobileMapZoomScale.toFixed(2)}
+                    data-marker-pulse={
+                      activeCustomerOrder.status === 'at_pickup' ||
+                      activeCustomerOrder.status === 'in_transit'
+                        ? 'active'
+                        : 'idle'
+                    }
+                    data-loading-skeleton={isRefreshingMobile ? 'true' : 'false'}
+                    data-map-view-mode={isMobileFullScreenMap ? 'fullscreen' : 'thumbnail'}
+                    data-theme-mode={isMobileMapDarkMode ? 'dark' : 'light'}
+                    aria-busy={isRefreshingMobile}
+                    aria-label="El Bagour Route Static Map Thumbnail"
                     className={`rounded-2xl border overflow-hidden transition-colors duration-300 ${
                       mobileMapLayerStyle === 'satellite'
                         ? 'bg-[#0c211b] border-emerald-800/80 text-white'
@@ -1283,7 +1346,7 @@ export const CustomerMobileExperience: React.FC<CustomerMobileExperienceProps> =
                         {/* Satellite / Terrain vs Route Overview Toggle */}
                         <button
                           type="button"
-                          data-testid="mobile-map-layer-toggle-btn"
+                          data-testid="toggle-map-layer-btn"
                           onClick={() => {
                             triggerMobileHapticFeedback();
                             setMobileMapLayerStyle((prev) =>
@@ -1310,7 +1373,7 @@ export const CustomerMobileExperience: React.FC<CustomerMobileExperienceProps> =
                         {/* Dark / Light Map Mode Toggle */}
                         <button
                           type="button"
-                          data-testid="mobile-map-theme-toggle-btn"
+                          data-testid="toggle-map-theme-btn"
                           onClick={() => {
                             triggerMobileHapticFeedback();
                             setIsMobileMapDarkMode((prev) => !prev);
@@ -1333,7 +1396,7 @@ export const CustomerMobileExperience: React.FC<CustomerMobileExperienceProps> =
                         {/* Full-Screen Map View Toggle */}
                         <button
                           type="button"
-                          data-testid="mobile-map-fullscreen-toggle-btn"
+                          data-testid="toggle-fullscreen-map-btn"
                           onClick={() => {
                             triggerMobileHapticFeedback();
                             setIsMobileFullScreenMap(true);
@@ -1351,8 +1414,8 @@ export const CustomerMobileExperience: React.FC<CustomerMobileExperienceProps> =
                     <div className="relative h-32 w-full overflow-hidden">
                       {/* Corner Travel Time & Distance Estimate Badge */}
                       <div
-                        data-testid="mobile-sheet-map-estimate-badge"
-                        className="absolute top-2 right-2 z-20 pointer-events-none inline-flex items-center gap-1 px-2 py-0.5 rounded-lg bg-slate-900/90 text-white border border-slate-700 shadow-md text-[9px] font-extrabold"
+                        data-testid="map-travel-estimate-badge"
+                        className="absolute top-2 right-2 z-20 pointer-events-none inline-flex items-center gap-1 px-2 py-0.5 rounded-lg bg-slate-900/90 text-white border border-slate-700 shadow-md text-[9px] font-extrabold font-['Cairo',sans-serif]"
                       >
                         <Clock className="w-2.5 h-2.5 text-amber-400" />
                         <span>~{activeDurationMinutes} د</span>
@@ -1364,11 +1427,12 @@ export const CustomerMobileExperience: React.FC<CustomerMobileExperienceProps> =
 
                       {/* Dedicated Touch-Optimized '+' and '-' Zoom Control Buttons on Corner */}
                       <div
-                        data-testid="mobile-sheet-map-zoom-controls"
+                        data-testid="map-pinch-zoom-controls"
                         className="absolute bottom-2 left-2 z-20 flex items-center gap-1"
                       >
                         <button
                           type="button"
+                          data-testid="map-zoom-in-btn"
                           onClick={handleMobileZoomIn}
                           disabled={mobileMapZoomScale >= 3}
                           aria-label="تكبير خريطة الطلب (+)"
@@ -1379,6 +1443,7 @@ export const CustomerMobileExperience: React.FC<CustomerMobileExperienceProps> =
                         </button>
                         <button
                           type="button"
+                          data-testid="map-zoom-out-btn"
                           onClick={handleMobileZoomOut}
                           disabled={mobileMapZoomScale <= 1}
                           aria-label="تصغير خريطة الطلب (-)"
@@ -1390,6 +1455,7 @@ export const CustomerMobileExperience: React.FC<CustomerMobileExperienceProps> =
                         {mobileMapZoomScale > 1.02 && (
                           <button
                             type="button"
+                            data-testid="map-zoom-reset-btn"
                             onClick={handleMobileZoomReset}
                             title="إعادة ضبط الزووم"
                             className="px-1.5 h-7 rounded-xl bg-amber-500 text-slate-950 font-black text-[9px] shadow-md flex items-center gap-0.5 cursor-pointer hover:scale-105 active:scale-95"
@@ -1522,7 +1588,7 @@ export const CustomerMobileExperience: React.FC<CustomerMobileExperienceProps> =
                           <g
                             transform="translate(65, 88)"
                             filter="url(#mobileSheetPinShadow)"
-                            data-testid="mobile-sheet-pickup-pin"
+                            data-testid="map-svg-pickup-pin"
                           >
                             {activeCustomerOrder.status === 'at_pickup' && (
                               <circle cx="0" cy="-10" r="16" fill="#10b981" opacity="0.35">
@@ -1568,7 +1634,7 @@ export const CustomerMobileExperience: React.FC<CustomerMobileExperienceProps> =
                           <g
                             transform="translate(290, 48)"
                             filter="url(#mobileSheetPinShadow)"
-                            data-testid="mobile-sheet-dropoff-pin"
+                            data-testid="map-svg-dropoff-pin"
                           >
                             {activeCustomerOrder.status === 'in_transit' && (
                               <circle cx="0" cy="-10" r="16" fill="#f59e0b" opacity="0.35">
@@ -1608,7 +1674,7 @@ export const CustomerMobileExperience: React.FC<CustomerMobileExperienceProps> =
                     >
                       <button
                         type="button"
-                        data-testid="mobile-copy-pickup-address-btn"
+                        data-testid="copy-pickup-address-btn"
                         onClick={() =>
                           handleCopyMobileAddress('pickup', activeCustomerOrder.storeAddress)
                         }
@@ -1638,7 +1704,7 @@ export const CustomerMobileExperience: React.FC<CustomerMobileExperienceProps> =
 
                       <button
                         type="button"
-                        data-testid="mobile-copy-dropoff-address-btn"
+                        data-testid="copy-dropoff-address-btn"
                         onClick={() =>
                           handleCopyMobileAddress('dropoff', activeCustomerOrder.deliveryAddress)
                         }

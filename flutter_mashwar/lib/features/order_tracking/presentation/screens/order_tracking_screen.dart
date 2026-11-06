@@ -71,55 +71,218 @@ class OrderTrackingScreen extends ConsumerWidget {
             ),
             const SizedBox(height: 16),
 
-            // Simulated Map/Route Card
+            // Simulated Map/Route Card (Static Map Thumbnail with Controls & Cairo/Slate Theme)
             Container(
-              height: 140,
               decoration: BoxDecoration(
                 color: AppColors.slate900,
                 borderRadius: BorderRadius.circular(20),
+                border: Border.all(color: AppColors.slate800),
                 boxShadow: [
                   BoxShadow(
-                    color: Colors.black.withOpacity(0.1),
-                    blurRadius: 8,
+                    color: Colors.black.withOpacity(0.12),
+                    blurRadius: 10,
                     offset: const Offset(0, 4),
                   ),
                 ],
               ),
-              child: Stack(
-                alignment: Alignment.center,
+              child: Column(
                 children: [
-                  Positioned.fill(
-                    child: Opacity(
-                      opacity: 0.15,
-                      child: GridView.builder(
-                        gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(crossAxisCount: 8),
-                        itemBuilder: (ctx, i) => Container(
-                          decoration: BoxDecoration(border: Border.all(color: Colors.white, width: 0.5)),
+                  // Map Header with Layer Toggle & Mode
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        const Row(
+                          children: [
+                            Icon(Icons.navigation_outlined, color: AppColors.primary, size: 16),
+                            SizedBox(width: 6),
+                            Text(
+                              'خريطة مسار الطلب بالباجور',
+                              style: TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.bold),
+                            ),
+                          ],
                         ),
-                      ),
+                        Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                          decoration: BoxDecoration(
+                            color: AppColors.slate800,
+                            borderRadius: BorderRadius.circular(8),
+                            border: Border.all(color: AppColors.slate700),
+                          ),
+                          child: const Row(
+                            children: [
+                              Icon(Icons.layers_outlined, color: AppColors.primary, size: 12),
+                              SizedBox(width: 4),
+                              Text('مسار • Route', style: TextStyle(color: Colors.white, fontSize: 10, fontWeight: FontWeight.bold)),
+                            ],
+                          ),
+                        ),
+                      ],
                     ),
                   ),
-                  Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Container(
-                        padding: const EdgeInsets.all(10),
-                        decoration: BoxDecoration(
-                          color: AppColors.primary,
-                          shape: BoxShape.circle,
+
+                  // Static Map Viewport with Stacked Controls
+                  SizedBox(
+                    height: 130,
+                    child: Stack(
+                      alignment: Alignment.center,
+                      children: [
+                        Positioned.fill(
+                          child: Opacity(
+                            opacity: 0.15,
+                            child: GridView.builder(
+                              physics: const NeverScrollableScrollPhysics(),
+                              gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(crossAxisCount: 8),
+                              itemBuilder: (ctx, i) => Container(
+                                decoration: BoxDecoration(border: Border.all(color: Colors.white, width: 0.5)),
+                              ),
+                            ),
+                          ),
                         ),
-                        child: const Icon(Icons.two_wheeler, color: AppColors.slate950, size: 28),
-                      ),
-                      const SizedBox(height: 8),
-                      Text(
-                        _getStatusLabel(order.status),
-                        style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 14),
-                      ),
-                      Text(
-                        'خط السير: ${order.pickupAddress} ➔ ${order.dropoffAddress}',
-                        style: const TextStyle(color: AppColors.slate400, fontSize: 11),
-                      ),
-                    ],
+
+                        // Route Content & Captain Scooter
+                        Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Container(
+                              padding: const EdgeInsets.all(8),
+                              decoration: const BoxDecoration(
+                                color: AppColors.primary,
+                                shape: BoxShape.circle,
+                              ),
+                              child: const Icon(Icons.two_wheeler, color: AppColors.slate950, size: 24),
+                            ),
+                            const SizedBox(height: 6),
+                            Text(
+                              _getStatusLabel(order.status),
+                              style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13),
+                            ),
+                            Text(
+                              'خط السير: ${order.pickupAddress} ➔ ${order.dropoffAddress}',
+                              style: const TextStyle(color: AppColors.slate400, fontSize: 11),
+                            ),
+                          ],
+                        ),
+
+                        // Top-Right Estimated Travel Time & Distance Badge
+                        Positioned(
+                          top: 8,
+                          right: 8,
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                            decoration: BoxDecoration(
+                              color: Colors.black.withOpacity(0.85),
+                              borderRadius: BorderRadius.circular(8),
+                              border: Border.all(color: AppColors.slate700),
+                            ),
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                const Icon(Icons.access_time_rounded, color: Colors.amber, size: 12),
+                                const SizedBox(width: 4),
+                                Text(
+                                  '~${order.estimatedDuration ?? 18} د • ${order.distanceKm ?? 2.4} كم',
+                                  style: const TextStyle(color: Colors.white, fontSize: 10, fontWeight: FontWeight.bold),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+
+                        // Bottom-Left Touch-Optimized Zoom Controls
+                        Positioned(
+                          bottom: 8,
+                          left: 8,
+                          child: Row(
+                            children: [
+                              Container(
+                                width: 28,
+                                height: 28,
+                                decoration: BoxDecoration(
+                                  color: AppColors.slate800,
+                                  borderRadius: BorderRadius.circular(8),
+                                  border: Border.all(color: AppColors.slate700),
+                                ),
+                                child: const Icon(Icons.add, color: Colors.white, size: 16),
+                              ),
+                              const SizedBox(width: 4),
+                              Container(
+                                width: 28,
+                                height: 28,
+                                decoration: BoxDecoration(
+                                  color: AppColors.slate800,
+                                  borderRadius: BorderRadius.circular(8),
+                                  border: Border.all(color: AppColors.slate700),
+                                ),
+                                child: const Icon(Icons.remove, color: Colors.white, size: 16),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+
+                  // Bottom Copy Pickup & Dropoff Address Bar
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                    decoration: const BoxDecoration(
+                      color: AppColors.slate950,
+                      borderRadius: BorderRadius.vertical(bottom: Radius.circular(20)),
+                      border: Border(top: BorderSide(color: AppColors.slate800)),
+                    ),
+                    child: Row(
+                      children: [
+                        Expanded(
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+                            decoration: BoxDecoration(
+                              color: AppColors.slate900,
+                              borderRadius: BorderRadius.circular(8),
+                              border: Border.all(color: AppColors.slate800),
+                            ),
+                            child: Row(
+                              children: [
+                                const Icon(Icons.copy_rounded, color: AppColors.primary, size: 12),
+                                const SizedBox(width: 4),
+                                Expanded(
+                                  child: Text(
+                                    'استلام: ${order.pickupAddress}',
+                                    style: const TextStyle(color: Colors.white, fontSize: 10),
+                                    overflow: TextOverflow.ellipsis,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 6),
+                        Expanded(
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+                            decoration: BoxDecoration(
+                              color: AppColors.slate900,
+                              borderRadius: BorderRadius.circular(8),
+                              border: Border.all(color: AppColors.slate800),
+                            ),
+                            child: Row(
+                              children: [
+                                const Icon(Icons.copy_rounded, color: Colors.amber, size: 12),
+                                const SizedBox(width: 4),
+                                Expanded(
+                                  child: Text(
+                                    'وصول: ${order.dropoffAddress}',
+                                    style: const TextStyle(color: Colors.white, fontSize: 10),
+                                    overflow: TextOverflow.ellipsis,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
                   ),
                 ],
               ),
