@@ -6,6 +6,8 @@ import '../../../app/theme/app_colors.dart';
 import '../../../shared/models/order_model.dart';
 import '../../../shared/providers/orders_provider.dart';
 import '../../../shared/providers/role_provider.dart';
+import '../../auth/presentation/providers/phone_auth_provider.dart';
+import '../../delivery_booking/presentation/providers/order_flow_provider.dart';
 
 class CustomerHomeScreen extends ConsumerStatefulWidget {
   const CustomerHomeScreen({super.key});
@@ -22,6 +24,7 @@ class _CustomerHomeScreenState extends ConsumerState<CustomerHomeScreen> {
     final theme = Theme.of(context);
     final isDark = theme.brightness == Brightness.dark;
     final orders = ref.watch(ordersProvider);
+    final authState = ref.watch(phoneAuthProvider);
     final activeOrders = orders.where((o) => o.status != OrderStatus.delivered && o.status != OrderStatus.cancelled).toList();
 
     return Scaffold(
@@ -53,6 +56,26 @@ class _CustomerHomeScreenState extends ConsumerState<CustomerHomeScreen> {
           ],
         ),
         actions: [
+          TextButton.icon(
+            onPressed: () => context.push('/auth'),
+            icon: Icon(
+              authState.step == PhoneAuthStep.authenticated
+                  ? Icons.verified_user_rounded
+                  : Icons.phone_android_rounded,
+              size: 16,
+              color: authState.step == PhoneAuthStep.authenticated
+                  ? AppColors.secondary
+                  : AppColors.primaryDark,
+            ),
+            label: Text(
+              authState.step == PhoneAuthStep.authenticated
+                  ? (authState.normalizedPhoneE164.isNotEmpty
+                      ? authState.normalizedPhoneE164
+                      : 'موثق')
+                  : 'دخول OTP',
+              style: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold),
+            ),
+          ),
           // Role switch popup menu for demo environment
           PopupMenuButton<AppRole>(
             tooltip: 'تبديل الدور للتجربة (Demo Role Switcher)',
@@ -183,7 +206,27 @@ class _CustomerHomeScreenState extends ConsumerState<CustomerHomeScreen> {
               ),
             ),
 
-            const SizedBox(height: 24),
+            const SizedBox(height: 16),
+            // Primary Riverpod Multi-Step Order CTA
+            ElevatedButton.icon(
+              onPressed: () {
+                ref.read(orderFlowProvider.notifier).goToStep(OrderFlowStep.selectService);
+                context.push('/customer/multi-step-order');
+              },
+              style: ElevatedButton.styleFrom(
+                backgroundColor: AppColors.secondary,
+                foregroundColor: Colors.white,
+                padding: const EdgeInsets.symmetric(vertical: 14, horizontal: 16),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+              ),
+              icon: const Icon(Icons.route_rounded),
+              label: const Text(
+                'ابدأ طلب أو مشوار خطوة بخطوة (توصيل / توكتوك / سيارة)',
+                style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13),
+              ),
+            ),
+
+            const SizedBox(height: 20),
             Text(
               'الخدمات المتاحة حالياً',
               style: theme.textTheme.titleLarge?.copyWith(fontWeight: FontWeight.bold),
@@ -202,15 +245,20 @@ class _CustomerHomeScreenState extends ConsumerState<CustomerHomeScreen> {
             ),
 
             const SizedBox(height: 12),
-            // Service 2: Restaurants & Stores
+            // Service 2: Restaurants & Stores (Multi-Step Delivery Flow)
             _buildServiceCard(
               title: AppStrings.get('restaurantStore'),
               description: AppStrings.get('restaurantStoreDesc'),
               icon: Icons.storefront_rounded,
-              badgeText: 'متاجر الباجور',
+              badgeText: 'توصيل متاجر',
               badgeColor: AppColors.primaryDark,
               isEnabled: true,
-              onTap: () => context.push('/customer/book'),
+              onTap: () {
+                final flow = ref.read(orderFlowProvider.notifier);
+                flow.selectServiceCategory(OrderFlowServiceCategory.delivery);
+                flow.goToStep(OrderFlowStep.configureDetails);
+                context.push('/customer/multi-step-order');
+              },
             ),
 
             const SizedBox(height: 12),
@@ -226,34 +274,19 @@ class _CustomerHomeScreenState extends ConsumerState<CustomerHomeScreen> {
             ),
 
             const SizedBox(height: 12),
-            // Service 4: Passenger Transportation - STRICTLY DISABLED
+            // Service 4: TukTuk & Car Ride Booking (Multi-Step Ride Flow)
             _buildServiceCard(
-              title: AppStrings.get('passengerDisabled'),
-              description: AppStrings.get('passengerDisabledNotice'),
+              title: 'مشوار ركاب (توكتوك / سيارة)',
+              description: 'تنقل سريع وآمن داخل الباجور والقرى المجاورة بسعر محدد مسبقاً وكابتن موثق.',
               icon: Icons.directions_car_rounded,
-              badgeText: 'معلق نظامياً',
-              badgeColor: AppColors.error,
-              isEnabled: false,
+              badgeText: 'توكتوك • ملاكي',
+              badgeColor: AppColors.secondary,
+              isEnabled: true,
               onTap: () {
-                showDialog(
-                  context: context,
-                  builder: (ctx) => AlertDialog(
-                    title: const Row(
-                      children: [
-                        Icon(Icons.gavel_rounded, color: AppColors.error),
-                        SizedBox(width: 8),
-                        Text('امتثال تنظيمي وقانوني', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
-                      ],
-                    ),
-                    content: Text(AppStrings.get('passengerDisabledNotice')),
-                    actions: [
-                      TextButton(
-                        onPressed: () => Navigator.pop(ctx),
-                        child: const Text('حسناً'),
-                      ),
-                    ],
-                  ),
-                );
+                final flow = ref.read(orderFlowProvider.notifier);
+                flow.selectServiceCategory(OrderFlowServiceCategory.ride);
+                flow.goToStep(OrderFlowStep.configureDetails);
+                context.push('/customer/multi-step-order');
               },
             ),
 
@@ -378,7 +411,7 @@ class _CustomerHomeScreenState extends ConsumerState<CustomerHomeScreen> {
           } else if (index == 1) {
             context.push('/customer/history');
           } else if (index == 2) {
-            context.push('/customer/book');
+            context.push('/customer/multi-step-order');
           }
         },
         destinations: const [

@@ -53,6 +53,9 @@ import {
 import { EgyptianMapCanvas } from './EgyptianMapCanvas';
 import { PinchZoomPan } from '../common/PinchZoomPan';
 import { OrderTrackingScreen } from './OrderTrackingScreen';
+import { ActiveOrderStaticMapThumbnail } from './ActiveOrderStaticMapThumbnail';
+import { MultiStepOrderWizard, type WizardServiceCategory } from './MultiStepOrderWizard';
+import { auth } from '../../lib/firebase';
 import {
   useMarketplace,
   StoreItem,
@@ -163,6 +166,15 @@ export const CustomerMobileExperience: React.FC<CustomerMobileExperienceProps> =
     customerWalletBalanceEgp,
     walletTransactions,
     topUpCustomerWallet,
+    loyaltyPoints,
+    loyaltyCashbackBalanceEgp,
+    loyaltyTier,
+    loyaltyTierLabelAr,
+    loyaltyDeliveryPercent,
+    loyaltyRidePercent,
+    nextTierPointsTarget,
+    loyaltyHistory,
+    redeemLoyaltyCashbackToWallet,
     notifications,
     markAllNotificationsRead,
     complaints,
@@ -170,6 +182,7 @@ export const CustomerMobileExperience: React.FC<CustomerMobileExperienceProps> =
     customerNavTab,
     setCustomerNavTab,
   } = useMarketplace();
+  const [loyaltyRedeemMsg, setLoyaltyRedeemMsg] = useState<string | null>(null);
 
   // Navigation tab: home | ride_booking | stores | history | profile
   const [activeTab, setActiveTabState] = useState<'home' | 'ride_booking' | 'stores' | 'history' | 'profile'>(customerNavTab);
@@ -189,6 +202,8 @@ export const CustomerMobileExperience: React.FC<CustomerMobileExperienceProps> =
   const [searchQuery, setSearchQuery] = useState('');
 
   // Ride & Package Booking Flow State
+  const [wizardInitialCategory, setWizardInitialCategory] = useState<WizardServiceCategory>('ride');
+  const [useMultiStepWizard, setUseMultiStepWizard] = useState<boolean>(true);
   const [bookingServiceMode, setBookingServiceMode] = useState<'errand' | 'package' | 'heavy' | 'passenger_locked'>('errand');
   const [pickupLandmarkId, setPickupLandmarkId] = useState<string>('lm_station');
   const [dropoffLandmarkId, setDropoffLandmarkId] = useState<string>('lm_army_st');
@@ -865,17 +880,21 @@ export const CustomerMobileExperience: React.FC<CustomerMobileExperienceProps> =
             )}
           </button>
 
-          {/* Demo Auth Switcher Trigger */}
+          {/* Firebase OTP / Demo Auth Switcher Trigger */}
           <button
             onClick={() => {
               if (onOpenAuthModal) onOpenAuthModal();
               else setIsAuthModalOpen(true);
             }}
-            className="text-[10px] font-bold text-slate-700 bg-slate-100 hover:bg-slate-200 px-2 py-1 rounded-full transition-colors flex items-center gap-0.5 shadow-2xs"
-            title="تبديل الحساب التجريبي"
+            className={`text-[10px] font-bold px-2 py-1 rounded-full transition-colors flex items-center gap-1 shadow-2xs ${
+              auth.currentUser
+                ? 'bg-emerald-100 text-emerald-900 border border-emerald-300'
+                : 'text-slate-700 bg-slate-100 hover:bg-slate-200'
+            }`}
+            title="تسجيل الدخول برقم الهاتف (OTP) أو تبديل الحساب"
           >
-            <span>🔄</span>
-            <span>دور</span>
+            <span>{auth.currentUser ? '📱' : '🔐'}</span>
+            <span>{auth.currentUser ? 'موثق' : 'دخول'}</span>
           </button>
         </div>
       </div>
@@ -1282,458 +1301,36 @@ export const CustomerMobileExperience: React.FC<CustomerMobileExperienceProps> =
                     Travel Time/Distance Badge, Copy Pickup/Dropoff Buttons,
                     Material 3 Pulsing SVG Pins, and Skeleton Loading State
                    ===================================================================== */}
-                {isRefreshingMobile ? (
-                  <div
-                    data-testid="static-map-skeleton-loader"
-                    className="rounded-2xl border border-slate-200 bg-slate-100 p-3 h-40 flex flex-col justify-between animate-pulse"
-                  >
-                    <div className="flex items-center justify-between">
-                      <div className="h-5 w-28 rounded-lg bg-slate-300" />
-                      <div className="flex items-center gap-1.5">
-                        <div className="h-5 w-20 rounded-lg bg-slate-300" />
-                        <div className="h-5 w-6 rounded-lg bg-slate-300" />
-                        <div className="h-5 w-6 rounded-lg bg-slate-300" />
-                      </div>
-                    </div>
-                    <div className="flex items-center justify-around py-3">
-                      <div className="w-7 h-7 rounded-full bg-emerald-300/70" />
-                      <div className="h-1.5 flex-1 mx-4 rounded-full bg-slate-300" />
-                      <div className="w-7 h-7 rounded-full bg-amber-300/70" />
-                    </div>
-                    <div className="grid grid-cols-2 gap-2">
-                      <div className="h-6 rounded-lg bg-slate-300" />
-                      <div className="h-6 rounded-lg bg-slate-300" />
-                    </div>
-                  </div>
-                ) : (
-                  <div
-                    data-testid="active-order-static-map-thumbnail"
-                    data-map-layer={mobileMapLayerStyle}
-                    data-map-zoom={mobileMapZoomScale.toFixed(2)}
-                    data-marker-pulse={
-                      activeCustomerOrder.status === 'at_pickup' ||
-                      activeCustomerOrder.status === 'in_transit'
-                        ? 'active'
-                        : 'idle'
-                    }
-                    data-loading-skeleton={isRefreshingMobile ? 'true' : 'false'}
-                    data-map-view-mode={isMobileFullScreenMap ? 'fullscreen' : 'thumbnail'}
-                    data-theme-mode={isMobileMapDarkMode ? 'dark' : 'light'}
-                    aria-busy={isRefreshingMobile}
-                    aria-label="El Bagour Route Static Map Thumbnail"
-                    className={`rounded-2xl border overflow-hidden transition-colors duration-300 ${
-                      mobileMapLayerStyle === 'satellite'
-                        ? 'bg-[#0c211b] border-emerald-800/80 text-white'
-                        : isMobileMapDarkMode
-                        ? 'bg-slate-950 border-slate-800 text-white'
-                        : 'bg-slate-100 border-slate-200/90 text-slate-900'
-                    }`}
-                  >
-                    {/* Map Top Header Bar: Layer Toggle (Route / Satellite), Dark/Light Toggle & Fullscreen */}
-                    <div
-                      className={`px-2.5 py-1.5 border-b flex items-center justify-between gap-1.5 text-[10px] ${
-                        mobileMapLayerStyle === 'satellite' || isMobileMapDarkMode
-                          ? 'bg-slate-900/90 border-slate-800 text-slate-200'
-                          : 'bg-white/90 border-slate-200/80 text-slate-700'
-                      }`}
-                    >
-                      <div className="flex items-center gap-1 font-extrabold truncate">
-                        <Navigation className="w-3 h-3 text-emerald-600 shrink-0" />
-                        <span>خريطة مسار الطلب التفاعلية</span>
-                      </div>
-
-                      <div className="flex items-center gap-1 shrink-0">
-                        {/* Satellite / Terrain vs Route Overview Toggle */}
-                        <button
-                          type="button"
-                          data-testid="toggle-map-layer-btn"
-                          onClick={() => {
-                            triggerMobileHapticFeedback();
-                            setMobileMapLayerStyle((prev) =>
-                              prev === 'route' ? 'satellite' : 'route'
-                            );
-                          }}
-                          className={`px-2 py-0.5 rounded-lg border text-[9px] font-extrabold flex items-center gap-1 transition cursor-pointer hover:scale-105 active:scale-95 ${
-                            mobileMapLayerStyle === 'satellite'
-                              ? 'bg-emerald-700 text-white border-emerald-500'
-                              : isMobileMapDarkMode
-                              ? 'bg-slate-800 text-slate-200 border-slate-700'
-                              : 'bg-slate-100 text-slate-700 border-slate-300'
-                          }`}
-                          title="تبديل طبقة الخريطة (Route Overview / Satellite Terrain)"
-                        >
-                          <Layers className="w-2.5 h-2.5 text-amber-500" />
-                          <span>
-                            {mobileMapLayerStyle === 'satellite'
-                              ? 'تضاريس • Satellite'
-                              : 'مسار • Route'}
-                          </span>
-                        </button>
-
-                        {/* Dark / Light Map Mode Toggle */}
-                        <button
-                          type="button"
-                          data-testid="toggle-map-theme-btn"
-                          onClick={() => {
-                            triggerMobileHapticFeedback();
-                            setIsMobileMapDarkMode((prev) => !prev);
-                          }}
-                          className={`px-1.5 py-0.5 rounded-lg border text-[9px] font-extrabold flex items-center gap-0.5 transition cursor-pointer hover:scale-105 active:scale-95 ${
-                            isMobileMapDarkMode
-                              ? 'bg-slate-800 text-amber-300 border-slate-700'
-                              : 'bg-slate-100 text-slate-700 border-slate-300'
-                          }`}
-                          title="تبديل ألوان الخريطة (ليلي / نهاري)"
-                        >
-                          {isMobileMapDarkMode ? (
-                            <Sun className="w-2.5 h-2.5 text-amber-400" />
-                          ) : (
-                            <Moon className="w-2.5 h-2.5 text-slate-600" />
-                          )}
-                          <span>{isMobileMapDarkMode ? 'نهاري' : 'ليلي'}</span>
-                        </button>
-
-                        {/* Full-Screen Map View Toggle */}
-                        <button
-                          type="button"
-                          data-testid="toggle-fullscreen-map-btn"
-                          onClick={() => {
-                            triggerMobileHapticFeedback();
-                            setIsMobileFullScreenMap(true);
-                          }}
-                          className="px-1.5 py-0.5 rounded-lg bg-emerald-700 hover:bg-emerald-600 text-white border border-emerald-600 text-[9px] font-extrabold flex items-center gap-0.5 transition cursor-pointer hover:scale-105 active:scale-95"
-                          title="عرض الخريطة بملء شاشة التطبيق"
-                        >
-                          <Maximize2 className="w-2.5 h-2.5" />
-                          <span>ملء الشاشة</span>
-                        </button>
-                      </div>
-                    </div>
-
-                    {/* Interactive Pinch-to-Zoom & Pan SVG Map Viewport */}
-                    <div className="relative h-32 w-full overflow-hidden">
-                      {/* Corner Travel Time & Distance Estimate Badge */}
-                      <div
-                        data-testid="map-travel-estimate-badge"
-                        className="absolute top-2 right-2 z-20 pointer-events-none inline-flex items-center gap-1 px-2 py-0.5 rounded-lg bg-slate-900/90 text-white border border-slate-700 shadow-md text-[9px] font-extrabold font-['Cairo',sans-serif]"
-                      >
-                        <Clock className="w-2.5 h-2.5 text-amber-400" />
-                        <span>~{activeDurationMinutes} د</span>
-                        <span className="text-slate-400">•</span>
-                        <span className="text-emerald-300">
-                          {activeCustomerOrder.distanceKm || 2.4} كم
-                        </span>
-                      </div>
-
-                      {/* Dedicated Touch-Optimized '+' and '-' Zoom Control Buttons on Corner */}
-                      <div
-                        data-testid="map-pinch-zoom-controls"
-                        className="absolute bottom-2 left-2 z-20 flex items-center gap-1"
-                      >
-                        <button
-                          type="button"
-                          data-testid="map-zoom-in-btn"
-                          onClick={handleMobileZoomIn}
-                          disabled={mobileMapZoomScale >= 3}
-                          aria-label="تكبير خريطة الطلب (+)"
-                          title="تكبير الخريطة (+)"
-                          className="w-7 h-7 rounded-xl bg-slate-900/90 hover:bg-slate-800 disabled:opacity-40 text-white border border-slate-700 shadow-md flex items-center justify-center font-black text-xs transition cursor-pointer hover:scale-105 active:scale-95"
-                        >
-                          <Plus className="w-3.5 h-3.5" />
-                        </button>
-                        <button
-                          type="button"
-                          data-testid="map-zoom-out-btn"
-                          onClick={handleMobileZoomOut}
-                          disabled={mobileMapZoomScale <= 1}
-                          aria-label="تصغير خريطة الطلب (-)"
-                          title="تصغير الخريطة (-)"
-                          className="w-7 h-7 rounded-xl bg-slate-900/90 hover:bg-slate-800 disabled:opacity-40 text-white border border-slate-700 shadow-md flex items-center justify-center font-black text-xs transition cursor-pointer hover:scale-105 active:scale-95"
-                        >
-                          <Minus className="w-3.5 h-3.5" />
-                        </button>
-                        {mobileMapZoomScale > 1.02 && (
-                          <button
-                            type="button"
-                            data-testid="map-zoom-reset-btn"
-                            onClick={handleMobileZoomReset}
-                            title="إعادة ضبط الزووم"
-                            className="px-1.5 h-7 rounded-xl bg-amber-500 text-slate-950 font-black text-[9px] shadow-md flex items-center gap-0.5 cursor-pointer hover:scale-105 active:scale-95"
-                          >
-                            <RotateCcw className="w-2.5 h-2.5" />
-                            <span>{Math.round(mobileMapZoomScale * 100)}%</span>
-                          </button>
-                        )}
-                      </div>
-
-                      <PinchZoomPan
-                        scale={mobileMapZoomScale}
-                        onScaleChange={setMobileMapZoomScale}
-                        showControls={false}
-                        className="w-full h-full"
-                      >
-                        <svg
-                          viewBox="0 0 360 130"
-                          className="w-full h-full object-cover select-none"
-                        >
-                          <defs>
-                            <pattern
-                              id="mobileSheetGrid"
-                              width="24"
-                              height="24"
-                              patternUnits="userSpaceOnUse"
-                            >
-                              <path
-                                d="M 24 0 L 0 0 0 24"
-                                fill="none"
-                                stroke={
-                                  mobileMapLayerStyle === 'satellite'
-                                    ? '#14532d'
-                                    : isMobileMapDarkMode
-                                    ? '#1e293b'
-                                    : '#cbd5e1'
-                                }
-                                strokeWidth="0.8"
-                              />
-                            </pattern>
-                            <filter
-                              id="mobileSheetPinShadow"
-                              x="-40%"
-                              y="-40%"
-                              width="180%"
-                              height="180%"
-                            >
-                              <feDropShadow
-                                dx="0"
-                                dy="2"
-                                stdDeviation="2"
-                                floodColor="#0f172a"
-                                floodOpacity="0.45"
-                              />
-                            </filter>
-                          </defs>
-
-                          {/* Background Fill */}
-                          <rect
-                            width="360"
-                            height="130"
-                            fill={
-                              mobileMapLayerStyle === 'satellite'
-                                ? '#0f2922'
-                                : isMobileMapDarkMode
-                                ? '#0f172a'
-                                : '#f1f5f9'
-                            }
-                          />
-                          <rect width="360" height="130" fill="url(#mobileSheetGrid)" />
-
-                          {/* Satellite Topographic Zones */}
-                          {mobileMapLayerStyle === 'satellite' && (
-                            <g opacity="0.45">
-                              <ellipse
-                                cx="95"
-                                cy="65"
-                                rx="65"
-                                ry="38"
-                                fill="#064e3b"
-                                stroke="#10b981"
-                                strokeWidth="0.8"
-                                strokeDasharray="4 3"
-                              />
-                              <ellipse
-                                cx="265"
-                                cy="60"
-                                rx="70"
-                                ry="42"
-                                fill="#065f46"
-                                stroke="#34d399"
-                                strokeWidth="0.8"
-                                strokeDasharray="4 3"
-                              />
-                            </g>
-                          )}
-
-                          {/* Bagour Canal Ribbon */}
-                          <path
-                            d="M 0 105 Q 130 85 220 55 T 360 25"
-                            fill="none"
-                            stroke={
-                              mobileMapLayerStyle === 'satellite' || isMobileMapDarkMode
-                                ? '#0284c7'
-                                : '#93c5fd'
-                            }
-                            strokeWidth="12"
-                            strokeLinecap="round"
-                            opacity="0.55"
-                          />
-
-                          {/* Route Path */}
-                          <path
-                            d="M 65 88 C 130 88, 165 44, 290 48"
-                            fill="none"
-                            stroke="#10b981"
-                            strokeWidth="4"
-                            strokeLinecap="round"
-                          />
-                          <path
-                            d="M 65 88 C 130 88, 165 44, 290 48"
-                            fill="none"
-                            stroke="#ffffff"
-                            strokeWidth="1.5"
-                            strokeDasharray="4 6"
-                            strokeLinecap="round"
-                          />
-
-                          {/* Pickup Material 3 SVG Map Pin (Pulses when status === 'at_pickup') */}
-                          <g
-                            transform="translate(65, 88)"
-                            filter="url(#mobileSheetPinShadow)"
-                            data-testid="map-svg-pickup-pin"
-                          >
-                            {activeCustomerOrder.status === 'at_pickup' && (
-                              <circle cx="0" cy="-10" r="16" fill="#10b981" opacity="0.35">
-                                <animate
-                                  attributeName="r"
-                                  values="9;20;9"
-                                  dur="1.4s"
-                                  repeatCount="indefinite"
-                                />
-                                <animate
-                                  attributeName="opacity"
-                                  values="0.5;0.05;0.5"
-                                  dur="1.4s"
-                                  repeatCount="indefinite"
-                                />
-                              </circle>
-                            )}
-                            <path
-                              d="M 0 0 C -6 -7 -10 -12 -10 -17 A 10 10 0 1 1 10 -17 C 10 -12 6 -7 0 0 Z"
-                              fill="#047857"
-                              stroke="#ffffff"
-                              strokeWidth="1.8"
-                            />
-                            <circle cx="0" cy="-17" r="3.8" fill="#ffffff" />
-                          </g>
-
-                          {/* Captain Live Scooter Marker on Route */}
-                          <g transform="translate(178, 64)" filter="url(#mobileSheetPinShadow)">
-                            <circle
-                              cx="0"
-                              cy="0"
-                              r="11"
-                              fill="#0f172a"
-                              stroke="#10b981"
-                              strokeWidth="2"
-                            />
-                            <text x="0" y="3.5" textAnchor="middle" fontSize="9">
-                              🛵
-                            </text>
-                          </g>
-
-                          {/* Dropoff Material 3 SVG Map Pin (Pulses when status === 'in_transit') */}
-                          <g
-                            transform="translate(290, 48)"
-                            filter="url(#mobileSheetPinShadow)"
-                            data-testid="map-svg-dropoff-pin"
-                          >
-                            {activeCustomerOrder.status === 'in_transit' && (
-                              <circle cx="0" cy="-10" r="16" fill="#f59e0b" opacity="0.35">
-                                <animate
-                                  attributeName="r"
-                                  values="9;20;9"
-                                  dur="1.4s"
-                                  repeatCount="indefinite"
-                                />
-                                <animate
-                                  attributeName="opacity"
-                                  values="0.5;0.05;0.5"
-                                  dur="1.4s"
-                                  repeatCount="indefinite"
-                                />
-                              </circle>
-                            )}
-                            <path
-                              d="M 0 0 C -6 -7 -10 -12 -10 -17 A 10 10 0 1 1 10 -17 C 10 -12 6 -7 0 0 Z"
-                              fill="#d97706"
-                              stroke="#ffffff"
-                              strokeWidth="1.8"
-                            />
-                            <circle cx="0" cy="-17" r="3.8" fill="#ffffff" />
-                          </g>
-                        </svg>
-                      </PinchZoomPan>
-                    </div>
-
-                    {/* Copy Pickup Address & Copy Dropoff Address Bar inside Mobile Map Card */}
-                    <div
-                      className={`px-2.5 py-1.5 border-t grid grid-cols-2 gap-1.5 text-[10px] ${
-                        mobileMapLayerStyle === 'satellite' || isMobileMapDarkMode
-                          ? 'bg-slate-900/95 border-slate-800'
-                          : 'bg-white border-slate-200/80'
-                      }`}
-                    >
-                      <button
-                        type="button"
-                        data-testid="copy-pickup-address-btn"
-                        onClick={() =>
-                          handleCopyMobileAddress('pickup', activeCustomerOrder.storeAddress)
-                        }
-                        className={`px-2 py-1 rounded-xl border flex items-center justify-between gap-1 transition cursor-pointer hover:scale-105 active:scale-95 ${
-                          mobileCopiedAddressField === 'pickup'
-                            ? 'bg-emerald-700 text-white border-emerald-600'
-                            : isMobileMapDarkMode || mobileMapLayerStyle === 'satellite'
-                            ? 'bg-slate-800 text-slate-200 border-slate-700 hover:bg-slate-700'
-                            : 'bg-slate-50 text-slate-700 border-slate-200 hover:bg-emerald-50'
-                        }`}
-                        title="نسخ عنوان الاستلام (Copy Pickup Address)"
-                      >
-                        <div className="flex items-center gap-1 min-w-0">
-                          <span className="w-2 h-2 rounded-full bg-emerald-500 shrink-0" />
-                          <span className="font-bold truncate">
-                            {mobileCopiedAddressField === 'pickup'
-                              ? 'تم نسخ الاستلام ✓'
-                              : `استلام: ${activeCustomerOrder.storeAddress}`}
-                          </span>
-                        </div>
-                        {mobileCopiedAddressField === 'pickup' ? (
-                          <Check className="w-3 h-3 shrink-0" />
-                        ) : (
-                          <Copy className="w-3 h-3 text-slate-400 shrink-0" />
-                        )}
-                      </button>
-
-                      <button
-                        type="button"
-                        data-testid="copy-dropoff-address-btn"
-                        onClick={() =>
-                          handleCopyMobileAddress('dropoff', activeCustomerOrder.deliveryAddress)
-                        }
-                        className={`px-2 py-1 rounded-xl border flex items-center justify-between gap-1 transition cursor-pointer hover:scale-105 active:scale-95 ${
-                          mobileCopiedAddressField === 'dropoff'
-                            ? 'bg-amber-500 text-slate-950 border-amber-400'
-                            : isMobileMapDarkMode || mobileMapLayerStyle === 'satellite'
-                            ? 'bg-slate-800 text-slate-200 border-slate-700 hover:bg-slate-700'
-                            : 'bg-slate-50 text-slate-700 border-slate-200 hover:bg-amber-50'
-                        }`}
-                        title="نسخ عنوان التوصيل (Copy Dropoff Address)"
-                      >
-                        <div className="flex items-center gap-1 min-w-0">
-                          <span className="w-2 h-2 rounded-full bg-amber-500 shrink-0" />
-                          <span className="font-bold truncate">
-                            {mobileCopiedAddressField === 'dropoff'
-                              ? 'تم نسخ الوجهة ✓'
-                              : `وصول: ${activeCustomerOrder.deliveryAddress}`}
-                          </span>
-                        </div>
-                        {mobileCopiedAddressField === 'dropoff' ? (
-                          <Check className="w-3 h-3 shrink-0" />
-                        ) : (
-                          <Copy className="w-3 h-3 text-slate-400 shrink-0" />
-                        )}
-                      </button>
-                    </div>
-                  </div>
-                )}
+                <ActiveOrderStaticMapThumbnail
+                  orderStatus={activeCustomerOrder.status}
+                  pickupAddress={activeCustomerOrder.storeAddress}
+                  dropoffAddress={activeCustomerOrder.deliveryAddress}
+                  distanceKm={activeCustomerOrder.distanceKm || 2.4}
+                  durationMinutes={activeDurationMinutes}
+                  etaSeconds={mobileEtaSeconds}
+                  isRefreshing={isRefreshingMobile}
+                  isDarkMode={isMobileMapDarkMode}
+                  onToggleDarkMode={() => {
+                    triggerMobileHapticFeedback();
+                    setIsMobileMapDarkMode((prev) => !prev);
+                  }}
+                  mapLayerStyle={mobileMapLayerStyle}
+                  onToggleMapLayerStyle={() => {
+                    triggerMobileHapticFeedback();
+                    setMobileMapLayerStyle((prev) => (prev === 'route' ? 'satellite' : 'route'));
+                  }}
+                  mapZoomScale={mobileMapZoomScale}
+                  onMapZoomScaleChange={setMobileMapZoomScale}
+                  isFullScreen={isMobileFullScreenMap}
+                  onToggleFullScreen={() => {
+                    triggerMobileHapticFeedback();
+                    setIsMobileFullScreenMap(true);
+                  }}
+                  copiedField={mobileCopiedAddressField}
+                  onCopyAddress={handleCopyMobileAddress}
+                  onTriggerHaptic={triggerMobileHapticFeedback}
+                  compact={true}
+                />
 
                 {/* Dual Metric Strip: Accepted Timestamp + Dynamic ETA Countdown Timer */}
                 <div className="grid grid-cols-2 gap-2">
@@ -2476,30 +2073,33 @@ export const CustomerMobileExperience: React.FC<CustomerMobileExperienceProps> =
                   <div className="grid grid-cols-3 gap-2">
                     <button
                       onClick={() => {
+                        setWizardInitialCategory('ride');
+                        setUseMultiStepWizard(true);
                         setBookingServiceMode('errand');
                         setActiveTab('ride_booking');
                       }}
                       className="p-2.5 rounded-2xl bg-emerald-50/90 hover:bg-emerald-100 border border-emerald-200 flex flex-col items-center text-center gap-1 transition-all active:scale-95 cursor-pointer"
                     >
                       <div className="w-9 h-9 rounded-xl bg-emerald-700 text-white flex items-center justify-center shadow-xs">
-                        <Bike className="w-5 h-5" />
+                        <Car className="w-5 h-5" />
                       </div>
-                      <span className="font-extrabold text-[11px] text-slate-900">حجز مشوار</span>
-                      <span className="text-[9px] text-emerald-800 font-bold">كابتن فوري</span>
+                      <span className="font-extrabold text-[11px] text-slate-900">مشوار توكتوك/سيارة</span>
+                      <span className="text-[9px] text-emerald-800 font-bold">خطوة بخطوة</span>
                     </button>
 
                     <button
                       onClick={() => {
-                        setBookingServiceMode('package');
+                        setWizardInitialCategory('delivery');
+                        setUseMultiStepWizard(true);
                         setActiveTab('ride_booking');
                       }}
                       className="p-2.5 rounded-2xl bg-amber-50/90 hover:bg-amber-100 border border-amber-200 flex flex-col items-center text-center gap-1 transition-all active:scale-95 cursor-pointer"
                     >
                       <div className="w-9 h-9 rounded-xl bg-amber-500 text-slate-950 flex items-center justify-center shadow-xs">
-                        <Package className="w-5 h-5" />
+                        <ShoppingBag className="w-5 h-5" />
                       </div>
-                      <span className="font-extrabold text-[11px] text-slate-900">توصيل طرد</span>
-                      <span className="text-[9px] text-amber-900 font-bold">أمانات وشحن</span>
+                      <span className="font-extrabold text-[11px] text-slate-900">توصيل متاجر</span>
+                      <span className="text-[9px] text-amber-900 font-bold">مطاعم وصيدليات</span>
                     </button>
 
                     <button
@@ -2509,8 +2109,8 @@ export const CustomerMobileExperience: React.FC<CustomerMobileExperienceProps> =
                       <div className="w-9 h-9 rounded-xl bg-slate-900 text-emerald-400 flex items-center justify-center shadow-xs">
                         <Store className="w-5 h-5" />
                       </div>
-                      <span className="font-extrabold text-[11px] text-slate-900">المتاجر</span>
-                      <span className="text-[9px] text-slate-600 font-bold">مطاعم وصيدليات</span>
+                      <span className="font-extrabold text-[11px] text-slate-900">تصفح المتاجر</span>
+                      <span className="text-[9px] text-slate-600 font-bold">عروض الباجور</span>
                     </button>
                   </div>
                 </div>
@@ -2585,7 +2185,46 @@ export const CustomerMobileExperience: React.FC<CustomerMobileExperienceProps> =
               )}
             </div>
 
-            <div className="p-3.5 flex flex-col gap-3 pb-20">
+            <div className="px-3.5 pt-2.5 flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => setUseMultiStepWizard(true)}
+                className={`flex-1 py-1.5 rounded-xl text-[11px] font-extrabold transition-all ${
+                  useMultiStepWizard
+                    ? 'bg-emerald-700 text-white shadow-xs'
+                    : 'bg-white border border-slate-200 text-slate-600'
+                }`}
+              >
+                طلب خطوة بخطوة (توصيل / مشوار)
+              </button>
+              <button
+                type="button"
+                onClick={() => setUseMultiStepWizard(false)}
+                className={`flex-1 py-1.5 rounded-xl text-[11px] font-extrabold transition-all ${
+                  !useMultiStepWizard
+                    ? 'bg-emerald-700 text-white shadow-xs'
+                    : 'bg-white border border-slate-200 text-slate-600'
+                }`}
+              >
+                الحجز السريع الموحد
+              </button>
+            </div>
+
+            {useMultiStepWizard ? (
+              <MultiStepOrderWizard
+                key={wizardInitialCategory}
+                initialCategory={wizardInitialCategory}
+                onOrderCreated={() => {
+                  setSelectedStore(null);
+                  setActiveTab('home');
+                }}
+                onOpenAuthModal={() => {
+                  if (onOpenAuthModal) onOpenAuthModal();
+                  else setIsAuthModalOpen(true);
+                }}
+              />
+            ) : (
+              <div className="p-3.5 flex flex-col gap-3 pb-20">
               {/* Service Category Tabs */}
               <div>
                 <label className="text-[11px] font-extrabold text-slate-700 block mb-1.5">
@@ -2870,6 +2509,7 @@ export const CustomerMobileExperience: React.FC<CustomerMobileExperienceProps> =
                 </span>
               </button>
             </div>
+            )}
           </div>
         )}
 
@@ -3437,6 +3077,128 @@ export const CustomerMobileExperience: React.FC<CustomerMobileExperienceProps> =
                   إنستاباي • فودافون كاش
                 </span>
               </div>
+            </div>
+
+            {/* LOYALTY POINTS & CASHBACK TRACKING CARD */}
+            <div
+              data-testid="customer-loyalty-section"
+              className="rounded-2xl bg-gradient-to-br from-amber-50 via-white to-emerald-50 border border-amber-200/90 p-4 shadow-2xs flex flex-col gap-3"
+            >
+              <div className="flex items-center justify-between gap-2">
+                <div className="flex items-center gap-2">
+                  <div className="w-9 h-9 rounded-xl bg-amber-500 text-slate-950 flex items-center justify-center shadow-xs">
+                    <Sparkles className="w-5 h-5" />
+                  </div>
+                  <div>
+                    <div className="text-xs font-black text-slate-900">
+                      نقاط الولاء والكاش باك (Mashwar Rewards)
+                    </div>
+                    <div className="text-[10px] font-bold text-amber-800">
+                      {loyaltyTierLabelAr}
+                    </div>
+                  </div>
+                </div>
+                <span className="text-[11px] font-black px-2.5 py-1 rounded-full bg-slate-900 text-amber-400">
+                  {loyaltyPoints} نقطة
+                </span>
+              </div>
+
+              {/* Cashback Balance & Percentages */}
+              <div className="grid grid-cols-2 gap-2">
+                <div className="bg-white rounded-xl p-2.5 border border-amber-200/70">
+                  <span className="text-[10px] font-bold text-slate-500 block">
+                    رصيد الكاش باك المتاح
+                  </span>
+                  <span className="text-lg font-black text-emerald-800">
+                    {loyaltyCashbackBalanceEgp}.00 ج.م
+                  </span>
+                </div>
+                <div className="bg-white rounded-xl p-2.5 border border-emerald-200/70">
+                  <span className="text-[10px] font-bold text-slate-500 block">
+                    نسبة الكاش باك الحالية
+                  </span>
+                  <div className="text-[11px] font-black text-slate-900 mt-0.5">
+                    {loyaltyDeliveryPercent}% متاجر • {loyaltyRidePercent}% مشاوير
+                  </div>
+                </div>
+              </div>
+
+              {/* Tier Progress Bar */}
+              {nextTierPointsTarget && (
+                <div className="flex flex-col gap-1">
+                  <div className="flex items-center justify-between text-[10px] font-bold text-slate-600">
+                    <span>التقدم للترقية التالية</span>
+                    <span>
+                      {loyaltyPoints} / {nextTierPointsTarget} نقطة
+                    </span>
+                  </div>
+                  <div className="w-full h-2 rounded-full bg-slate-200 overflow-hidden">
+                    <div
+                      className={`h-full rounded-full transition-all ${
+                        loyaltyTier === 'silver' ? 'bg-amber-500' : 'bg-emerald-600'
+                      }`}
+                      style={{
+                        width: `${Math.min(100, Math.round((loyaltyPoints / nextTierPointsTarget) * 100))}%`,
+                      }}
+                    />
+                  </div>
+                </div>
+              )}
+
+              {loyaltyRedeemMsg && (
+                <div className="text-[11px] font-bold text-emerald-800 bg-emerald-100/80 border border-emerald-200 rounded-xl px-2.5 py-1.5">
+                  {loyaltyRedeemMsg}
+                </div>
+              )}
+
+              <div className="flex items-center justify-between gap-2 pt-1 border-t border-amber-200/60">
+                <span className="text-[10px] text-slate-600 font-semibold">
+                  يُحتسب الكاش باك تلقائياً عند تسليم كل طلب أو مشوار
+                </span>
+                <button
+                  type="button"
+                  disabled={loyaltyCashbackBalanceEgp < 1}
+                  onClick={() => {
+                    const res = redeemLoyaltyCashbackToWallet();
+                    if (res.success) {
+                      setLoyaltyRedeemMsg(`تم تحويل ${res.transferredEgp} ج.م كاش باك إلى محفظتك بنجاح!`);
+                    }
+                  }}
+                  className="shrink-0 px-3 py-1.5 rounded-xl bg-emerald-700 hover:bg-emerald-800 disabled:bg-slate-200 disabled:text-slate-400 text-white text-[10px] font-extrabold transition-all cursor-pointer"
+                >
+                  تحويل للمحفظة
+                </button>
+              </div>
+
+              {loyaltyHistory.length > 0 && (
+                <div className="bg-white/90 rounded-xl border border-slate-200/80 p-2.5 flex flex-col gap-1.5">
+                  <div className="text-[10px] font-extrabold text-slate-700">
+                    سجل كاش باك الطلبات المكتملة ({loyaltyHistory.length})
+                  </div>
+                  <div className="divide-y divide-slate-100 max-h-36 overflow-y-auto">
+                    {loyaltyHistory.slice(0, 5).map((entry) => (
+                      <div key={entry.id} className="py-1.5 flex items-center justify-between text-[11px]">
+                        <div>
+                          <div className="font-bold text-slate-800">
+                            #{entry.orderNumber} • {entry.serviceTypeAr}
+                          </div>
+                          <div className="text-[9px] text-slate-400">
+                            {entry.createdAtAr} • نسبة {entry.cashbackPercent}%
+                          </div>
+                        </div>
+                        <div className="text-left">
+                          <div className="font-black text-emerald-700">
+                            +{entry.cashbackAmountEgp} ج.م
+                          </div>
+                          <div className="text-[9px] font-bold text-amber-700">
+                            +{entry.pointsEarned} نقطة
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
             </div>
 
             {/* Wallet Transaction History */}

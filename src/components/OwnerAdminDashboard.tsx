@@ -77,7 +77,7 @@ interface OrderItem {
   orderNumber: string;
   customerName: string;
   customerPhone: string;
-  serviceType: 'package' | 'restaurant_store' | 'errand';
+  serviceType: 'package' | 'restaurant_store' | 'errand' | 'ride';
   serviceTypeAr: string;
   status:
     | 'created'
@@ -168,7 +168,9 @@ export function OwnerAdminDashboard() {
       customerPhone: o.customerPhone,
       serviceType: o.serviceType || 'restaurant_store',
       serviceTypeAr:
-        o.serviceType === 'errand'
+        o.serviceType === 'ride'
+          ? o.serviceTypeAr || 'مشوار ركاب (توكتوك / سيارة)'
+          : o.serviceType === 'errand'
           ? 'مشوار خاص سريع'
           : o.serviceType === 'package'
           ? 'توصيل مستندات وطرود'

@@ -28,8 +28,7 @@ import {
   Volume2,
   VolumeX,
 } from 'lucide-react';
-import { PinchZoomPan } from '../common/PinchZoomPan';
-import { EgyptianMapCanvas } from './EgyptianMapCanvas';
+import { ActiveOrderStaticMapThumbnail } from './ActiveOrderStaticMapThumbnail';
 import {
   useMarketplace,
   MarketplaceOrder,
@@ -427,331 +426,35 @@ export const OrderTrackingScreen: React.FC<OrderTrackingScreenProps> = ({
             Matches 'active-order-static-map-thumbnail' data-testid contract
             with zoom, layer toggle, landmarks, pan controls, and pulsing pins.
            ===================================================================== */}
-        {isRefreshing ? (
-          <div
-            data-testid="static-map-skeleton-loader"
-            className="rounded-2xl border border-slate-200 bg-slate-100 p-3 h-44 flex flex-col justify-between animate-pulse"
-          >
-            <div className="flex items-center justify-between">
-              <div className="h-5 w-28 rounded-lg bg-slate-300" />
-              <div className="flex items-center gap-1.5">
-                <div className="h-5 w-16 rounded-lg bg-slate-300" />
-                <div className="h-5 w-6 rounded-lg bg-slate-300" />
-              </div>
-            </div>
-            <div className="flex items-center justify-around py-3">
-              <div className="w-7 h-7 rounded-full bg-emerald-300/70" />
-              <div className="h-1.5 flex-1 mx-4 rounded-full bg-slate-300" />
-              <div className="w-7 h-7 rounded-full bg-amber-300/70" />
-            </div>
-            <div className="grid grid-cols-2 gap-2">
-              <div className="h-6 rounded-lg bg-slate-300" />
-              <div className="h-6 rounded-lg bg-slate-300" />
-            </div>
-          </div>
-        ) : (
-          <div
-            data-testid="active-order-static-map-thumbnail"
-            data-map-view-mode={isFullScreen ? 'fullscreen' : 'thumbnail'}
-            data-theme-mode={isDarkMode ? 'dark' : 'light'}
-            data-map-layer={mapLayerStyle}
-            data-map-zoom={mapZoomScale.toFixed(2)}
-            data-marker-pulse={order.status === 'at_pickup' || order.status === 'in_transit' ? 'active' : 'idle'}
-            data-loading-skeleton={isRefreshing ? 'true' : 'false'}
-            aria-busy={isRefreshing}
-            aria-label="El Bagour Route Static Map Thumbnail"
-            className={`rounded-2xl border overflow-hidden transition-colors duration-300 shadow-sm ${
-              mapLayerStyle === 'satellite'
-                ? 'bg-[#0c211b] border-emerald-800/80 text-white'
-                : isDarkMode
-                ? 'bg-slate-950 border-slate-800 text-white'
-                : 'bg-white border-slate-200/90 text-slate-900'
-            }`}
-          >
-            {/* Map Top Bar: Layer Toggle, Theme Toggle & Fullscreen */}
-            <div
-              className={`px-2.5 py-1.5 border-b flex items-center justify-between gap-1.5 text-[10px] ${
-                mapLayerStyle === 'satellite' || isDarkMode
-                  ? 'bg-slate-900/90 border-slate-800 text-slate-200'
-                  : 'bg-slate-50 border-slate-200/80 text-slate-700'
-              }`}
-            >
-              <div className="flex items-center gap-1 font-extrabold truncate">
-                <Navigation className="w-3 h-3 text-emerald-600 shrink-0" />
-                <span className="truncate">مسار الباجور • {order.distanceKm || 2.4} كم</span>
-              </div>
-
-              <div className="flex items-center gap-1 shrink-0">
-                {/* Layer Toggle (Route / Satellite Terrain) */}
-                <button
-                  type="button"
-                  data-testid="toggle-map-layer-btn"
-                  onClick={() => {
-                    triggerHaptic();
-                    setMapLayerStyle((prev) => (prev === 'route' ? 'satellite' : 'route'));
-                  }}
-                  className={`px-2 py-0.5 rounded-lg border text-[9px] font-extrabold flex items-center gap-1 transition cursor-pointer hover:scale-105 active:scale-95 ${
-                    mapLayerStyle === 'satellite'
-                      ? 'bg-emerald-700 text-white border-emerald-500'
-                      : isDarkMode
-                      ? 'bg-slate-800 text-slate-200 border-slate-700'
-                      : 'bg-white text-slate-700 border-slate-300'
-                  }`}
-                  title="طبقة الخريطة"
-                >
-                  <Layers className="w-2.5 h-2.5 text-amber-500" />
-                  <span>{mapLayerStyle === 'satellite' ? 'تضاريس' : 'مسار'}</span>
-                </button>
-
-                {/* Dark / Light Toggle */}
-                <button
-                  type="button"
-                  data-testid="toggle-map-theme-btn"
-                  onClick={() => {
-                    triggerHaptic();
-                    setIsDarkMode((prev) => !prev);
-                  }}
-                  className={`px-1.5 py-0.5 rounded-lg border text-[9px] font-extrabold flex items-center gap-0.5 transition cursor-pointer hover:scale-105 active:scale-95 ${
-                    isDarkMode
-                      ? 'bg-slate-800 text-amber-300 border-slate-700'
-                      : 'bg-white text-slate-700 border-slate-300'
-                  }`}
-                  title="الوضع الداكن / الفاتح"
-                >
-                  {isDarkMode ? 'نهاري' : 'ليلي'}
-                </button>
-
-                {/* Full-Screen Toggle */}
-                <button
-                  type="button"
-                  data-testid="toggle-fullscreen-map-btn"
-                  onClick={() => {
-                    triggerHaptic();
-                    setIsFullScreen((prev) => !prev);
-                  }}
-                  className="px-1.5 py-0.5 rounded-lg bg-emerald-700 hover:bg-emerald-600 text-white border border-emerald-600 text-[9px] font-extrabold flex items-center gap-0.5 transition cursor-pointer hover:scale-105 active:scale-95"
-                >
-                  {isFullScreen ? <Minimize2 className="w-2.5 h-2.5" /> : <Maximize2 className="w-2.5 h-2.5" />}
-                  <span>{isFullScreen ? 'تصغير' : 'تكبير'}</span>
-                </button>
-              </div>
-            </div>
-
-            {/* Viewport for SVG Map with Pan & Pinch-to-Zoom */}
-            <div className={`relative ${isFullScreen ? 'h-52' : 'h-36'} w-full overflow-hidden`}>
-              {/* Corner ETA Badge */}
-              <div
-                data-testid="map-travel-estimate-badge"
-                className="absolute top-2 right-2 z-20 pointer-events-none inline-flex items-center gap-1 px-2 py-0.5 rounded-lg bg-slate-900/90 text-white border border-slate-700 shadow-md text-[9px] font-extrabold"
-              >
-                <Clock className="w-2.5 h-2.5 text-amber-400" />
-                <span>~{durationMins} د</span>
-                <span className="text-slate-400">•</span>
-                <span className="text-emerald-300">{order.distanceKm || 2.4} كم</span>
-              </div>
-
-              {/* Dedicated Touch-Optimized Zoom Controls */}
-              <div
-                data-testid="map-pinch-zoom-controls"
-                className="absolute bottom-2 left-2 z-20 flex items-center gap-1"
-              >
-                <button
-                  type="button"
-                  data-testid="map-zoom-in-btn"
-                  onClick={handleZoomIn}
-                  disabled={mapZoomScale >= 3}
-                  className="w-7 h-7 rounded-xl bg-slate-900/90 hover:bg-slate-800 disabled:opacity-40 text-white border border-slate-700 shadow-md flex items-center justify-center font-black text-xs transition cursor-pointer hover:scale-105 active:scale-95"
-                >
-                  <Plus className="w-3.5 h-3.5" />
-                </button>
-                <button
-                  type="button"
-                  data-testid="map-zoom-out-btn"
-                  onClick={handleZoomOut}
-                  disabled={mapZoomScale <= 1}
-                  className="w-7 h-7 rounded-xl bg-slate-900/90 hover:bg-slate-800 disabled:opacity-40 text-white border border-slate-700 shadow-md flex items-center justify-center font-black text-xs transition cursor-pointer hover:scale-105 active:scale-95"
-                >
-                  <Minus className="w-3.5 h-3.5" />
-                </button>
-                {mapZoomScale > 1.02 && (
-                  <button
-                    type="button"
-                    data-testid="map-zoom-reset-btn"
-                    onClick={handleResetZoom}
-                    className="px-1.5 h-7 rounded-xl bg-amber-500 text-slate-950 font-black text-[9px] shadow-md flex items-center gap-0.5 cursor-pointer hover:scale-105 active:scale-95"
-                  >
-                    <RotateCcw className="w-2.5 h-2.5" />
-                    <span>{Math.round(mapZoomScale * 100)}%</span>
-                  </button>
-                )}
-              </div>
-
-              <PinchZoomPan
-                scale={mapZoomScale}
-                onScaleChange={setMapZoomScale}
-                showControls={false}
-                className="w-full h-full"
-              >
-                <svg viewBox="0 0 360 140" className="w-full h-full object-cover select-none">
-                  <defs>
-                    <pattern id="orderTrackingGrid" width="24" height="24" patternUnits="userSpaceOnUse">
-                      <path
-                        d="M 24 0 L 0 0 0 24"
-                        fill="none"
-                        stroke={mapLayerStyle === 'satellite' ? '#14532d' : isDarkMode ? '#1e293b' : '#cbd5e1'}
-                        strokeWidth="0.8"
-                      />
-                    </pattern>
-                    <filter id="m3PinShadow" x="-40%" y="-40%" width="180%" height="180%">
-                      <feDropShadow dx="0" dy="2" stdDeviation="2" floodColor="#0f172a" floodOpacity="0.45" />
-                    </filter>
-                  </defs>
-
-                  <rect
-                    width="360"
-                    height="140"
-                    fill={mapLayerStyle === 'satellite' ? '#0f2922' : isDarkMode ? '#0f172a' : '#f8fafc'}
-                  />
-                  <rect width="360" height="140" fill="url(#orderTrackingGrid)" />
-
-                  {/* Satellite terrain contours */}
-                  {mapLayerStyle === 'satellite' && (
-                    <g opacity="0.45">
-                      <ellipse cx="90" cy="70" rx="65" ry="38" fill="#064e3b" stroke="#10b981" strokeWidth="0.8" strokeDasharray="4 3" />
-                      <ellipse cx="270" cy="65" rx="70" ry="42" fill="#065f46" stroke="#34d399" strokeWidth="0.8" strokeDasharray="4 3" />
-                    </g>
-                  )}
-
-                  {/* Canal */}
-                  <path
-                    d="M 0 115 Q 130 95 220 65 T 360 30"
-                    fill="none"
-                    stroke={mapLayerStyle === 'satellite' || isDarkMode ? '#0284c7' : '#93c5fd'}
-                    strokeWidth="14"
-                    strokeLinecap="round"
-                    opacity="0.5"
-                  />
-
-                  {/* Route Polyline */}
-                  <path
-                    d="M 65 92 C 130 92, 165 48, 290 52"
-                    fill="none"
-                    stroke="#10b981"
-                    strokeWidth="4.5"
-                    strokeLinecap="round"
-                  />
-                  <path
-                    d="M 65 92 C 130 92, 165 48, 290 52"
-                    fill="none"
-                    stroke="#ffffff"
-                    strokeWidth="1.5"
-                    strokeDasharray="4 6"
-                    strokeLinecap="round"
-                  />
-
-                  {/* Pickup Pin */}
-                  <g
-                    transform="translate(65, 92)"
-                    filter="url(#m3PinShadow)"
-                    data-testid="map-svg-pickup-pin"
-                  >
-                    {order.status === 'at_pickup' && (
-                      <circle cx="0" cy="-10" r="16" fill="#10b981" opacity="0.35">
-                        <animate attributeName="r" values="9;20;9" dur="1.4s" repeatCount="indefinite" />
-                        <animate attributeName="opacity" values="0.5;0.05;0.5" dur="1.4s" repeatCount="indefinite" />
-                      </circle>
-                    )}
-                    <path
-                      d="M 0 0 C -6 -7 -10 -12 -10 -17 A 10 10 0 1 1 10 -17 C 10 -12 6 -7 0 0 Z"
-                      fill="#047857"
-                      stroke="#ffffff"
-                      strokeWidth="1.8"
-                    />
-                    <circle cx="0" cy="-17" r="3.8" fill="#ffffff" />
-                  </g>
-
-                  {/* Captain live scooter */}
-                  <g transform="translate(178, 68)" filter="url(#m3PinShadow)">
-                    <circle cx="0" cy="0" r="11" fill="#0f172a" stroke="#10b981" strokeWidth="2" />
-                    <text x="0" y="3.5" textAnchor="middle" fontSize="9">🛵</text>
-                  </g>
-
-                  {/* Dropoff Pin */}
-                  <g
-                    transform="translate(290, 52)"
-                    filter="url(#m3PinShadow)"
-                    data-testid="map-svg-dropoff-pin"
-                  >
-                    {order.status === 'in_transit' && (
-                      <circle cx="0" cy="-10" r="16" fill="#f59e0b" opacity="0.35">
-                        <animate attributeName="r" values="9;20;9" dur="1.4s" repeatCount="indefinite" />
-                        <animate attributeName="opacity" values="0.5;0.05;0.5" dur="1.4s" repeatCount="indefinite" />
-                      </circle>
-                    )}
-                    <path
-                      d="M 0 0 C -6 -7 -10 -12 -10 -17 A 10 10 0 1 1 10 -17 C 10 -12 6 -7 0 0 Z"
-                      fill="#d97706"
-                      stroke="#ffffff"
-                      strokeWidth="1.8"
-                    />
-                    <circle cx="0" cy="-17" r="3.8" fill="#ffffff" />
-                  </g>
-                </svg>
-              </PinchZoomPan>
-            </div>
-
-            {/* Copy Pickup / Dropoff Address Controls */}
-            <div
-              className={`px-2.5 py-1.5 border-t grid grid-cols-2 gap-1.5 text-[10px] ${
-                mapLayerStyle === 'satellite' || isDarkMode ? 'bg-slate-900/95 border-slate-800' : 'bg-white border-slate-200/80'
-              }`}
-            >
-              <button
-                type="button"
-                data-testid="copy-pickup-address-btn"
-                onClick={() => handleCopy('pickup', pickupAddress)}
-                className={`px-2 py-1 rounded-xl border flex items-center justify-between gap-1 transition cursor-pointer hover:scale-105 active:scale-95 ${
-                  copiedField === 'pickup'
-                    ? 'bg-emerald-700 text-white border-emerald-600'
-                    : isDarkMode || mapLayerStyle === 'satellite'
-                    ? 'bg-slate-800 text-slate-200 border-slate-700 hover:bg-slate-700'
-                    : 'bg-slate-50 text-slate-700 border-slate-200 hover:bg-emerald-50'
-                }`}
-                title="نسخ عنوان الاستلام"
-              >
-                <div className="flex items-center gap-1 min-w-0">
-                  <span className="w-2 h-2 rounded-full bg-emerald-500 shrink-0" />
-                  <span className="font-bold truncate">
-                    {copiedField === 'pickup' ? 'تم النسخ ✓' : `استلام: ${pickupAddress}`}
-                  </span>
-                </div>
-                {copiedField === 'pickup' ? <Check className="w-3 h-3 shrink-0" /> : <Copy className="w-3 h-3 text-slate-400 shrink-0" />}
-              </button>
-
-              <button
-                type="button"
-                data-testid="copy-dropoff-address-btn"
-                onClick={() => handleCopy('dropoff', dropoffAddress)}
-                className={`px-2 py-1 rounded-xl border flex items-center justify-between gap-1 transition cursor-pointer hover:scale-105 active:scale-95 ${
-                  copiedField === 'dropoff'
-                    ? 'bg-amber-500 text-slate-950 border-amber-400'
-                    : isDarkMode || mapLayerStyle === 'satellite'
-                    ? 'bg-slate-800 text-slate-200 border-slate-700 hover:bg-slate-700'
-                    : 'bg-slate-50 text-slate-700 border-slate-200 hover:bg-amber-50'
-                }`}
-                title="نسخ عنوان التوصيل"
-              >
-                <div className="flex items-center gap-1 min-w-0">
-                  <span className="w-2 h-2 rounded-full bg-amber-500 shrink-0" />
-                  <span className="font-bold truncate">
-                    {copiedField === 'dropoff' ? 'تم النسخ ✓' : `وصول: ${dropoffAddress}`}
-                  </span>
-                </div>
-                {copiedField === 'dropoff' ? <Check className="w-3 h-3 shrink-0" /> : <Copy className="w-3 h-3 text-slate-400 shrink-0" />}
-              </button>
-            </div>
-          </div>
-        )}
+        <ActiveOrderStaticMapThumbnail
+          orderStatus={order.status}
+          pickupAddress={pickupAddress}
+          dropoffAddress={dropoffAddress}
+          distanceKm={order.distanceKm || 2.4}
+          durationMinutes={durationMins}
+          etaSeconds={etaSeconds}
+          isRefreshing={isRefreshing}
+          isDarkMode={isDarkMode}
+          onToggleDarkMode={() => {
+            triggerHaptic();
+            setIsDarkMode((prev) => !prev);
+          }}
+          mapLayerStyle={mapLayerStyle}
+          onToggleMapLayerStyle={() => {
+            triggerHaptic();
+            setMapLayerStyle((prev) => (prev === 'route' ? 'satellite' : 'route'));
+          }}
+          mapZoomScale={mapZoomScale}
+          onMapZoomScaleChange={setMapZoomScale}
+          isFullScreen={isFullScreen}
+          onToggleFullScreen={() => {
+            triggerHaptic();
+            setIsFullScreen((prev) => !prev);
+          }}
+          copiedField={copiedField}
+          onCopyAddress={handleCopy}
+          onTriggerHaptic={triggerHaptic}
+        />
 
         {/* Dual Metric Strip: Accepted Timestamp + Dynamic ETA Countdown Timer */}
         <div className="grid grid-cols-2 gap-2">

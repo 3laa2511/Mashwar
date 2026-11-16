@@ -1,4 +1,11 @@
 @import "tailwindcss";
+@custom-variant dark (&:where(.dark, .dark *));
+
+@layer utilities {
+  .tabular-nums {
+    font-variant-numeric: tabular-nums;
+  }
+}
 
 @keyframes m3-slide-in-entrance {
   0% {
@@ -12,7 +19,7 @@
 }
 
 .animate-m3-slide-in {
-  animation: m3-slide-in-entrance 380ms cubic-bezier(0.05, 0.7, 0.1, 1) forwards;
+  animation: m3-slide-in-entrance 320ms cubic-bezier(0.16, 1, 0.3, 1) forwards;
 }
 
 @keyframes m3-haptic-vibration {
@@ -38,4 +45,11 @@
 
 .animate-haptic-shake {
   animation: m3-haptic-vibration 190ms cubic-bezier(0.36, 0.07, 0.19, 0.97) both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-m3-slide-in,
+  .animate-haptic-shake {
+    animation: none !important;
+  }
 }

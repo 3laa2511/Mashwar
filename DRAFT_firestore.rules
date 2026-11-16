@@ -1,0 +1,616 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Global Safety Net (Default Deny)
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // ------------------------------------------------------------------------
+    // Global Hardened Primitives
+    // ------------------------------------------------------------------------
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isVerifiedEmail() {
+      return isSignedIn() && request.auth.token.email_verified == true;
+    }
+
+    function isVerifiedPhone() {
+      return isSignedIn() &&
+        request.auth.token.phone_number is string &&
+        request.auth.token.phone_number.size() >= 6;
+    }
+
+    function isVerifiedAccount() {
+      return isVerifiedEmail() || isVerifiedPhone();
+    }
+
+    function isOwner(userId) {
+      return isVerifiedAccount() && request.auth.uid == userId;
+    }
+
+    function isBootstrappedOwnerEmail() {
+      return isVerifiedEmail() && request.auth.token.email == 'Alaa.moagaza2016@gmail.com';
+    }
+
+    function isAdmin() {
+      return isBootstrappedOwnerEmail() || (
+        isVerifiedEmail() && exists(/databases/$(database)/documents/admins/$(request.auth.uid))
+      );
+    }
+
+    function isValidVerifiedDriver(driverId) {
+      return exists(/databases/$(database)/documents/driverProfiles/$(driverId)) &&
+        get(/databases/$(database)/documents/driverProfiles/$(driverId)).data.isVerified == true;
+    }
+
+    // ------------------------------------------------------------------------
+    // Connection Probe Document (Authenticated Read Only)
+    // ------------------------------------------------------------------------
+    match /test/connection {
+      allow get: if isSignedIn();
+    }
+
+    // ------------------------------------------------------------------------
+    // Admin Registry (Read by own UID or bootstrapped owner; Write by owner)
+    // ------------------------------------------------------------------------
+    match /admins/{adminId} {
+      allow get: if isValidId(adminId) && (isOwner(adminId) || isBootstrappedOwnerEmail());
+      allow write: if isValidId(adminId) && isBootstrappedOwnerEmail();
+    }
+
+    // ------------------------------------------------------------------------
+    // Users & Private PII + Wallet Cashback Subcollection
+    // ------------------------------------------------------------------------
+    function isValidUserAccount(data, userId) {
+      return data.keys().hasAll([
+          'uid', 'displayName', 'role', 'defaultCityId',
+          'defaultLandmark', 'cashbackBalancePiasters', 'createdAt', 'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'uid', 'displayName', 'email', 'phone', 'role', 'defaultCityId',
+          'defaultLandmark', 'cashbackBalancePiasters', 'createdAt', 'updatedAt'
+        ]) &&
+        isValidId(data.uid) &&
+        data.uid == userId &&
+        data.displayName is string && data.displayName.size() >= 1 && data.displayName.size() <= 80 &&
+        (!('email' in data) || (data.email is string && data.email.size() <= 160)) &&
+        (!('phone' in data) || (data.phone is string && data.phone.size() <= 24)) &&
+        data.role in ['customer', 'captain', 'merchant', 'owner'] &&
+        isValidId(data.defaultCityId) && data.defaultCityId.size() <= 64 &&
+        data.defaultLandmark is string && data.defaultLandmark.size() >= 1 && data.defaultLandmark.size() <= 140 &&
+        data.cashbackBalancePiasters is int &&
+        data.cashbackBalancePiasters >= 0 &&
+        data.cashbackBalancePiasters <= 10000000 &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidWalletTransaction(data, userId, txId) {
+      return data.keys().hasAll(['id', 'userId', 'type', 'amountPiasters', 'refId', 'titleAr', 'createdAt']) &&
+        data.keys().hasOnly(['id', 'userId', 'type', 'amountPiasters', 'refId', 'titleAr', 'createdAt']) &&
+        isValidId(data.id) && data.id == txId &&
+        isValidId(data.userId) && data.userId == userId &&
+        data.type in ['welcome_bonus', 'cashback_earn', 'cashback_redeem', 'admin_adjustment'] &&
+        data.amountPiasters is int && data.amountPiasters > 0 && data.amountPiasters <= 50000 &&
+        isValidId(data.refId) &&
+        data.titleAr is string && data.titleAr.size() >= 2 && data.titleAr.size() <= 140 &&
+        data.createdAt is timestamp;
+    }
+
+    match /users/{userId} {
+      allow get: if isValidId(userId) && (isOwner(userId) || isAdmin());
+      allow list: if isBootstrappedOwnerEmail();
+
+      allow create: if isValidId(userId) &&
+        isVerifiedAccount() &&
+        isValidUserAccount(incoming(), userId) &&
+        incoming().createdAt == request.time &&
+        incoming().updatedAt == request.time &&
+        (
+          isBootstrappedOwnerEmail() ||
+          (
+            userId == request.auth.uid &&
+            incoming().role == 'customer' &&
+            incoming().cashbackBalancePiasters == 2500
+          )
+        );
+
+      allow update: if isValidId(userId) &&
+        isVerifiedAccount() &&
+        isValidUserAccount(incoming(), userId) &&
+        incoming().uid == existing().uid &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().updatedAt == request.time &&
+        (
+          isAdmin() ||
+          (
+            isOwner(userId) &&
+            incoming().role == existing().role &&
+            incoming().cashbackBalancePiasters == existing().cashbackBalancePiasters &&
+            incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'phone', 'defaultCityId', 'defaultLandmark', 'updatedAt'])
+          )
+        );
+
+      // Master Gate on Cashback Wallet Ledger
+      match /walletTransactions/{txId} {
+        allow get: if isValidId(userId) && isValidId(txId) && (isOwner(userId) || isAdmin()) &&
+          exists(/databases/$(database)/documents/users/$(userId));
+        allow list: if isValidId(userId) && (isOwner(userId) || isBootstrappedOwnerEmail());
+        allow create: if isValidId(userId) && isValidId(txId) &&
+          exists(/databases/$(database)/documents/users/$(userId)) &&
+          isValidWalletTransaction(incoming(), userId, txId) &&
+          incoming().createdAt == request.time &&
+          (
+            isAdmin() ||
+            (
+              isOwner(userId) &&
+              (
+                (incoming().type == 'welcome_bonus' && incoming().amountPiasters == 2500 && txId == 'welcome_' + userId) ||
+                (
+                  incoming().type == 'cashback_redeem' &&
+                  txId == 'redeem_' + incoming().refId &&
+                  incoming().amountPiasters <= 10000 &&
+                  (
+                    (
+                      exists(/databases/$(database)/documents/orders/$(incoming().refId)) &&
+                      get(/databases/$(database)/documents/orders/$(incoming().refId)).data.customerId == userId &&
+                      get(/databases/$(database)/documents/orders/$(incoming().refId)).data.cashbackAppliedPiasters == incoming().amountPiasters
+                    ) ||
+                    (
+                      exists(/databases/$(database)/documents/rides/$(incoming().refId)) &&
+                      get(/databases/$(database)/documents/rides/$(incoming().refId)).data.passengerId == userId &&
+                      get(/databases/$(database)/documents/rides/$(incoming().refId)).data.cashbackAppliedPiasters == incoming().amountPiasters
+                    )
+                  )
+                ) ||
+                (
+                  incoming().type == 'cashback_earn' &&
+                  txId == 'cb_' + incoming().refId &&
+                  incoming().amountPiasters <= 2500 &&
+                  (
+                    (
+                      exists(/databases/$(database)/documents/orders/$(incoming().refId)) &&
+                      get(/databases/$(database)/documents/orders/$(incoming().refId)).data.customerId == userId &&
+                      get(/databases/$(database)/documents/orders/$(incoming().refId)).data.status == 'delivered'
+                    ) ||
+                    (
+                      exists(/databases/$(database)/documents/rides/$(incoming().refId)) &&
+                      get(/databases/$(database)/documents/rides/$(incoming().refId)).data.passengerId == userId &&
+                      get(/databases/$(database)/documents/rides/$(incoming().refId)).data.status == 'completed'
+                    )
+                  )
+                )
+              )
+            )
+          );
+        allow update, delete: if false;
+      }
+    }
+
+    // ------------------------------------------------------------------------
+    // Verified Driver Profiles (Publicly Readable Summary, No Private PII)
+    // ------------------------------------------------------------------------
+    function isValidDriverProfile(data, driverId) {
+      return data.keys().hasAll([
+          'uid', 'fullName', 'cityId', 'vehicleType', 'plateLabel',
+          'isVerified', 'isOnline', 'ratingAverage', 'completedTrips',
+          'currentLandmark', 'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'uid', 'fullName', 'cityId', 'vehicleType', 'plateLabel',
+          'isVerified', 'isOnline', 'ratingAverage', 'completedTrips',
+          'currentLandmark', 'updatedAt'
+        ]) &&
+        isValidId(data.uid) && data.uid == driverId &&
+        data.fullName is string && data.fullName.size() >= 2 && data.fullName.size() <= 80 &&
+        isValidId(data.cityId) && data.cityId.size() <= 64 &&
+        data.vehicleType in ['tuktuk', 'scooter', 'motorcycle', 'car'] &&
+        data.plateLabel is string && data.plateLabel.size() >= 2 && data.plateLabel.size() <= 32 &&
+        data.isVerified is bool &&
+        data.isOnline is bool &&
+        data.ratingAverage is number && data.ratingAverage >= 1 && data.ratingAverage <= 5 &&
+        data.completedTrips is int && data.completedTrips >= 0 &&
+        data.currentLandmark is string && data.currentLandmark.size() >= 1 && data.currentLandmark.size() <= 140 &&
+        data.updatedAt is timestamp;
+    }
+
+    match /driverProfiles/{driverId} {
+      allow get: if isValidId(driverId) && isSignedIn();
+      allow list: if isSignedIn() && (resource.data.isVerified == true || resource.data.uid == request.auth.uid || isBootstrappedOwnerEmail());
+      allow create: if isValidId(driverId) && isVerifiedAccount() &&
+        isValidDriverProfile(incoming(), driverId) &&
+        incoming().updatedAt == request.time &&
+        (isAdmin() || (driverId == request.auth.uid && incoming().isVerified == false));
+      allow update: if isValidId(driverId) && isVerifiedAccount() &&
+        isValidDriverProfile(incoming(), driverId) &&
+        incoming().uid == existing().uid &&
+        incoming().updatedAt == request.time &&
+        (
+          isAdmin() ||
+          (
+            isOwner(driverId) &&
+            incoming().isVerified == existing().isVerified &&
+            incoming().diff(existing()).affectedKeys().hasOnly(['isOnline', 'currentLandmark', 'completedTrips', 'updatedAt'])
+          )
+        );
+    }
+
+    // ------------------------------------------------------------------------
+    // Stores & Catalog Products (Public Read for Signed-In Marketplace Users)
+    // ------------------------------------------------------------------------
+    function isValidStoreFront(data, storeId) {
+      return data.keys().hasAll([
+          'id', 'ownerUid', 'nameAr', 'category', 'cityId', 'landmark',
+          'deliveryFeePiasters', 'minOrderPiasters', 'prepTimeText', 'rating', 'isOpen', 'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'id', 'ownerUid', 'nameAr', 'category', 'cityId', 'landmark',
+          'deliveryFeePiasters', 'minOrderPiasters', 'prepTimeText', 'rating', 'isOpen', 'updatedAt'
+        ]) &&
+        isValidId(data.id) && data.id == storeId &&
+        isValidId(data.ownerUid) &&
+        data.nameAr is string && data.nameAr.size() >= 2 && data.nameAr.size() <= 100 &&
+        data.category in ['restaurant', 'pharmacy', 'supermarket'] &&
+        isValidId(data.cityId) && data.cityId.size() <= 64 &&
+        data.landmark is string && data.landmark.size() >= 2 && data.landmark.size() <= 140 &&
+        data.deliveryFeePiasters is int && data.deliveryFeePiasters >= 0 && data.deliveryFeePiasters <= 50000 &&
+        data.minOrderPiasters is int && data.minOrderPiasters >= 0 && data.minOrderPiasters <= 100000 &&
+        data.prepTimeText is string && data.prepTimeText.size() >= 2 && data.prepTimeText.size() <= 40 &&
+        data.rating is number && data.rating >= 1 && data.rating <= 5 &&
+        data.isOpen is bool &&
+        data.updatedAt is timestamp;
+    }
+
+    match /stores/{storeId} {
+      allow get: if isValidId(storeId) && isSignedIn();
+      allow list: if isSignedIn() && (resource.data.isOpen == true || resource.data.isOpen == false);
+      allow create: if isValidId(storeId) && isAdmin() &&
+        isValidStoreFront(incoming(), storeId) &&
+        incoming().updatedAt == request.time;
+      allow update: if isValidId(storeId) && isVerifiedAccount() &&
+        isValidStoreFront(incoming(), storeId) &&
+        incoming().id == existing().id &&
+        incoming().ownerUid == existing().ownerUid &&
+        incoming().updatedAt == request.time &&
+        (
+          isAdmin() ||
+          (
+            existing().ownerUid == request.auth.uid &&
+            incoming().diff(existing()).affectedKeys().hasOnly(['isOpen', 'prepTimeText', 'minOrderPiasters', 'updatedAt'])
+          )
+        );
+    }
+
+    function isValidCatalogProduct(data, productId) {
+      return data.keys().hasAll([
+          'id', 'storeId', 'ownerUid', 'nameAr', 'descriptionAr',
+          'categoryName', 'pricePiasters', 'unit', 'isAvailable', 'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'id', 'storeId', 'ownerUid', 'nameAr', 'descriptionAr',
+          'categoryName', 'pricePiasters', 'unit', 'isAvailable', 'updatedAt'
+        ]) &&
+        isValidId(data.id) && data.id == productId &&
+        isValidId(data.storeId) && data.storeId.size() <= 64 &&
+        isValidId(data.ownerUid) &&
+        data.nameAr is string && data.nameAr.size() >= 2 && data.nameAr.size() <= 120 &&
+        data.descriptionAr is string && data.descriptionAr.size() <= 240 &&
+        data.categoryName is string && data.categoryName.size() >= 1 && data.categoryName.size() <= 60 &&
+        data.pricePiasters is int && data.pricePiasters > 0 && data.pricePiasters <= 500000 &&
+        data.unit is string && data.unit.size() >= 1 && data.unit.size() <= 32 &&
+        data.isAvailable is bool &&
+        data.updatedAt is timestamp;
+    }
+
+    match /products/{productId} {
+      allow get: if isValidId(productId) && isSignedIn();
+      allow list: if isSignedIn() && (resource.data.isAvailable == true || resource.data.ownerUid == request.auth.uid);
+      allow create: if isValidId(productId) && isVerifiedAccount() &&
+        isValidCatalogProduct(incoming(), productId) &&
+        incoming().updatedAt == request.time &&
+        exists(/databases/$(database)/documents/stores/$(incoming().storeId)) &&
+        (
+          isAdmin() ||
+          get(/databases/$(database)/documents/stores/$(incoming().storeId)).data.ownerUid == request.auth.uid
+        );
+      allow update: if isValidId(productId) && isVerifiedAccount() &&
+        isValidCatalogProduct(incoming(), productId) &&
+        incoming().id == existing().id &&
+        incoming().storeId == existing().storeId &&
+        incoming().ownerUid == existing().ownerUid &&
+        incoming().updatedAt == request.time &&
+        (
+          isAdmin() ||
+          (
+            existing().ownerUid == request.auth.uid &&
+            incoming().diff(existing()).affectedKeys().hasOnly(['pricePiasters', 'isAvailable', 'descriptionAr', 'updatedAt'])
+          )
+        );
+    }
+
+    // ------------------------------------------------------------------------
+    // Delivery, Multi-Stop, Scheduled & Voice-Note Orders
+    // ------------------------------------------------------------------------
+    function isValidDeliveryOrder(data, orderId) {
+      return data.keys().hasAll([
+          'id', 'orderNumber', 'customerId', 'customerName', 'serviceType', 'cityId',
+          'storeNames', 'pickupLandmark', 'dropoffLandmark', 'itemsSummary', 'isRural',
+          'scheduledFor', 'hasVoiceNote', 'voiceNoteDurationSec', 'voiceNoteTranscript',
+          'distanceKm', 'subtotalPiasters', 'deliveryFeePiasters', 'cashbackAppliedPiasters',
+          'totalFarePiasters', 'paymentMethod', 'status', 'createdAt', 'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'id', 'orderNumber', 'customerId', 'customerName', 'merchantOwnerUid',
+          'serviceType', 'cityId', 'storeNames', 'pickupLandmark', 'dropoffLandmark',
+          'itemsSummary', 'isRural', 'scheduledFor', 'hasVoiceNote', 'voiceNoteDurationSec',
+          'voiceNoteTranscript', 'distanceKm', 'subtotalPiasters', 'deliveryFeePiasters',
+          'cashbackAppliedPiasters', 'totalFarePiasters', 'paymentMethod', 'status',
+          'assignedCaptainId', 'assignedCaptainName', 'createdAt', 'updatedAt'
+        ]) &&
+        isValidId(data.id) && data.id == orderId &&
+        data.orderNumber is string && data.orderNumber.size() >= 4 && data.orderNumber.size() <= 24 &&
+        isValidId(data.customerId) &&
+        data.customerName is string && data.customerName.size() >= 1 && data.customerName.size() <= 80 &&
+        (!('merchantOwnerUid' in data) || (data.merchantOwnerUid is string && data.merchantOwnerUid.size() <= 128)) &&
+        data.serviceType in ['restaurant_store', 'package', 'errand'] &&
+        isValidId(data.cityId) && data.cityId.size() <= 64 &&
+        data.storeNames is list && data.storeNames.size() >= 1 && data.storeNames.size() <= 4 &&
+        data.storeNames[0] is string && data.storeNames[0].size() <= 100 &&
+        data.pickupLandmark is string && data.pickupLandmark.size() >= 2 && data.pickupLandmark.size() <= 140 &&
+        data.dropoffLandmark is string && data.dropoffLandmark.size() >= 2 && data.dropoffLandmark.size() <= 140 &&
+        data.itemsSummary is string && data.itemsSummary.size() >= 1 && data.itemsSummary.size() <= 500 &&
+        data.isRural is bool &&
+        data.scheduledFor is string && data.scheduledFor.size() >= 1 && data.scheduledFor.size() <= 40 &&
+        data.hasVoiceNote is bool &&
+        data.voiceNoteDurationSec is int && data.voiceNoteDurationSec >= 0 && data.voiceNoteDurationSec <= 120 &&
+        data.voiceNoteTranscript is string && data.voiceNoteTranscript.size() <= 300 &&
+        data.distanceKm is number && data.distanceKm >= 0 && data.distanceKm <= 75 &&
+        data.subtotalPiasters is int && data.subtotalPiasters >= 0 && data.subtotalPiasters <= 5000000 &&
+        data.deliveryFeePiasters is int && data.deliveryFeePiasters >= 0 && data.deliveryFeePiasters <= 100000 &&
+        data.cashbackAppliedPiasters is int && data.cashbackAppliedPiasters >= 0 && data.cashbackAppliedPiasters <= 50000 &&
+        data.totalFarePiasters is int && data.totalFarePiasters >= 0 && data.totalFarePiasters <= 5100000 &&
+        data.paymentMethod in ['cash', 'wallet', 'vodafone_cash', 'instapay'] &&
+        data.status in [
+          'created', 'accepted_by_store', 'preparing', 'ready_for_pickup',
+          'searching_captain', 'captain_assigned', 'at_pickup', 'picked_up',
+          'in_transit', 'delivered', 'cancelled'
+        ] &&
+        (!('assignedCaptainId' in data) || (data.assignedCaptainId is string && data.assignedCaptainId.size() <= 128)) &&
+        (!('assignedCaptainName' in data) || (data.assignedCaptainName is string && data.assignedCaptainName.size() <= 80)) &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    match /orders/{orderId} {
+      allow get: if isValidId(orderId) && isVerifiedAccount() && (
+        existing().customerId == request.auth.uid ||
+        existing().assignedCaptainId == request.auth.uid ||
+        existing().merchantOwnerUid == request.auth.uid ||
+        (existing().status in ['ready_for_pickup', 'searching_captain'] && isValidVerifiedDriver(request.auth.uid)) ||
+        isAdmin()
+      );
+
+      allow list: if isVerifiedAccount() && (
+        resource.data.customerId == request.auth.uid ||
+        resource.data.assignedCaptainId == request.auth.uid ||
+        resource.data.merchantOwnerUid == request.auth.uid ||
+        resource.data.status in ['ready_for_pickup', 'searching_captain'] ||
+        isBootstrappedOwnerEmail()
+      );
+
+      allow create: if isValidId(orderId) &&
+        isVerifiedAccount() &&
+        isValidDeliveryOrder(incoming(), orderId) &&
+        incoming().customerId == request.auth.uid &&
+        incoming().status in ['created', 'searching_captain'] &&
+        !('assignedCaptainId' in incoming()) &&
+        incoming().createdAt == request.time &&
+        incoming().updatedAt == request.time;
+
+      allow update: if isValidId(orderId) &&
+        isVerifiedAccount() &&
+        isValidDeliveryOrder(incoming(), orderId) &&
+        incoming().id == existing().id &&
+        incoming().orderNumber == existing().orderNumber &&
+        incoming().customerId == existing().customerId &&
+        incoming().totalFarePiasters == existing().totalFarePiasters &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().updatedAt == request.time &&
+        (
+          isAdmin() ||
+          (
+            !(existing().status in ['delivered', 'cancelled']) &&
+            (
+              // Action: Customer cancels before pickup
+              (
+                existing().customerId == request.auth.uid &&
+                existing().status in ['created', 'searching_captain'] &&
+                incoming().status == 'cancelled' &&
+                incoming().diff(existing()).affectedKeys().hasOnly(['status', 'updatedAt'])
+              ) ||
+              // Action: Merchant advances kitchen/store fulfillment
+              (
+                existing().merchantOwnerUid == request.auth.uid &&
+                incoming().status in ['accepted_by_store', 'preparing', 'ready_for_pickup', 'cancelled'] &&
+                incoming().diff(existing()).affectedKeys().hasOnly(['status', 'updatedAt'])
+              ) ||
+              // Action: Verified Captain claims an open dispatch order
+              (
+                existing().status in ['ready_for_pickup', 'searching_captain'] &&
+                !('assignedCaptainId' in existing()) &&
+                isValidVerifiedDriver(request.auth.uid) &&
+                incoming().assignedCaptainId == request.auth.uid &&
+                incoming().status == 'captain_assigned' &&
+                incoming().diff(existing()).affectedKeys().hasOnly(['assignedCaptainId', 'assignedCaptainName', 'status', 'updatedAt'])
+              ) ||
+              // Action: Assigned Captain advances delivery steps
+              (
+                existing().assignedCaptainId == request.auth.uid &&
+                incoming().status in ['at_pickup', 'picked_up', 'in_transit', 'delivered'] &&
+                incoming().diff(existing()).affectedKeys().hasOnly(['status', 'updatedAt'])
+              )
+            )
+          )
+        );
+    }
+
+    // ------------------------------------------------------------------------
+    // Verified Local TukTuk, Scooter & Car Rides
+    // ------------------------------------------------------------------------
+    function isValidPassengerRide(data, rideId) {
+      return data.keys().hasAll([
+          'id', 'rideNumber', 'passengerId', 'passengerName', 'vehicleTier', 'cityId',
+          'pickupLandmark', 'dropoffLandmark', 'distanceKm', 'estimatedFarePiasters',
+          'cashbackAppliedPiasters', 'paymentMethod', 'status', 'safetySosTriggered',
+          'createdAt', 'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'id', 'rideNumber', 'passengerId', 'passengerName', 'vehicleTier', 'cityId',
+          'pickupLandmark', 'dropoffLandmark', 'distanceKm', 'estimatedFarePiasters',
+          'cashbackAppliedPiasters', 'paymentMethod', 'status', 'assignedDriverId',
+          'assignedDriverName', 'driverPlateLabel', 'safetySosTriggered', 'createdAt', 'updatedAt'
+        ]) &&
+        isValidId(data.id) && data.id == rideId &&
+        data.rideNumber is string && data.rideNumber.size() >= 4 && data.rideNumber.size() <= 24 &&
+        isValidId(data.passengerId) &&
+        data.passengerName is string && data.passengerName.size() >= 1 && data.passengerName.size() <= 80 &&
+        data.vehicleTier in ['tuktuk', 'scooter', 'car'] &&
+        isValidId(data.cityId) && data.cityId.size() <= 64 &&
+        data.pickupLandmark is string && data.pickupLandmark.size() >= 2 && data.pickupLandmark.size() <= 140 &&
+        data.dropoffLandmark is string && data.dropoffLandmark.size() >= 2 && data.dropoffLandmark.size() <= 140 &&
+        data.distanceKm is number && data.distanceKm > 0 && data.distanceKm <= 75 &&
+        data.estimatedFarePiasters is int && data.estimatedFarePiasters >= 1000 && data.estimatedFarePiasters <= 150000 &&
+        data.cashbackAppliedPiasters is int && data.cashbackAppliedPiasters >= 0 && data.cashbackAppliedPiasters <= 50000 &&
+        data.paymentMethod in ['cash', 'wallet', 'vodafone_cash', 'instapay'] &&
+        data.status in ['searching_driver', 'driver_assigned', 'driver_arrived', 'in_ride', 'completed', 'cancelled'] &&
+        (!('assignedDriverId' in data) || (data.assignedDriverId is string && data.assignedDriverId.size() <= 128)) &&
+        (!('assignedDriverName' in data) || (data.assignedDriverName is string && data.assignedDriverName.size() <= 80)) &&
+        (!('driverPlateLabel' in data) || (data.driverPlateLabel is string && data.driverPlateLabel.size() <= 32)) &&
+        data.safetySosTriggered is bool &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    match /rides/{rideId} {
+      allow get: if isValidId(rideId) && isVerifiedAccount() && (
+        existing().passengerId == request.auth.uid ||
+        existing().assignedDriverId == request.auth.uid ||
+        (existing().status == 'searching_driver' && isValidVerifiedDriver(request.auth.uid)) ||
+        isAdmin()
+      );
+
+      allow list: if isVerifiedAccount() && (
+        resource.data.passengerId == request.auth.uid ||
+        resource.data.assignedDriverId == request.auth.uid ||
+        resource.data.status == 'searching_driver' ||
+        isBootstrappedOwnerEmail()
+      );
+
+      allow create: if isValidId(rideId) &&
+        isVerifiedAccount() &&
+        isValidPassengerRide(incoming(), rideId) &&
+        incoming().passengerId == request.auth.uid &&
+        incoming().status == 'searching_driver' &&
+        incoming().safetySosTriggered == false &&
+        !('assignedDriverId' in incoming()) &&
+        incoming().createdAt == request.time &&
+        incoming().updatedAt == request.time;
+
+      allow update: if isValidId(rideId) &&
+        isVerifiedAccount() &&
+        isValidPassengerRide(incoming(), rideId) &&
+        incoming().id == existing().id &&
+        incoming().rideNumber == existing().rideNumber &&
+        incoming().passengerId == existing().passengerId &&
+        incoming().estimatedFarePiasters == existing().estimatedFarePiasters &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().updatedAt == request.time &&
+        (
+          isAdmin() ||
+          (
+            !(existing().status in ['completed', 'cancelled']) &&
+            (
+              // Action: Passenger cancels before ride starts or triggers safety SOS
+              (
+                existing().passengerId == request.auth.uid &&
+                (
+                  (existing().status in ['searching_driver', 'driver_assigned'] && incoming().status == 'cancelled' && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'updatedAt'])) ||
+                  (incoming().safetySosTriggered == true && incoming().diff(existing()).affectedKeys().hasOnly(['safetySosTriggered', 'updatedAt']))
+                )
+              ) ||
+              // Action: Verified Driver accepts open ride request
+              (
+                existing().status == 'searching_driver' &&
+                !('assignedDriverId' in existing()) &&
+                isValidVerifiedDriver(request.auth.uid) &&
+                incoming().assignedDriverId == request.auth.uid &&
+                incoming().status == 'driver_assigned' &&
+                incoming().diff(existing()).affectedKeys().hasOnly(['assignedDriverId', 'assignedDriverName', 'driverPlateLabel', 'status', 'updatedAt'])
+              ) ||
+              // Action: Assigned Driver advances ride lifecycle
+              (
+                existing().assignedDriverId == request.auth.uid &&
+                incoming().status in ['driver_arrived', 'in_ride', 'completed'] &&
+                incoming().diff(existing()).affectedKeys().hasOnly(['status', 'updatedAt'])
+              )
+            )
+          )
+        );
+    }
+
+    // ------------------------------------------------------------------------
+    // Master Gate Real-Time Chat Threads (Scoped to Order or Ride Participants)
+    // ------------------------------------------------------------------------
+    function isThreadParticipant(threadId) {
+      return isAdmin() || (
+        exists(/databases/$(database)/documents/orders/$(threadId)) && (
+          get(/databases/$(database)/documents/orders/$(threadId)).data.customerId == request.auth.uid ||
+          get(/databases/$(database)/documents/orders/$(threadId)).data.assignedCaptainId == request.auth.uid ||
+          get(/databases/$(database)/documents/orders/$(threadId)).data.merchantOwnerUid == request.auth.uid
+        )
+      ) || (
+        exists(/databases/$(database)/documents/rides/$(threadId)) && (
+          get(/databases/$(database)/documents/rides/$(threadId)).data.passengerId == request.auth.uid ||
+          get(/databases/$(database)/documents/rides/$(threadId)).data.assignedDriverId == request.auth.uid
+        )
+      );
+    }
+
+    function isValidChatMessage(data, msgId) {
+      return data.keys().hasAll(['id', 'senderUid', 'senderRole', 'senderName', 'text', 'createdAt']) &&
+        data.keys().hasOnly(['id', 'senderUid', 'senderRole', 'senderName', 'text', 'createdAt']) &&
+        isValidId(data.id) && data.id == msgId &&
+        isValidId(data.senderUid) && data.senderUid == request.auth.uid &&
+        data.senderRole in ['customer', 'captain', 'merchant'] &&
+        data.senderName is string && data.senderName.size() >= 1 && data.senderName.size() <= 80 &&
+        data.text is string && data.text.size() >= 1 && data.text.size() <= 400 &&
+        data.createdAt is timestamp;
+    }
+
+    match /threads/{threadId}/messages/{messageId} {
+      allow get, list: if isValidId(threadId) && isVerifiedAccount() && isThreadParticipant(threadId);
+      allow create: if isValidId(threadId) && isValidId(messageId) &&
+        isVerifiedAccount() &&
+        isThreadParticipant(threadId) &&
+        isValidChatMessage(incoming(), messageId) &&
+        incoming().createdAt == request.time;
+      allow update, delete: if false;
+    }
+  }
+}

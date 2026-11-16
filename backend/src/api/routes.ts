@@ -216,6 +216,134 @@ router.get('/zones', (req: Request, res: Response) => {
   });
 });
 
+// 1.3 El Bagour Real-Time Delivery Weather (Server-Side Google Maps Weather API Proxy)
+const EL_BAGOUR_COORDS = { latitude: 30.4328, longitude: 31.0339 };
+const WEATHER_CACHE_TTL_MS = 10 * 60 * 1000;
+
+interface CachedWeatherPayload {
+  available: boolean;
+  city: string;
+  condition: 'sun' | 'cloud' | 'rain';
+  conditionType: string;
+  temperatureC: number;
+  isDaytime: boolean;
+  fetchedAt: string;
+  expiresAtMs: number;
+}
+
+let elBagourWeatherCache: CachedWeatherPayload | null = null;
+
+function mapGoogleWeatherConditionType(rawType: string): 'sun' | 'cloud' | 'rain' {
+  const normalized = rawType.toUpperCase();
+  if (
+    normalized.includes('RAIN') ||
+    normalized.includes('DRIZZLE') ||
+    normalized.includes('SHOWER') ||
+    normalized.includes('THUNDER') ||
+    normalized.includes('STORM') ||
+    normalized.includes('SLEET') ||
+    normalized.includes('HAIL')
+  ) {
+    return 'rain';
+  }
+  if (normalized === 'CLEAR' || normalized === 'MOSTLY_CLEAR' || normalized.includes('SUN')) {
+    return 'sun';
+  }
+  return 'cloud';
+}
+
+router.get('/weather/el-bagour', async (_req: Request, res: Response) => {
+  const nowMs = Date.now();
+  if (elBagourWeatherCache && elBagourWeatherCache.expiresAtMs > nowMs) {
+    const { expiresAtMs: _ignored, ...cachedData } = elBagourWeatherCache;
+    return sendSuccess(res, { ...cachedData, cached: true });
+  }
+
+  const apiKey =
+    process.env.GOOGLE_MAPS_API_KEY ||
+    process.env.GOOGLE_MAPS_PLATFORM_API_KEY ||
+    process.env.VITE_GOOGLE_MAPS_API_KEY ||
+    process.env.MAPS_API_KEY;
+
+  if (!apiKey || apiKey === 'YOUR_GOOGLE_MAPS_API_KEY') {
+    return sendSuccess(res, {
+      available: false,
+      city: 'El Bagour',
+      reason: 'MAPS_API_KEY_NOT_CONFIGURED',
+      condition: null,
+      temperatureC: null,
+    });
+  }
+
+  try {
+    const weatherUrl = new URL('https://weather.googleapis.com/v1/currentConditions:lookup');
+    weatherUrl.searchParams.set('key', apiKey);
+    weatherUrl.searchParams.set('location.latitude', String(EL_BAGOUR_COORDS.latitude));
+    weatherUrl.searchParams.set('location.longitude', String(EL_BAGOUR_COORDS.longitude));
+    weatherUrl.searchParams.set('unitsSystem', 'METRIC');
+
+    const upstream = await fetch(weatherUrl.toString(), {
+      method: 'GET',
+      headers: {
+        'X-Goog-Maps-Solution-ID': 'gmp_mcp_codeassist_v1_aistudio',
+      },
+    });
+
+    const payload = (await upstream.json().catch(() => null)) as {
+      weatherCondition?: { type?: string };
+      temperature?: { degrees?: number };
+      isDaytime?: boolean;
+      error?: { status?: string; message?: string };
+    } | null;
+
+    if (upstream.status === 429 || payload?.error?.status === 'RESOURCE_EXHAUSTED') {
+      return sendError(
+        res,
+        'RESOURCE_EXHAUSTED',
+        'Google Maps Platform Weather API quota exceeded.',
+        429
+      );
+    }
+
+    if (!upstream.ok || !payload || typeof payload.temperature?.degrees !== 'number') {
+      return sendSuccess(res, {
+        available: false,
+        city: 'El Bagour',
+        reason: `WEATHER_UPSTREAM_${upstream.status}`,
+        condition: null,
+        temperatureC: null,
+      });
+    }
+
+    const conditionType = String(payload.weatherCondition?.type || 'CLOUDY');
+    const mappedCondition = mapGoogleWeatherConditionType(conditionType);
+    const temperatureC = Math.round(payload.temperature.degrees);
+    const fetchedAt = new Date().toISOString();
+
+    elBagourWeatherCache = {
+      available: true,
+      city: 'El Bagour',
+      condition: mappedCondition,
+      conditionType,
+      temperatureC,
+      isDaytime: Boolean(payload.isDaytime ?? true),
+      fetchedAt,
+      expiresAtMs: nowMs + WEATHER_CACHE_TTL_MS,
+    };
+
+    const { expiresAtMs: _ignored, ...responseData } = elBagourWeatherCache;
+    return sendSuccess(res, { ...responseData, cached: false });
+  } catch {
+    return sendSuccess(res, {
+      available: false,
+      city: 'El Bagour',
+      reason: 'WEATHER_FETCH_FAILED',
+      condition: null,
+      temperatureC: null,
+    });
+  }
+});
+
 // ----------------------------------------------------------------------------
 // 2. Authoritative Pricing Quotes (Public or Authenticated, Rate-Limited)
 // ----------------------------------------------------------------------------

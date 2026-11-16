@@ -3,6 +3,7 @@
  * Serves /api/v1/* authoritative backend endpoints and mounts Vite SPA middleware on port 3000.
  */
 
+import 'dotenv/config';
 import path from 'node:path';
 import express from 'express';
 import { createServer as createViteServer } from 'vite';

@@ -1,0 +1,667 @@
+{
+  "entities": {
+    "UserAccount": {
+      "title": "UserAccount",
+      "description": "Authenticated user account, role assignment, default village landmark, and cashback wallet balance.",
+      "type": "object",
+      "properties": {
+        "uid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "displayName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 80
+        },
+        "email": {
+          "type": "string",
+          "minLength": 0,
+          "maxLength": 160
+        },
+        "phone": {
+          "type": "string",
+          "minLength": 0,
+          "maxLength": 24
+        },
+        "role": {
+          "type": "string",
+          "enum": ["customer", "captain", "merchant", "owner"]
+        },
+        "defaultCityId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "defaultLandmark": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 140
+        },
+        "cashbackBalancePiasters": {
+          "type": "integer"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "uid",
+        "displayName",
+        "role",
+        "defaultCityId",
+        "defaultLandmark",
+        "cashbackBalancePiasters",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "DriverProfile": {
+      "title": "DriverProfile",
+      "description": "Publicly visible verified local TukTuk, Scooter, Motorcycle, and Car driver profile.",
+      "type": "object",
+      "properties": {
+        "uid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "fullName": {
+          "type": "string",
+          "minLength": 2,
+          "maxLength": 80
+        },
+        "cityId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "vehicleType": {
+          "type": "string",
+          "enum": ["tuktuk", "scooter", "motorcycle", "car"]
+        },
+        "plateLabel": {
+          "type": "string",
+          "minLength": 2,
+          "maxLength": 32
+        },
+        "isVerified": {
+          "type": "boolean"
+        },
+        "isOnline": {
+          "type": "boolean"
+        },
+        "ratingAverage": {
+          "type": "number"
+        },
+        "completedTrips": {
+          "type": "integer"
+        },
+        "currentLandmark": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 140
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "uid",
+        "fullName",
+        "cityId",
+        "vehicleType",
+        "plateLabel",
+        "isVerified",
+        "isOnline",
+        "ratingAverage",
+        "completedTrips",
+        "currentLandmark",
+        "updatedAt"
+      ]
+    },
+    "StoreFront": {
+      "title": "StoreFront",
+      "description": "Local restaurant, pharmacy, or supermarket store header in El Bagour and Menoufia.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "ownerUid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "nameAr": {
+          "type": "string",
+          "minLength": 2,
+          "maxLength": 100
+        },
+        "category": {
+          "type": "string",
+          "enum": ["restaurant", "pharmacy", "supermarket"]
+        },
+        "cityId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "landmark": {
+          "type": "string",
+          "minLength": 2,
+          "maxLength": 140
+        },
+        "deliveryFeePiasters": {
+          "type": "integer"
+        },
+        "minOrderPiasters": {
+          "type": "integer"
+        },
+        "prepTimeText": {
+          "type": "string",
+          "minLength": 2,
+          "maxLength": 40
+        },
+        "rating": {
+          "type": "number"
+        },
+        "isOpen": {
+          "type": "boolean"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "id",
+        "ownerUid",
+        "nameAr",
+        "category",
+        "cityId",
+        "landmark",
+        "deliveryFeePiasters",
+        "minOrderPiasters",
+        "prepTimeText",
+        "rating",
+        "isOpen",
+        "updatedAt"
+      ]
+    },
+    "CatalogProduct": {
+      "title": "CatalogProduct",
+      "description": "Menu or store catalog item linked to a store for global search and multi-stop cart.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "storeId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "ownerUid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "nameAr": {
+          "type": "string",
+          "minLength": 2,
+          "maxLength": 120
+        },
+        "descriptionAr": {
+          "type": "string",
+          "minLength": 0,
+          "maxLength": 240
+        },
+        "categoryName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 60
+        },
+        "pricePiasters": {
+          "type": "integer"
+        },
+        "unit": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 32
+        },
+        "isAvailable": {
+          "type": "boolean"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "id",
+        "storeId",
+        "ownerUid",
+        "nameAr",
+        "descriptionAr",
+        "categoryName",
+        "pricePiasters",
+        "unit",
+        "isAvailable",
+        "updatedAt"
+      ]
+    },
+    "DeliveryOrder": {
+      "title": "DeliveryOrder",
+      "description": "Single-store, multi-stop, scheduled, or voice-note delivery/errand order.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "orderNumber": {
+          "type": "string",
+          "minLength": 4,
+          "maxLength": 24
+        },
+        "customerId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "customerName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 80
+        },
+        "merchantOwnerUid": {
+          "type": "string",
+          "minLength": 0,
+          "maxLength": 128
+        },
+        "serviceType": {
+          "type": "string",
+          "enum": ["restaurant_store", "package", "errand"]
+        },
+        "cityId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "storeNames": {
+          "type": "array"
+        },
+        "pickupLandmark": {
+          "type": "string",
+          "minLength": 2,
+          "maxLength": 140
+        },
+        "dropoffLandmark": {
+          "type": "string",
+          "minLength": 2,
+          "maxLength": 140
+        },
+        "itemsSummary": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 500
+        },
+        "isRural": {
+          "type": "boolean"
+        },
+        "scheduledFor": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 40
+        },
+        "hasVoiceNote": {
+          "type": "boolean"
+        },
+        "voiceNoteDurationSec": {
+          "type": "integer"
+        },
+        "voiceNoteTranscript": {
+          "type": "string",
+          "minLength": 0,
+          "maxLength": 300
+        },
+        "distanceKm": {
+          "type": "number"
+        },
+        "subtotalPiasters": {
+          "type": "integer"
+        },
+        "deliveryFeePiasters": {
+          "type": "integer"
+        },
+        "cashbackAppliedPiasters": {
+          "type": "integer"
+        },
+        "totalFarePiasters": {
+          "type": "integer"
+        },
+        "paymentMethod": {
+          "type": "string",
+          "enum": ["cash", "wallet", "vodafone_cash", "instapay"]
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "created",
+            "accepted_by_store",
+            "preparing",
+            "ready_for_pickup",
+            "searching_captain",
+            "captain_assigned",
+            "at_pickup",
+            "picked_up",
+            "in_transit",
+            "delivered",
+            "cancelled"
+          ]
+        },
+        "assignedCaptainId": {
+          "type": "string",
+          "minLength": 0,
+          "maxLength": 128
+        },
+        "assignedCaptainName": {
+          "type": "string",
+          "minLength": 0,
+          "maxLength": 80
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "id",
+        "orderNumber",
+        "customerId",
+        "customerName",
+        "serviceType",
+        "cityId",
+        "storeNames",
+        "pickupLandmark",
+        "dropoffLandmark",
+        "itemsSummary",
+        "isRural",
+        "scheduledFor",
+        "hasVoiceNote",
+        "voiceNoteDurationSec",
+        "voiceNoteTranscript",
+        "distanceKm",
+        "subtotalPiasters",
+        "deliveryFeePiasters",
+        "cashbackAppliedPiasters",
+        "totalFarePiasters",
+        "paymentMethod",
+        "status",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "PassengerRide": {
+      "title": "PassengerRide",
+      "description": "Verified local TukTuk, Scooter, or Economy Car passenger ride in El Bagour and Menoufia.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "rideNumber": {
+          "type": "string",
+          "minLength": 4,
+          "maxLength": 24
+        },
+        "passengerId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "passengerName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 80
+        },
+        "vehicleTier": {
+          "type": "string",
+          "enum": ["tuktuk", "scooter", "car"]
+        },
+        "cityId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "pickupLandmark": {
+          "type": "string",
+          "minLength": 2,
+          "maxLength": 140
+        },
+        "dropoffLandmark": {
+          "type": "string",
+          "minLength": 2,
+          "maxLength": 140
+        },
+        "distanceKm": {
+          "type": "number"
+        },
+        "estimatedFarePiasters": {
+          "type": "integer"
+        },
+        "cashbackAppliedPiasters": {
+          "type": "integer"
+        },
+        "paymentMethod": {
+          "type": "string",
+          "enum": ["cash", "wallet", "vodafone_cash", "instapay"]
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "searching_driver",
+            "driver_assigned",
+            "driver_arrived",
+            "in_ride",
+            "completed",
+            "cancelled"
+          ]
+        },
+        "assignedDriverId": {
+          "type": "string",
+          "minLength": 0,
+          "maxLength": 128
+        },
+        "assignedDriverName": {
+          "type": "string",
+          "minLength": 0,
+          "maxLength": 80
+        },
+        "driverPlateLabel": {
+          "type": "string",
+          "minLength": 0,
+          "maxLength": 32
+        },
+        "safetySosTriggered": {
+          "type": "boolean"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "id",
+        "rideNumber",
+        "passengerId",
+        "passengerName",
+        "vehicleTier",
+        "cityId",
+        "pickupLandmark",
+        "dropoffLandmark",
+        "distanceKm",
+        "estimatedFarePiasters",
+        "cashbackAppliedPiasters",
+        "paymentMethod",
+        "status",
+        "safetySosTriggered",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "ChatMessage": {
+      "title": "ChatMessage",
+      "description": "Real-time message in an order or ride communication thread.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "senderUid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "senderRole": {
+          "type": "string",
+          "enum": ["customer", "captain", "merchant"]
+        },
+        "senderName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 80
+        },
+        "text": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 400
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["id", "senderUid", "senderRole", "senderName", "text", "createdAt"]
+    },
+    "WalletTransaction": {
+      "title": "WalletTransaction",
+      "description": "Immutable loyalty cashback credit or redemption entry.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 80,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "userId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "type": {
+          "type": "string",
+          "enum": ["welcome_bonus", "cashback_earn", "cashback_redeem", "admin_adjustment"]
+        },
+        "amountPiasters": {
+          "type": "integer"
+        },
+        "refId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "titleAr": {
+          "type": "string",
+          "minLength": 2,
+          "maxLength": 140
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["id", "userId", "type", "amountPiasters", "refId", "titleAr", "createdAt"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": { "$ref": "#/entities/UserAccount" },
+      "description": "Private user account profiles, default landmark, role, and cashback balance."
+    },
+    "/users/{userId}/walletTransactions/{txId}": {
+      "schema": { "$ref": "#/entities/WalletTransaction" },
+      "description": "User loyalty cashback earn and redemption ledger entries."
+    },
+    "/driverProfiles/{driverId}": {
+      "schema": { "$ref": "#/entities/DriverProfile" },
+      "description": "Publicly readable verified driver summary without private phone or national ID PII."
+    },
+    "/stores/{storeId}": {
+      "schema": { "$ref": "#/entities/StoreFront" },
+      "description": "Publicly readable local merchant storefronts."
+    },
+    "/products/{productId}": {
+      "schema": { "$ref": "#/entities/CatalogProduct" },
+      "description": "Publicly readable store catalog items."
+    },
+    "/orders/{orderId}": {
+      "schema": { "$ref": "#/entities/DeliveryOrder" },
+      "description": "Multi-stop, scheduled, or voice-note delivery orders."
+    },
+    "/rides/{rideId}": {
+      "schema": { "$ref": "#/entities/PassengerRide" },
+      "description": "Verified local TukTuk, Scooter, and Car passenger rides."
+    },
+    "/threads/{threadId}/messages/{messageId}": {
+      "schema": { "$ref": "#/entities/ChatMessage" },
+      "description": "Real-time participant chat messages scoped to an order or ride."
+    }
+  }
+}

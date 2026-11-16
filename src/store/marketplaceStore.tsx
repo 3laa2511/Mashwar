@@ -69,14 +69,14 @@ export type OrderStatus =
   | 'delivered' // تم التسليم وتحصيل الكاش
   | 'cancelled'; // ملغي
 
-export type OrderServiceType = 'restaurant_store' | 'package' | 'errand';
+export type OrderServiceType = 'restaurant_store' | 'package' | 'errand' | 'ride';
 
 export interface MarketplaceOrder {
   id: string;
   orderNumber: string;
   serviceType: OrderServiceType;
   serviceTypeAr: string;
-  vehicleCategory?: 'scooter' | 'motorcycle' | 'van';
+  vehicleCategory?: 'tuktuk' | 'car' | 'scooter' | 'motorcycle' | 'van';
   storeId: string;
   storeName: string;
   storeAddress: string;
@@ -142,6 +142,80 @@ export interface WalletTransaction {
   methodAr: string;
   timestampAr: string;
   orderNumber?: string;
+}
+
+export type LoyaltyTier = 'bronze' | 'silver' | 'gold';
+
+export interface LoyaltyCashbackEntry {
+  id: string;
+  orderId: string;
+  orderNumber: string;
+  serviceTypeAr: string;
+  orderTotalEgp: number;
+  cashbackPercent: number;
+  cashbackAmountEgp: number;
+  pointsEarned: number;
+  createdAtAr: string;
+}
+
+export function getLoyaltyTierFromPoints(points: number): {
+  tier: LoyaltyTier;
+  tierLabelAr: string;
+  deliveryPercent: number;
+  ridePercent: number;
+  nextTierPointsTarget: number | null;
+} {
+  if (points >= 500) {
+    return {
+      tier: 'gold',
+      tierLabelAr: 'العضوية الذهبية (Gold)',
+      deliveryPercent: 10,
+      ridePercent: 8,
+      nextTierPointsTarget: null,
+    };
+  }
+  if (points >= 200) {
+    return {
+      tier: 'silver',
+      tierLabelAr: 'العضوية الفضية (Silver)',
+      deliveryPercent: 6,
+      ridePercent: 5,
+      nextTierPointsTarget: 500,
+    };
+  }
+  return {
+    tier: 'bronze',
+    tierLabelAr: 'العضوية البرونزية (Bronze)',
+    deliveryPercent: 4,
+    ridePercent: 3,
+    nextTierPointsTarget: 200,
+  };
+}
+
+export function calculateOrderCashback(
+  orderTotalEgp: number,
+  serviceType: OrderServiceType,
+  currentPoints: number
+): {
+  cashbackPercent: number;
+  cashbackAmountEgp: number;
+  pointsEarned: number;
+} {
+  const tierInfo = getLoyaltyTierFromPoints(currentPoints);
+  const cashbackPercent =
+    serviceType === 'restaurant_store' ? tierInfo.deliveryPercent : tierInfo.ridePercent;
+  const safeTotal = Math.max(0, Number(orderTotalEgp) || 0);
+  const rawCashback = (safeTotal * cashbackPercent) / 100;
+  // Minimum 1 EGP cashback on completed orders >= 15 EGP, capped at 25 EGP per order
+  const cashbackAmountEgp =
+    safeTotal >= 15 ? Math.min(25, Math.max(1, Math.round(rawCashback))) : 0;
+  // 10 points per 1 EGP cashback + base 5 points per completed order
+  const pointsEarned = cashbackAmountEgp * 10 + 5;
+  return {
+    cashbackPercent,
+    cashbackAmountEgp,
+    pointsEarned,
+  };
 }
 
 export interface AppNotification {
@@ -815,8 +889,8 @@ const INITIAL_ORDERS: MarketplaceOrder[] = [
 // ============================================================================
 
 interface SubmitRideOrPackageInput {
-  serviceType: 'errand' | 'package';
-  vehicleCategory: 'scooter' | 'motorcycle' | 'van';
+  serviceType: 'errand' | 'package' | 'ride';
+  vehicleCategory: 'tuktuk' | 'car' | 'scooter' | 'motorcycle' | 'van';
   pickupAddress: string;
   deliveryAddress: string;
   distanceKm: number;
@@ -871,6 +945,13 @@ interface MarketplaceContextType {
     paymentMethod: 'cash' | 'instapay' | 'vodafone_cash' | 'wallet';
     notes?: string;
   }) => MarketplaceOrder | null;
+  submitDirectStoreOrder: (params: {
+    storeId: string;
+    items: { product: ProductItem; quantity: number }[];
+    deliveryAddress: string;
+    paymentMethod: 'cash' | 'instapay' | 'vodafone_cash' | 'wallet';
+    notes?: string;
+  }) => MarketplaceOrder | null;
   submitRideOrPackageOrder: (params: SubmitRideOrPackageInput) => MarketplaceOrder;
   simulateInstantCaptainAccept: (orderId: string) => void;
   customerCancelOrder: (orderId: string, reason?: string) => void;
@@ -897,6 +978,18 @@ interface MarketplaceContextType {
   customerWalletBalanceEgp: number;
   walletTransactions: WalletTransaction[];
   topUpCustomerWallet: (amountEgp: number, methodAr: string) => void;
+
+  // Loyalty Points & Cashback System
+  loyaltyPoints: number;
+  loyaltyCashbackBalanceEgp: number;
+  loyaltyTier: LoyaltyTier;
+  loyaltyTierLabelAr: string;
+  loyaltyDeliveryPercent: number;
+  loyaltyRidePercent: number;
+  nextTierPointsTarget: number | null;
+  loyaltyHistory: LoyaltyCashbackEntry[];
+  redeemLoyaltyCashbackToWallet: () => { success: boolean; transferredEgp: number };
+  awardLoyaltyForOrder: (orderId: string) => void;
 
   // Notifications & Support Complaints
   notifications: AppNotification[];
@@ -943,6 +1036,9 @@ const STORAGE_KEYS = {
   ORDERS: 'mashwar_bagour_orders_v2',
   WALLET_BALANCE: 'mashwar_bagour_wallet_balance_v2',
   WALLET_TX: 'mashwar_bagour_wallet_tx_v2',
+  LOYALTY_POINTS: 'mashwar_bagour_loyalty_points_v2',
+  LOYALTY_CASHBACK: 'mashwar_bagour_loyalty_cashback_v2',
+  LOYALTY_HISTORY: 'mashwar_bagour_loyalty_history_v2',
 };
 
 export const MarketplaceProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
@@ -1033,7 +1129,70 @@ export const MarketplaceProvider: React.FC<{ children: React.ReactNode }> = ({ c
     ];
   });
 
-  // Persist orders & wallet across page reloads
+  // Loyalty Points & Cashback State (persisted in localStorage)
+  const [loyaltyPoints, setLoyaltyPoints] = useState<number>(() => {
+    try {
+      const saved = typeof window !== 'undefined' ? window.localStorage.getItem(STORAGE_KEYS.LOYALTY_POINTS) : null;
+      if (saved !== null) {
+        const num = Number(saved);
+        if (Number.isFinite(num) && num >= 0) return num;
+      }
+    } catch {
+      // Fallback
+    }
+    return 125;
+  });
+
+  const [loyaltyCashbackBalanceEgp, setLoyaltyCashbackBalanceEgp] = useState<number>(() => {
+    try {
+      const saved = typeof window !== 'undefined' ? window.localStorage.getItem(STORAGE_KEYS.LOYALTY_CASHBACK) : null;
+      if (saved !== null) {
+        const num = Number(saved);
+        if (Number.isFinite(num) && num >= 0) return num;
+      }
+    } catch {
+      // Fallback
+    }
+    return 15;
+  });
+
+  const [loyaltyHistory, setLoyaltyHistory] = useState<LoyaltyCashbackEntry[]>(() => {
+    try {
+      const saved = typeof window !== 'undefined' ? window.localStorage.getItem(STORAGE_KEYS.LOYALTY_HISTORY) : null;
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+      }
+    } catch {
+      // Fallback
+    }
+    return [
+      {
+        id: 'loy_seed_1',
+        orderId: 'ord_seed_3',
+        orderNumber: 'MSH-8101',
+        serviceTypeAr: 'توصيل طرد ومستندات',
+        orderTotalEgp: 30,
+        cashbackPercent: 3,
+        cashbackAmountEgp: 1,
+        pointsEarned: 15,
+        createdAtAr: 'اليوم • ٠٩:٣٦ ص',
+      },
+      {
+        id: 'loy_welcome',
+        orderId: 'welcome_bonus',
+        orderNumber: 'WELCOME',
+        serviceTypeAr: 'مكافأة انضمام مشوار الباجور',
+        orderTotalEgp: 0,
+        cashbackPercent: 4,
+        cashbackAmountEgp: 14,
+        pointsEarned: 110,
+        createdAtAr: 'منذ ٣ أيام',
+      },
+    ];
+  });
+
+  // Persist orders, wallet & loyalty across page reloads
   useEffect(() => {
     try {
       if (typeof window !== 'undefined') {
@@ -1054,6 +1213,20 @@ export const MarketplaceProvider: React.FC<{ children: React.ReactNode }> = ({ c
       // Ignore storage quota errors
     }
   }, [customerWalletBalanceEgp, walletTransactions]);
+
+  useEffect(() => {
+    try {
+      if (typeof window !== 'undefined') {
+        window.localStorage.setItem(STORAGE_KEYS.LOYALTY_POINTS, String(loyaltyPoints));
+        window.localStorage.setItem(STORAGE_KEYS.LOYALTY_CASHBACK, String(loyaltyCashbackBalanceEgp));
+        window.localStorage.setItem(STORAGE_KEYS.LOYALTY_HISTORY, JSON.stringify(loyaltyHistory));
+      }
+    } catch {
+      // Ignore storage quota errors
+    }
+  }, [loyaltyPoints, loyaltyCashbackBalanceEgp, loyaltyHistory]);
+
+  const currentLoyaltyTierInfo = getLoyaltyTierFromPoints(loyaltyPoints);
 
   // Notifications
   const [notifications, setNotifications] = useState<AppNotification[]>([
@@ -1356,6 +1529,95 @@ export const MarketplaceProvider: React.FC<{ children: React.ReactNode }> = ({ c
     return newOrder;
   };
 
+  // Submit Direct Store Order from Multi-Step Wizard
+  const submitDirectStoreOrder = (params: {
+    storeId: string;
+    items: { product: ProductItem; quantity: number }[];
+    deliveryAddress: string;
+    paymentMethod: 'cash' | 'instapay' | 'vodafone_cash' | 'wallet';
+    notes?: string;
+  }): MarketplaceOrder | null => {
+    const store = stores.find((s) => s.id === params.storeId);
+    if (!store || params.items.length === 0) return null;
+
+    const orderNum = `MSH-${Math.floor(9402 + Math.random() * 500)}`;
+    const now = new Date();
+    const timeStr = formatArabicClockTime(now);
+    const subtotalEgp = params.items.reduce((sum, ci) => sum + ci.product.priceEgp * ci.quantity, 0);
+    const deliveryFeeEgp = store.deliveryFeeEgp ?? 15;
+    const platformFeeEgp = Math.round(systemSettings.platformFeePiasters / 100);
+    const isRural = params.deliveryAddress.includes('قرية');
+    const ruralSurchargeEgp = isRural ? Math.round(systemSettings.ruralSurchargePiasters / 100) : 0;
+    const totalEgp = subtotalEgp + deliveryFeeEgp + platformFeeEgp + ruralSurchargeEgp;
+    const itemsSummary = params.items.map((ci) => `${ci.quantity}× ${ci.product.nameAr}`).join(' + ');
+
+    if (params.paymentMethod === 'wallet' && customerWalletBalanceEgp >= totalEgp) {
+      setCustomerWalletBalanceEgp((prev) => prev - totalEgp);
+      setWalletTransactions((prev) => [
+        {
+          id: `wtx_${Date.now()}`,
+          titleAr: `سداد طلب متجر ${store.nameAr} (${orderNum})`,
+          type: 'debit',
+          amountEgp: totalEgp,
+          methodAr: 'خصم محفظة مشوار',
+          timestampAr: `اليوم • ${timeStr}`,
+          orderNumber: orderNum,
+        },
+        ...prev,
+      ]);
+    }
+
+    const newOrder: MarketplaceOrder = {
+      id: `ord_${Date.now()}`,
+      orderNumber: orderNum,
+      serviceType: 'restaurant_store',
+      serviceTypeAr: 'توصيل متاجر ومطاعم',
+      vehicleCategory: 'scooter',
+      storeId: store.id,
+      storeName: store.nameAr,
+      storeAddress: store.address,
+      pickupAddress: store.address,
+      deliveryAddress: params.deliveryAddress,
+      distanceKm: store.distanceKm,
+      estimatedMinutes: store.deliveryTimeEst,
+      estimatedDuration: 20,
+      estimatedDurationMinutes: 20,
+      isRural,
+      customerId: currentUser.role === 'customer' ? currentUser.id : 'usr_cust_1',
+      customerName: currentUser.role === 'customer' ? currentUser.name : 'أحمد سعيد المنوفي',
+      customerPhone: currentUser.role === 'customer' ? currentUser.phone : '01012345678',
+      items: params.items.map((ci) => ({
+        productId: ci.product.id,
+        productName: ci.product.nameAr,
+        quantity: ci.quantity,
+        unitPriceEgp: ci.product.priceEgp,
+      })),
+      itemDescription: itemsSummary,
+      subtotalEgp,
+      deliveryFeeEgp,
+      platformFeeEgp,
+      ruralSurchargeEgp,
+      totalEgp,
+      totalFarePiasters: totalEgp * 100,
+      paymentMethod: params.paymentMethod,
+      status: 'created',
+      createdAt: timeStr,
+      createdAtDate: now,
+      notes: params.notes,
+    };
+
+    setOrders((prev) => [newOrder, ...prev]);
+
+    pushNotification({
+      recipientRole: 'merchant',
+      titleAr: `طلب جديد وارد #${orderNum} لـ ${store.nameAr}`,
+      bodyAr: `${itemsSummary} • الإجمالي ${totalEgp} ج.م`,
+      orderNumber: orderNum,
+    });
+
+    return newOrder;
+  };
+
   // Submit Direct Ride / Special Errand / Package Order
   const submitRideOrPackageOrder = (params: SubmitRideOrPackageInput): MarketplaceOrder => {
     const orderNum = `MSH-${Math.floor(8200 + Math.random() * 799)}`;
@@ -1364,10 +1626,15 @@ export const MarketplaceProvider: React.FC<{ children: React.ReactNode }> = ({ c
 
     const baseFareEgp = params.quoteData
       ? Math.round(params.quoteData.baseFarePiasters / 100)
+      : params.vehicleCategory === 'car'
+      ? 28
       : Math.round(systemSettings.baseFarePiasters / 100);
     const distFareEgp = params.quoteData
       ? Math.round(params.quoteData.distanceFarePiasters / 100)
-      : Math.round(Math.max(0, params.distanceKm - 1.5) * (systemSettings.ratePerKmPiasters / 100));
+      : Math.round(
+          Math.max(0, params.distanceKm - 1.5) *
+            (params.vehicleCategory === 'car' ? 7.5 : systemSettings.ratePerKmPiasters / 100)
+        );
     const ruralEgp = params.quoteData
       ? Math.round(params.quoteData.ruralSurchargePiasters / 100)
       : params.isRural
@@ -1387,7 +1654,15 @@ export const MarketplaceProvider: React.FC<{ children: React.ReactNode }> = ({ c
       setWalletTransactions((prev) => [
         {
           id: `wtx_${Date.now()}`,
-          titleAr: `سداد ${params.serviceType === 'errand' ? 'مشوار خاص' : 'توصيل طرد'} (${orderNum})`,
+          titleAr: `سداد ${
+            params.serviceType === 'ride'
+              ? params.vehicleCategory === 'car'
+                ? 'مشوار سيارة'
+                : 'مشوار توكتوك'
+              : params.serviceType === 'errand'
+              ? 'مشوار خاص'
+              : 'توصيل طرد'
+          } (${orderNum})`,
           type: 'debit',
           amountEgp: totalEgp,
           methodAr: 'خصم محفظة مشوار',
@@ -1399,7 +1674,11 @@ export const MarketplaceProvider: React.FC<{ children: React.ReactNode }> = ({ c
     }
 
     const serviceLabel =
-      params.serviceType === 'errand'
+      params.serviceType === 'ride'
+        ? params.vehicleCategory === 'car'
+          ? 'مشوار سيارة ملاكي'
+          : 'مشوار توكتوك الباجور'
+        : params.serviceType === 'errand'
         ? 'مشوار خاص وتخليص فوري'
         : 'توصيل طرد وأمانات';
 
@@ -1409,7 +1688,12 @@ export const MarketplaceProvider: React.FC<{ children: React.ReactNode }> = ({ c
       serviceType: params.serviceType,
       serviceTypeAr: serviceLabel,
       vehicleCategory: params.vehicleCategory,
-      storeId: params.serviceType === 'errand' ? 'direct_errand' : 'direct_package',
+      storeId:
+        params.serviceType === 'ride'
+          ? `direct_ride_${params.vehicleCategory}`
+          : params.serviceType === 'errand'
+          ? 'direct_errand'
+          : 'direct_package',
       storeName: serviceLabel,
       storeAddress: params.pickupAddress,
       pickupAddress: params.pickupAddress,
@@ -1658,11 +1942,72 @@ export const MarketplaceProvider: React.FC<{ children: React.ReactNode }> = ({ c
     }
   };
 
+  const awardLoyaltyForOrder = (orderId: string, overrideOrder?: MarketplaceOrder) => {
+    const target = overrideOrder || orders.find((o) => o.id === orderId);
+    if (!target) return;
+    // Prevent duplicate cashback award for the same completed order
+    if (loyaltyHistory.some((entry) => entry.orderId === target.id)) return;
+
+    const { cashbackPercent, cashbackAmountEgp, pointsEarned } = calculateOrderCashback(
+      target.totalEgp,
+      target.serviceType,
+      loyaltyPoints
+    );
+    const nowTimeAr = formatArabicClockTime(new Date());
+
+    setLoyaltyPoints((prev) => prev + pointsEarned);
+    setLoyaltyCashbackBalanceEgp((prev) => prev + cashbackAmountEgp);
+    setLoyaltyHistory((prev) => [
+      {
+        id: `loy_${Date.now()}_${target.id.slice(-4)}`,
+        orderId: target.id,
+        orderNumber: target.orderNumber.replace(/^#/, ''),
+        serviceTypeAr: target.serviceTypeAr,
+        orderTotalEgp: target.totalEgp,
+        cashbackPercent,
+        cashbackAmountEgp,
+        pointsEarned,
+        createdAtAr: `اليوم • ${nowTimeAr}`,
+      },
+      ...prev,
+    ]);
+
+    pushNotification({
+      recipientRole: 'customer',
+      titleAr: `مكافأة ولاء: +${cashbackAmountEgp} ج.م كاش باك (${cashbackPercent}%)`,
+      bodyAr: `اكتسبت ${pointsEarned} نقطة ولاء عن إتمام طلب #${target.orderNumber.replace(/^#/, '')}.`,
+      orderNumber: target.orderNumber,
+    });
+  };
+
+  const redeemLoyaltyCashbackToWallet = (): { success: boolean; transferredEgp: number } => {
+    const amount = Math.floor(loyaltyCashbackBalanceEgp);
+    if (amount < 1) return { success: false, transferredEgp: 0 };
+    const nowTimeAr = formatArabicClockTime(new Date());
+
+    setLoyaltyCashbackBalanceEgp((prev) => Math.max(0, prev - amount));
+    setCustomerWalletBalanceEgp((prev) => prev + amount);
+    setWalletTransactions((prev) => [
+      {
+        id: `wtx_loy_${Date.now()}`,
+        titleAr: 'تحويل رصيد كاش باك نقاط الولاء إلى المحفظة',
+        type: 'credit',
+        amountEgp: amount,
+        methodAr: 'كاش باك ولاء مشوار',
+        timestampAr: `اليوم • ${nowTimeAr}`,
+      },
+      ...prev,
+    ]);
+
+    return { success: true, transferredEgp: amount };
+  };
+
   const captainUpdateStep = (
     orderId: string,
     nextStatus: 'at_pickup' | 'picked_up' | 'in_transit' | 'delivered'
   ) => {
     const nowTimeAr = formatArabicClockTime(new Date());
+    const targetOrder = orders.find((o) => o.id === orderId);
     setOrders((prev) =>
       prev.map((o) =>
         o.id === orderId
@@ -1681,6 +2026,10 @@ export const MarketplaceProvider: React.FC<{ children: React.ReactNode }> = ({ c
           : o
       )
     );
+
+    if (nextStatus === 'delivered' && targetOrder) {
+      awardLoyaltyForOrder(orderId, targetOrder);
+    }
   };
 
   const captainConfirmCashCollection = (orderId: string) => {
@@ -1718,6 +2067,8 @@ export const MarketplaceProvider: React.FC<{ children: React.ReactNode }> = ({ c
       bodyAr: `شكراً لاستخدامك مشوار الباجور! تم تحصيل ${targetOrder.totalEgp}.00 ج.م.`,
       orderNumber: targetOrder.orderNumber,
     });
+
+    awardLoyaltyForOrder(orderId, targetOrder);
   };
 
   // Customer Wallet Top-up (Prototype Simulation with strict bounds validation)
@@ -2144,6 +2495,7 @@ export const MarketplaceProvider: React.FC<{ children: React.ReactNode }> = ({ c
         cartTotalEgp,
         orders,
         submitNewOrder,
+        submitDirectStoreOrder,
         submitRideOrPackageOrder,
         simulateInstantCaptainAccept,
         customerCancelOrder,
@@ -2164,6 +2516,16 @@ export const MarketplaceProvider: React.FC<{ children: React.ReactNode }> = ({ c
         customerWalletBalanceEgp,
         walletTransactions,
         topUpCustomerWallet,
+        loyaltyPoints,
+        loyaltyCashbackBalanceEgp,
+        loyaltyTier: currentLoyaltyTierInfo.tier,
+        loyaltyTierLabelAr: currentLoyaltyTierInfo.tierLabelAr,
+        loyaltyDeliveryPercent: currentLoyaltyTierInfo.deliveryPercent,
+        loyaltyRidePercent: currentLoyaltyTierInfo.ridePercent,
+        nextTierPointsTarget: currentLoyaltyTierInfo.nextTierPointsTarget,
+        loyaltyHistory,
+        redeemLoyaltyCashbackToWallet,
+        awardLoyaltyForOrder,
         notifications,
         markAllNotificationsRead,
         complaints,

@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
+import '../../features/auth/presentation/screens/phone_auth_screen.dart';
 import '../../features/customer_home/presentation/screens/customer_home_screen.dart';
 import '../../features/delivery_booking/presentation/screens/booking_screen.dart';
+import '../../features/delivery_booking/presentation/screens/multi_step_order_screen.dart';
 import '../../features/order_tracking/presentation/screens/order_tracking_screen.dart';
 import '../../features/order_history/presentation/screens/order_history_screen.dart';
 import '../../features/captain/presentation/screens/captain_dashboard_screen.dart';
@@ -16,12 +18,20 @@ final GoRouter appRouter = GoRouter(
       redirect: (context, state) => '/customer',
     ),
     GoRoute(
+      path: '/auth',
+      builder: (context, state) => const PhoneAuthScreen(),
+    ),
+    GoRoute(
       path: '/customer',
       builder: (context, state) => const CustomerHomeScreen(),
       routes: [
         GoRoute(
           path: 'book',
           builder: (context, state) => const BookingScreen(),
+        ),
+        GoRoute(
+          path: 'multi-step-order',
+          builder: (context, state) => const MultiStepOrderScreen(),
         ),
         GoRoute(
           path: 'order/:id',
