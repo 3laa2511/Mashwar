@@ -1,4 +1,23 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
+import {
+  auth,
+  onAuthStateChanged,
+  subscribeToScopedOrdersInFirestore,
+  subscribeToCommuteSubscriptionsInFirestore,
+  syncDeliveryOrderToFirestore,
+  updateDeliveryOrderInFirestore,
+  syncRideToFirestore,
+  createCommuteSubscriptionInFirestore,
+  submitWalletTopUpProofInFirestore,
+  type User,
+} from '../lib/firebase';
+import {
+  BLUEPRINT_LIMITS,
+  type CashChangeOptionEgp,
+  generateFourDigitPin,
+  calculateDeliveryFeePiasters,
+  calculateCommuteSubscriptionPricePiasters,
+} from '../lib/firestoreSchemas';
 
 // ============================================================================
 // 1. TYPES & INTERFACES
@@ -56,6 +75,8 @@ export interface CartItem {
 }
 
 export type OrderStatus =
+  | 'awaiting_quote' // بانتظار تسعيرة الصيدلية أو المتجر (روشتة / ورقة مقاضي)
+  | 'quote_ready' // عرض السعر جاهز ومطلوب موافقة العميل
   | 'created' // بانتظار قبول المتجر
   | 'accepted_by_store' // المتجر قبل الطلب (Canonical Backend Status)
   | 'preparing' // قيد التحضير بالمتجر
@@ -69,7 +90,12 @@ export type OrderStatus =
   | 'delivered' // تم التسليم وتحصيل الكاش
   | 'cancelled'; // ملغي
 
-export type OrderServiceType = 'restaurant_store' | 'package' | 'errand' | 'ride';
+export type OrderServiceType =
+  | 'restaurant_store'
+  | 'package'
+  | 'errand'
+  | 'ride'
+  | 'prescription_list';
 
 export interface MarketplaceOrder {
   id: string;
@@ -79,6 +105,8 @@ export interface MarketplaceOrder {
   vehicleCategory?: 'tuktuk' | 'car' | 'scooter' | 'motorcycle' | 'van';
   storeId: string;
   storeName: string;
+  storeIds?: string[];
+  storeNames?: string[];
   storeAddress: string;
   pickupAddress: string;
   deliveryAddress: string;
@@ -95,12 +123,23 @@ export interface MarketplaceOrder {
     productName: string;
     quantity: number;
     unitPriceEgp: number;
+    storeId?: string;
+    storeName?: string;
   }[];
   itemDescription: string;
+  aiExtractedItems?: string[];
+  prescriptionSummary?: string;
+  quoteTotalEgp?: number;
+  quoteNotes?: string;
   subtotalEgp: number;
   deliveryFeeEgp: number;
   platformFeeEgp: number;
   ruralSurchargeEgp: number;
+  discountEgp?: number;
+  promoCode?: string;
+  cashChangeForEgp?: CashChangeOptionEgp;
+  ridePin?: string;
+  requiresFamilyTrustedDriver?: boolean;
   totalEgp: number;
   totalFarePiasters: number;
   paymentMethod: 'cash' | 'instapay' | 'vodafone_cash' | 'wallet';
@@ -123,6 +162,142 @@ export interface MarketplaceOrder {
   quoteSignature?: string;
   notes?: string;
   orderNotes?: string;
+  scheduled_for?: string | null;
+  scheduledFor?: string | null;
+  hasVoiceNote?: boolean;
+  voiceNoteDurationSec?: number;
+  voiceNoteTranscript?: string;
+  driverTipEgp?: number;
+}
+
+export type OrderTrackingStageKey = 'received' | 'preparing' | 'out_for_delivery' | 'delivered';
+
+export interface OrderTrackingStageMeta {
+  key: OrderTrackingStageKey;
+  index: number;
+  labelAr: string;
+  labelEn: string;
+  descriptionAr: string;
+}
+
+export const ORDER_TRACKING_STAGES: OrderTrackingStageMeta[] = [
+  {
+    key: 'received',
+    index: 0,
+    labelAr: 'تم الاستلام',
+    labelEn: 'Received',
+    descriptionAr: 'تم استلام طلبك وتأكيده بنجاح',
+  },
+  {
+    key: 'preparing',
+    index: 1,
+    labelAr: 'قيد التجهيز',
+    labelEn: 'Preparing',
+    descriptionAr: 'جاري تجهيز الطلب أو تعيين أقرب كابتن',
+  },
+  {
+    key: 'out_for_delivery',
+    index: 2,
+    labelAr: 'جاري التوصيل',
+    labelEn: 'Out for Delivery',
+    descriptionAr: 'الكابتن استلم الطلب وفي طريقه إليك',
+  },
+  {
+    key: 'delivered',
+    index: 3,
+    labelAr: 'تم التسليم',
+    labelEn: 'Delivered',
+    descriptionAr: 'تم تسليم الطلب بنجاح وإضافة نقاط الولاء',
+  },
+];
+
+export function getOrderTrackingProgress(status: OrderStatus): {
+  stageKey: OrderTrackingStageKey;
+  stageIndex: number;
+  labelAr: string;
+  labelEn: string;
+  progressPercent: number;
+  isCancelled: boolean;
+} {
+  if (status === 'cancelled') {
+    return {
+      stageKey: 'received',
+      stageIndex: 0,
+      labelAr: 'ملغي',
+      labelEn: 'Cancelled',
+      progressPercent: 0,
+      isCancelled: true,
+    };
+  }
+  if (status === 'delivered') {
+    return {
+      stageKey: 'delivered',
+      stageIndex: 3,
+      labelAr: 'تم التسليم',
+      labelEn: 'Delivered',
+      progressPercent: 100,
+      isCancelled: false,
+    };
+  }
+  if (status === 'awaiting_quote') {
+    return {
+      stageKey: 'received',
+      stageIndex: 0,
+      labelAr: 'بانتظار تسعيرة المتجر',
+      labelEn: 'Awaiting Quote',
+      progressPercent: 18,
+      isCancelled: false,
+    };
+  }
+  if (status === 'quote_ready') {
+    return {
+      stageKey: 'preparing',
+      stageIndex: 1,
+      labelAr: 'عرض السعر جاهز للاعتماد',
+      labelEn: 'Quote Ready',
+      progressPercent: 35,
+      isCancelled: false,
+    };
+  }
+  if (
+    status === 'captain_assigned' ||
+    status === 'at_pickup' ||
+    status === 'picked_up' ||
+    status === 'in_transit'
+  ) {
+    return {
+      stageKey: 'out_for_delivery',
+      stageIndex: 2,
+      labelAr: 'جاري التوصيل',
+      labelEn: 'Out for Delivery',
+      progressPercent: 72,
+      isCancelled: false,
+    };
+  }
+  if (
+    status === 'accepted_by_store' ||
+    status === 'merchant_accepted' ||
+    status === 'preparing' ||
+    status === 'ready_for_pickup' ||
+    status === 'searching_captain'
+  ) {
+    return {
+      stageKey: 'preparing',
+      stageIndex: 1,
+      labelAr: 'قيد التجهيز',
+      labelEn: 'Preparing',
+      progressPercent: 45,
+      isCancelled: false,
+    };
+  }
+  return {
+    stageKey: 'received',
+    stageIndex: 0,
+    labelAr: 'تم الاستلام',
+    labelEn: 'Received',
+    progressPercent: 20,
+    isCancelled: false,
+  };
 }
 
 export interface ChatMessage {
@@ -258,7 +433,22 @@ export interface FleetCaptainItem {
   cashCeilingPiasters: number;
   rating: number;
   isOnline: boolean;
+  isFamilyTrusted: boolean;
   completedToday: number;
+}
+
+export interface CommuteSubscriptionItem {
+  id: string;
+  fromLandmark: string;
+  toLandmark: string;
+  scheduleDays: string[];
+  morningTime: string;
+  returnTime?: string;
+  vehicleTier: 'tuktuk' | 'car';
+  planType: 'weekly' | 'monthly';
+  priceEgp: number;
+  status: 'active' | 'paused';
+  createdAtAr: string;
 }
 
 export interface PlatformSystemSettings {
@@ -268,7 +458,7 @@ export interface PlatformSystemSettings {
   platformFeePiasters: number; // 200 = 2 EGP
   cashCeilingPiasters: number; // 100000 = 1000 EGP
   gracePeriodHours: number; // 72 hours
-  passengerLockEnabled: boolean; // Always true per Law No. 73 of 2018
+  passengerLockEnabled: boolean; // False when local TukTuk/Car passenger service is enabled
 }
 
 export interface PlatformAuditLog {
@@ -387,6 +577,8 @@ export const EL_BAGOUR_LANDMARKS_LIST: {
   { id: 'lm_shantana', nameAr: 'قرية شنتنا الحجر', areaAr: 'القرى الشمالية', isRural: true, distanceFromCenterKm: 5.2 },
   { id: 'lm_grawan', nameAr: 'قرية جروان', areaAr: 'القرى الجنوبية', isRural: true, distanceFromCenterKm: 4.5 },
   { id: 'lm_meet_afif', nameAr: 'قرية ميت عفيف', areaAr: 'القرى الشمالية', isRural: true, distanceFromCenterKm: 6.0 },
+  { id: 'lm_subk_eldahhak', nameAr: 'قرية سبك الضحاك', areaAr: 'القرى الشرقية', isRural: true, distanceFromCenterKm: 7.0 },
+  { id: 'lm_shebin_uni', nameAr: 'جامعة المنوفية - شبين الكوم', areaAr: 'ربط المراكز', isRural: false, distanceFromCenterKm: 11.0 },
 ];
 
 export const DEMO_PERSONAS: DemoUser[] = [
@@ -640,6 +832,7 @@ const INITIAL_CAPTAINS: FleetCaptainItem[] = [
     cashCeilingPiasters: 100000, // 1,000.00 EGP
     rating: 4.9,
     isOnline: true,
+    isFamilyTrusted: true,
     completedToday: 6,
   },
   {
@@ -656,6 +849,7 @@ const INITIAL_CAPTAINS: FleetCaptainItem[] = [
     cashCeilingPiasters: 100000,
     rating: 4.92,
     isOnline: true,
+    isFamilyTrusted: true,
     completedToday: 4,
   },
   {
@@ -672,6 +866,7 @@ const INITIAL_CAPTAINS: FleetCaptainItem[] = [
     cashCeilingPiasters: 100000,
     rating: 4.6,
     isOnline: false,
+    isFamilyTrusted: false,
     completedToday: 0,
   },
   {
@@ -688,6 +883,7 @@ const INITIAL_CAPTAINS: FleetCaptainItem[] = [
     cashCeilingPiasters: 100000,
     rating: 4.8,
     isOnline: false,
+    isFamilyTrusted: false,
     completedToday: 8,
   },
 ];
@@ -899,6 +1095,15 @@ interface SubmitRideOrPackageInput {
   recipientPhone: string;
   paymentMethod: 'cash' | 'instapay' | 'vodafone_cash' | 'wallet';
   notes?: string;
+  scheduled_for?: string | null;
+  hasVoiceNote?: boolean;
+  voiceNoteDurationSec?: number;
+  voiceNoteTranscript?: string;
+  driverTipEgp?: number;
+  cashChangeForEgp?: CashChangeOptionEgp;
+  promoCode?: string;
+  discountEgp?: number;
+  requiresFamilyTrustedDriver?: boolean;
   quoteData?: {
     quoteId: string;
     signature: string;
@@ -911,9 +1116,17 @@ interface SubmitRideOrPackageInput {
   };
 }
 
+export interface CartStoreGroup {
+  store: StoreItem;
+  items: CartItem[];
+  subtotalEgp: number;
+}
+
 interface MarketplaceContextType {
-  // Active Auth Persona
+  // Active Auth Persona & Firebase User
   currentUser: DemoUser;
+  firebaseUser: User | null;
+  isFirestoreRealtimeActive: boolean;
   switchDemoUser: (user: DemoUser) => void;
   isAuthModalOpen: boolean;
   setIsAuthModalOpen: (open: boolean) => void;
@@ -925,10 +1138,24 @@ interface MarketplaceContextType {
   toggleProductAvailability: (productId: string) => void;
   updateProductPrice: (productId: string, newPriceEgp: number) => void;
 
-  // Customer Cart (Single-Store Constraint)
+  // Favorites List
+  favoriteProductIds: string[];
+  favoriteStoreIds: string[];
+  favoriteServiceKeys: string[];
+  toggleFavoriteProduct: (productId: string) => void;
+  toggleFavoriteStore: (storeId: string) => void;
+  toggleFavoriteService: (serviceKey: string) => void;
+  isFavoriteProduct: (productId: string) => boolean;
+  isFavoriteStore: (storeId: string) => boolean;
+  isFavoriteService: (serviceKey: string) => boolean;
+
+  // Customer Multi-Stop Combined Cart (up to 4 stores in 1 trip)
   cartItems: CartItem[];
   cartStoreId: string | null;
-  addToCart: (product: ProductItem, store: StoreItem) => { success: boolean; conflictStore?: string };
+  cartStoreIds: string[];
+  cartStoreGroups: CartStoreGroup[];
+  cartMultiStopSavingsEgp: number;
+  addToCart: (product: ProductItem, store: StoreItem) => { success: boolean; conflictStore?: string; limitReached?: boolean };
   removeFromCart: (productId: string) => void;
   updateCartItemQty: (productId: string, qty: number) => void;
   clearCart: () => void;
@@ -944,6 +1171,14 @@ interface MarketplaceContextType {
     deliveryAddress: string;
     paymentMethod: 'cash' | 'instapay' | 'vodafone_cash' | 'wallet';
     notes?: string;
+    scheduled_for?: string | null;
+    hasVoiceNote?: boolean;
+    voiceNoteDurationSec?: number;
+    voiceNoteTranscript?: string;
+    driverTipEgp?: number;
+    cashChangeForEgp?: CashChangeOptionEgp;
+    promoCode?: string;
+    discountEgp?: number;
   }) => MarketplaceOrder | null;
   submitDirectStoreOrder: (params: {
     storeId: string;
@@ -951,16 +1186,39 @@ interface MarketplaceContextType {
     deliveryAddress: string;
     paymentMethod: 'cash' | 'instapay' | 'vodafone_cash' | 'wallet';
     notes?: string;
+    scheduled_for?: string | null;
+    hasVoiceNote?: boolean;
+    voiceNoteDurationSec?: number;
+    voiceNoteTranscript?: string;
+    driverTipEgp?: number;
+    cashChangeForEgp?: CashChangeOptionEgp;
+    promoCode?: string;
+    discountEgp?: number;
+  }) => MarketplaceOrder | null;
+  submitPrescriptionOrder: (params: {
+    storeId: string;
+    extractedItems: string[];
+    prescriptionSummary: string;
+    deliveryAddress: string;
+    paymentMethod: 'cash' | 'instapay' | 'vodafone_cash' | 'wallet';
+    notes?: string;
+    scheduled_for?: string | null;
+    voiceNoteTranscript?: string;
+    cashChangeForEgp?: CashChangeOptionEgp;
+    driverTipEgp?: number;
   }) => MarketplaceOrder | null;
   submitRideOrPackageOrder: (params: SubmitRideOrPackageInput) => MarketplaceOrder;
   simulateInstantCaptainAccept: (orderId: string) => void;
   customerCancelOrder: (orderId: string, reason?: string) => void;
+  customerApproveOrderQuote: (orderId: string) => void;
   rateOrderCaptain: (orderId: string, rating: number) => void;
   updateOrderNotes: (orderId: string, orderNotes: string) => void;
   updateOrderFeedback: (orderId: string, feedback: string) => void;
+  updateOrderDriverTip: (orderId: string, tipEgp: number) => void;
 
   // Merchant Actions
   merchantAcceptOrder: (orderId: string) => void;
+  merchantSubmitOrderQuote: (orderId: string, quoteTotalEgp: number, quoteNotes?: string) => void;
   merchantMarkReady: (orderId: string) => void;
   merchantRejectOrder: (orderId: string, reason?: string) => void;
 
@@ -970,14 +1228,40 @@ interface MarketplaceContextType {
   captainEarningsEgp: number;
   captainCompletedDeliveries: number;
   captainCashHoldingEgp: number;
-  captainAcceptDelivery: (orderId: string) => void;
+  captainAcceptDelivery: (orderId: string) => { success: boolean; messageAr?: string };
+  captainVerifyRidePinAndStart: (orderId: string, enteredPin: string) => { success: boolean; messageAr: string };
   captainUpdateStep: (orderId: string, nextStatus: 'at_pickup' | 'picked_up' | 'in_transit' | 'delivered') => void;
   captainConfirmCashCollection: (orderId: string) => void;
 
-  // Customer Wallet & Transactions
+  // Customer Wallet, Proof Verification & Promos/Referrals
   customerWalletBalanceEgp: number;
   walletTransactions: WalletTransaction[];
   topUpCustomerWallet: (amountEgp: number, methodAr: string) => void;
+  topUpCustomerWalletWithProof: (
+    amountEgp: number,
+    methodAr: string,
+    proofRef: string
+  ) => Promise<{ success: boolean; messageAr: string }>;
+  referralCode: string;
+  referredByCode: string | null;
+  applyPromoCode: (
+    code: string,
+    orderTotalEgp: number
+  ) => Promise<{ valid: boolean; code: string; discountEgp: number; titleAr: string; errorAr?: string }>;
+  redeemReferralCode: (code: string) => { success: boolean; messageAr: string };
+
+  // Daily Village-to-Center Commute Subscriptions
+  commuteSubscriptions: CommuteSubscriptionItem[];
+  createCommuteSubscription: (input: {
+    fromLandmark: string;
+    toLandmark: string;
+    scheduleDays: string[];
+    morningTime: string;
+    returnTime?: string;
+    vehicleTier: 'tuktuk' | 'car';
+    planType: 'weekly' | 'monthly';
+  }) => { success: boolean; subscription?: CommuteSubscriptionItem; errorAr?: string };
+  toggleCommuteSubscriptionStatus: (subId: string) => void;
 
   // Loyalty Points & Cashback System
   loyaltyPoints: number;
@@ -1016,14 +1300,25 @@ interface MarketplaceContextType {
     settlementReference?: string
   ) => { success: boolean; message: string; remittedAmountPiasters?: number; remainingCashPiasters?: number };
   adminRenewCaptainSubscription: (captainId: string, actorName: string, actorRole: string) => void;
+  adminToggleCaptainFamilyTrusted: (captainId: string, actorName: string, actorRole: string) => void;
   adminUpdateSettings: (newSettings: PlatformSystemSettings, actorName: string, actorRole: string) => void;
 
   // Chat Messages
   chatMessages: ChatMessage[];
   sendChatMessage: (orderId: string, text: string) => void;
 
-  // Active Customer Order Shortcut & Refresh / Navigation Helpers
+  // Active Customer Order Shortcut & Real-Time Tracking Card State
   activeCustomerOrder: MarketplaceOrder | null;
+  activeOrderTrackingCard: {
+    order: MarketplaceOrder;
+    stageKey: OrderTrackingStageKey;
+    stageIndex: number;
+    labelAr: string;
+    labelEn: string;
+    progressPercent: number;
+    isCancelled: boolean;
+  } | null;
+  advanceOrderTrackingStage: (orderId: string) => void;
   refreshOrderStatus: (orderId?: string) => Promise<MarketplaceOrder | null>;
   customerNavTab: 'home' | 'ride_booking' | 'stores' | 'history' | 'profile';
   setCustomerNavTab: (tab: 'home' | 'ride_booking' | 'stores' | 'history' | 'profile') => void;
@@ -1039,12 +1334,23 @@ const STORAGE_KEYS = {
   LOYALTY_POINTS: 'mashwar_bagour_loyalty_points_v2',
   LOYALTY_CASHBACK: 'mashwar_bagour_loyalty_cashback_v2',
   LOYALTY_HISTORY: 'mashwar_bagour_loyalty_history_v2',
+  FAVORITES: 'mashwar_bagour_favorites_v2',
+  COMMUTE_SUBS: 'mashwar_bagour_commute_subs_v1',
+  REFERRED_BY: 'mashwar_bagour_referred_by_v1',
 };
 
 export const MarketplaceProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [currentUser, setCurrentUser] = useState<DemoUser>(DEMO_PERSONAS[0]);
+  const [firebaseUser, setFirebaseUser] = useState<User | null>(null);
   const [isAuthModalOpen, setIsAuthModalOpen] = useState<boolean>(false);
   const [customerNavTab, setCustomerNavTab] = useState<'home' | 'ride_booking' | 'stores' | 'history' | 'profile'>('home');
+
+  useEffect(() => {
+    const unsub = onAuthStateChanged(auth, (u) => {
+      setFirebaseUser(u);
+    });
+    return () => unsub();
+  }, []);
 
   const [stores, setStores] = useState<StoreItem[]>(INITIAL_STORES);
   const [products, setProducts] = useState<ProductItem[]>(INITIAL_PRODUCTS);
@@ -1067,9 +1373,86 @@ export const MarketplaceProvider: React.FC<{ children: React.ReactNode }> = ({ c
     return INITIAL_ORDERS;
   });
 
-  // Cart state
+  // Multi-Stop Combined Cart state (up to 4 stores in 1 combined delivery trip)
   const [cartItems, setCartItems] = useState<CartItem[]>([]);
-  const [cartStoreId, setCartStoreId] = useState<string | null>(null);
+
+  // Favorites state (persisted in localStorage)
+  const [favoritesState, setFavoritesState] = useState<{
+    productIds: string[];
+    storeIds: string[];
+    serviceKeys: string[];
+  }>(() => {
+    try {
+      const saved = typeof window !== 'undefined' ? window.localStorage.getItem(STORAGE_KEYS.FAVORITES) : null;
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (parsed && typeof parsed === 'object') {
+          return {
+            productIds: Array.isArray(parsed.productIds) ? parsed.productIds : [],
+            storeIds: Array.isArray(parsed.storeIds) ? parsed.storeIds : [],
+            serviceKeys: Array.isArray(parsed.serviceKeys) ? parsed.serviceKeys : [],
+          };
+        }
+      }
+    } catch {
+      // Fallback
+    }
+    return {
+      productIds: ['prod_basha_1'],
+      storeIds: ['merchant_basha'],
+      serviceKeys: ['ride_tuktuk'],
+    };
+  });
+
+  useEffect(() => {
+    try {
+      if (typeof window !== 'undefined') {
+        window.localStorage.setItem(STORAGE_KEYS.FAVORITES, JSON.stringify(favoritesState));
+      }
+    } catch {
+      // Ignore storage errors
+    }
+  }, [favoritesState]);
+
+  const toggleFavoriteProduct = (productId: string) => {
+    setFavoritesState((prev) => {
+      const exists = prev.productIds.includes(productId);
+      return {
+        ...prev,
+        productIds: exists
+          ? prev.productIds.filter((id) => id !== productId)
+          : [productId, ...prev.productIds],
+      };
+    });
+  };
+
+  const toggleFavoriteStore = (storeId: string) => {
+    setFavoritesState((prev) => {
+      const exists = prev.storeIds.includes(storeId);
+      return {
+        ...prev,
+        storeIds: exists
+          ? prev.storeIds.filter((id) => id !== storeId)
+          : [storeId, ...prev.storeIds],
+      };
+    });
+  };
+
+  const toggleFavoriteService = (serviceKey: string) => {
+    setFavoritesState((prev) => {
+      const exists = prev.serviceKeys.includes(serviceKey);
+      return {
+        ...prev,
+        serviceKeys: exists
+          ? prev.serviceKeys.filter((k) => k !== serviceKey)
+          : [serviceKey, ...prev.serviceKeys],
+      };
+    });
+  };
+
+  const isFavoriteProduct = (productId: string) => favoritesState.productIds.includes(productId);
+  const isFavoriteStore = (storeId: string) => favoritesState.storeIds.includes(storeId);
+  const isFavoriteService = (serviceKey: string) => favoritesState.serviceKeys.includes(serviceKey);
 
   // Captain operational metrics
   const [isCaptainOnline, setIsCaptainOnlineState] = useState<boolean>(true);
@@ -1077,7 +1460,57 @@ export const MarketplaceProvider: React.FC<{ children: React.ReactNode }> = ({ c
   const [captainCompletedDeliveries, setCaptainCompletedDeliveries] = useState<number>(8);
   const [captainCashHoldingEgp, setCaptainCashHoldingEgp] = useState<number>(450);
 
-  // Customer Wallet State (Prototype Simulation persisted in localStorage)
+  // Commute Subscriptions (persisted in localStorage)
+  const [commuteSubscriptions, setCommuteSubscriptions] = useState<CommuteSubscriptionItem[]>(() => {
+    try {
+      const saved = typeof window !== 'undefined' ? window.localStorage.getItem(STORAGE_KEYS.COMMUTE_SUBS) : null;
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+      }
+    } catch {
+      // Fallback
+    }
+    return [
+      {
+        id: 'sub_seed_1',
+        fromLandmark: 'قرية كفر الباجور',
+        toLandmark: 'جامعة المنوفية - شبين الكوم',
+        scheduleDays: ['الأحد', 'الإثنين', 'الثلاثاء', 'الأربعاء', 'الخميس'],
+        morningTime: '07:45',
+        returnTime: '14:30',
+        vehicleTier: 'car',
+        planType: 'weekly',
+        priceEgp: 420,
+        status: 'active',
+        createdAtAr: 'منذ يومين',
+      },
+    ];
+  });
+
+  useEffect(() => {
+    try {
+      if (typeof window !== 'undefined') {
+        window.localStorage.setItem(STORAGE_KEYS.COMMUTE_SUBS, JSON.stringify(commuteSubscriptions));
+      }
+    } catch {
+      // Ignore storage errors
+    }
+  }, [commuteSubscriptions]);
+
+  // Referral Tracking
+  const [referredByCode, setReferredByCode] = useState<string | null>(() => {
+    try {
+      return typeof window !== 'undefined' ? window.localStorage.getItem(STORAGE_KEYS.REFERRED_BY) : null;
+    } catch {
+      return null;
+    }
+  });
+  const referralCode = firebaseUser?.uid
+    ? `MSH-${firebaseUser.uid.slice(0, 6).toUpperCase()}`
+    : 'MSH-BAGOUR1';
+
+  // Customer Wallet State (persisted in localStorage)
   const [customerWalletBalanceEgp, setCustomerWalletBalanceEgp] = useState<number>(() => {
     try {
       const saved = typeof window !== 'undefined' ? window.localStorage.getItem(STORAGE_KEYS.WALLET_BALANCE) : null;
@@ -1103,15 +1536,15 @@ export const MarketplaceProvider: React.FC<{ children: React.ReactNode }> = ({ c
     return [
       {
         id: 'wtx_1',
-        titleAr: 'شحن رصيد تجريبي عبر إنستاباي (InstaPay Prototype)',
+        titleAr: 'شحن رصيد عبر إنستاباي (مرجع موثق)',
         type: 'credit',
         amountEgp: 200,
-        methodAr: 'إنستاباي (محاكاة)',
+        methodAr: 'إنستاباي',
         timestampAr: 'أمس • ٠٨:٣٠ م',
       },
       {
         id: 'wtx_2',
-        titleAr: 'رصيد ترحيبي تجريبي لعملاء مركز الباجور',
+        titleAr: 'رصيد ترحيبي لعملاء مركز الباجور',
         type: 'credit',
         amountEgp: 75,
         methodAr: 'مكافأة مشوار',
@@ -1191,6 +1624,153 @@ export const MarketplaceProvider: React.FC<{ children: React.ReactNode }> = ({ c
       },
     ];
   });
+
+  // Real-time Firestore scoped listener when authenticated
+  useEffect(() => {
+    if (!firebaseUser) return;
+
+    const unsubOrders = subscribeToScopedOrdersInFirestore({
+      role: currentUser.role,
+      onOrders: (remoteDocs) => {
+        if (!remoteDocs || remoteDocs.length === 0) return;
+        setOrders((prev) => {
+          const map = new Map<string, MarketplaceOrder>();
+          for (const localOrd of prev) {
+            map.set(localOrd.id, localOrd);
+          }
+          for (const rd of remoteDocs) {
+            const r = rd as Record<string, any>;
+            const orderIdStr = String(r.id || '');
+            if (!orderIdStr) continue;
+            const totalEgp = Math.round((Number(r.totalFarePiasters) || 0) / 100);
+            const deliveryEgp = Math.round((Number(r.deliveryFeePiasters) || 1500) / 100);
+            const platformEgp = Math.round((Number(r.platformFeePiasters) || 200) / 100);
+            const subtotalEgp = Math.round((Number(r.subtotalPiasters) || 0) / 100);
+            const ruralEgp = Math.round((Number(r.ruralSurchargePiasters) || 0) / 100);
+            const tipEgp = Math.round((Number(r.driverTipPiasters) || 0) / 100);
+            const discountEgp = Math.round((Number(r.discountPiasters) || 0) / 100);
+            const createdDt =
+              typeof r.createdAt?.toDate === 'function' ? (r.createdAt.toDate() as Date) : new Date();
+            const existing = map.get(orderIdStr);
+            const remoteStoreNames: string[] | undefined = Array.isArray(r.storeNames)
+              ? r.storeNames.map(String)
+              : existing?.storeNames;
+            const remoteStoreIds: string[] | undefined = Array.isArray(r.storeIds)
+              ? r.storeIds.map(String)
+              : existing?.storeIds;
+            const resolvedStoreName =
+              (typeof r.storeName === 'string' && r.storeName) ||
+              (remoteStoreNames && remoteStoreNames.length > 0 ? remoteStoreNames.join(' + ') : '') ||
+              existing?.storeName ||
+              'متجر الباجور';
+
+            map.set(orderIdStr, {
+              id: orderIdStr,
+              orderNumber: String(r.orderNumber || existing?.orderNumber || orderIdStr.slice(-8)),
+              serviceType: (r.serviceType as OrderServiceType) || existing?.serviceType || 'restaurant_store',
+              serviceTypeAr:
+                String(r.serviceTypeAr || '') ||
+                existing?.serviceTypeAr ||
+                (r.serviceType === 'prescription_list' ? 'روشتة / قائمة مقاضي ذكية' : 'طلب مشوار'),
+              vehicleCategory: (r.vehicleCategory as MarketplaceOrder['vehicleCategory']) || existing?.vehicleCategory || 'scooter',
+              storeId:
+                String(r.storeId || '') ||
+                (remoteStoreIds && remoteStoreIds[0]) ||
+                existing?.storeId ||
+                'merchant_basha',
+              storeName: resolvedStoreName,
+              storeIds: remoteStoreIds,
+              storeNames: remoteStoreNames,
+              storeAddress: String(r.storeAddress || r.pickupLandmark || r.pickupAddress || existing?.storeAddress || 'مركز الباجور'),
+              pickupAddress: String(r.pickupLandmark || r.pickupAddress || existing?.pickupAddress || 'مركز الباجور'),
+              deliveryAddress: String(r.dropoffLandmark || r.deliveryAddress || existing?.deliveryAddress || 'الباجور'),
+              distanceKm: Number(r.distanceKm) || existing?.distanceKm || 1.8,
+              estimatedMinutes: existing?.estimatedMinutes || '١٥ - ٢٥ دقيقة',
+              estimatedDuration: existing?.estimatedDuration || 20,
+              estimatedDurationMinutes: existing?.estimatedDurationMinutes || 20,
+              isRural: Boolean(r.isRural),
+              customerId: String(r.customerId || r.customerUid || existing?.customerId || 'usr_cust_1'),
+              customerName: String(r.customerName || existing?.customerName || 'عميل مشوار'),
+              customerPhone: String(r.customerPhone || existing?.customerPhone || '01012345678'),
+              items: Array.isArray(r.items) && r.items.length > 0 ? r.items : existing?.items || [],
+              itemDescription: String(r.itemsSummary || r.itemDescription || existing?.itemDescription || 'طلب عبر مشوار'),
+              aiExtractedItems: Array.isArray(r.aiExtractedItems) ? r.aiExtractedItems.map(String) : existing?.aiExtractedItems,
+              prescriptionSummary:
+                typeof r.prescriptionSummary === 'string' ? r.prescriptionSummary : existing?.prescriptionSummary,
+              quoteTotalEgp: r.quoteTotalPiasters ? Math.round(Number(r.quoteTotalPiasters) / 100) : existing?.quoteTotalEgp,
+              quoteNotes: typeof r.quoteNotes === 'string' ? r.quoteNotes : existing?.quoteNotes,
+              subtotalEgp,
+              deliveryFeeEgp: deliveryEgp,
+              platformFeeEgp: platformEgp,
+              ruralSurchargeEgp: ruralEgp,
+              discountEgp,
+              promoCode: typeof r.promoCode === 'string' ? r.promoCode : existing?.promoCode,
+              cashChangeForEgp: (r.cashChangeForEgp as CashChangeOptionEgp) ?? existing?.cashChangeForEgp,
+              ridePin: typeof r.ridePin === 'string' ? r.ridePin : existing?.ridePin,
+              requiresFamilyTrustedDriver: Boolean(r.requiresFamilyTrustedDriver ?? existing?.requiresFamilyTrustedDriver),
+              driverTipEgp: tipEgp,
+              totalEgp: totalEgp > 0 ? totalEgp : existing?.totalEgp || 0,
+              totalFarePiasters: Number(r.totalFarePiasters) || existing?.totalFarePiasters || 0,
+              paymentMethod: (r.paymentMethod as MarketplaceOrder['paymentMethod']) || existing?.paymentMethod || 'cash',
+              status: (r.status as OrderStatus) || existing?.status || 'created',
+              assignedCaptainId: typeof r.assignedCaptainId === 'string' ? r.assignedCaptainId : existing?.assignedCaptainId,
+              assignedCaptainName: typeof r.assignedCaptainName === 'string' ? r.assignedCaptainName : existing?.assignedCaptainName,
+              assignedCaptainPhone: typeof r.assignedCaptainPhone === 'string' ? r.assignedCaptainPhone : existing?.assignedCaptainPhone,
+              assignedCaptainVehicle: typeof r.assignedCaptainVehicle === 'string' ? r.assignedCaptainVehicle : existing?.assignedCaptainVehicle,
+              assignedCaptainRating: existing?.assignedCaptainRating,
+              createdAt: existing?.createdAt || formatArabicClockTime(createdDt),
+              createdAtDate: existing?.createdAtDate || createdDt,
+              acceptedAt: existing?.acceptedAt,
+              acceptedAtIso: existing?.acceptedAtIso,
+              notes: typeof r.notes === 'string' ? r.notes : existing?.notes,
+              scheduled_for:
+                (typeof r.scheduledFor === 'string' && r.scheduledFor !== 'now' ? r.scheduledFor : null) ??
+                (typeof r.scheduled_for === 'string' ? r.scheduled_for : null) ??
+                existing?.scheduled_for ??
+                null,
+              hasVoiceNote: Boolean(r.hasVoiceNote || r.voiceNoteTranscript || existing?.hasVoiceNote),
+              voiceNoteTranscript: String(r.voiceNoteTranscript || existing?.voiceNoteTranscript || ''),
+            });
+          }
+          return Array.from(map.values()).sort(
+            (a, b) => new Date(b.createdAtDate).getTime() - new Date(a.createdAtDate).getTime()
+          );
+        });
+      },
+    });
+
+    const unsubSubs = subscribeToCommuteSubscriptionsInFirestore((remoteSubs) => {
+      if (!remoteSubs || remoteSubs.length === 0) return;
+      setCommuteSubscriptions((prev) => {
+        const map = new Map<string, CommuteSubscriptionItem>();
+        for (const s of prev) map.set(s.id, s);
+        for (const rs of remoteSubs) {
+          const sObj = rs as Record<string, any>;
+          const subId = String(sObj.id || '');
+          if (!subId) continue;
+          map.set(subId, {
+            id: subId,
+            fromLandmark: String(sObj.fromLandmark || 'مركز الباجور'),
+            toLandmark: String(sObj.toLandmark || 'شبين الكوم'),
+            scheduleDays: Array.isArray(sObj.scheduleDays) ? sObj.scheduleDays.map(String) : [],
+            morningTime: String(sObj.morningTime || '08:00'),
+            returnTime: String(sObj.returnTime || ''),
+            vehicleTier: sObj.vehicleTier === 'car' ? 'car' : 'tuktuk',
+            planType: sObj.planType === 'monthly' ? 'monthly' : 'weekly',
+            priceEgp: Math.round((Number(sObj.pricePiasters) || 0) / 100),
+            status: sObj.status === 'paused' ? 'paused' : 'active',
+            createdAtAr: 'متزامن لحظياً',
+          });
+        }
+        return Array.from(map.values());
+      });
+    });
+
+    return () => {
+      unsubOrders();
+      unsubSubs();
+    };
+  }, [firebaseUser, currentUser.role]);
 
   // Persist orders, wallet & loyalty across page reloads
   useEffect(() => {
@@ -1276,7 +1856,7 @@ export const MarketplaceProvider: React.FC<{ children: React.ReactNode }> = ({ c
     platformFeePiasters: 200,
     cashCeilingPiasters: 100000,
     gracePeriodHours: 72,
-    passengerLockEnabled: true,
+    passengerLockEnabled: false,
   });
 
   const [auditLogs, setAuditLogs] = useState<PlatformAuditLog[]>([
@@ -1287,7 +1867,7 @@ export const MarketplaceProvider: React.FC<{ children: React.ReactNode }> = ({ c
       actorRole: 'owner',
       actionType: 'SYSTEM_SETTINGS_UPDATED',
       target: 'إعدادات المنظومة',
-      descriptionAr: 'اعتماد تسعيرة الانطلاق لمركز الباجور وقفل نقل الركاب طبقاً للقانون رقم ٧٣ لسنة ٢٠١٨.',
+      descriptionAr: 'اعتماد تسعيرة الانطلاق لمركز الباجور وقراها وتفعيل كباتن العائلات الموثوقين واشتراكات المشوار اليومي.',
     },
     {
       id: 'aud_02',
@@ -1384,17 +1964,32 @@ export const MarketplaceProvider: React.FC<{ children: React.ReactNode }> = ({ c
     );
   };
 
-  // Cart Operations (Single-store enforcement)
-  const addToCart = (product: ProductItem, store: StoreItem): { success: boolean; conflictStore?: string } => {
-    if (cartStoreId && cartStoreId !== store.id && cartItems.length > 0) {
-      const currentStore = stores.find((s) => s.id === cartStoreId);
+  // Multi-Stop Combined Cart Operations (up to 4 stores in 1 combined delivery fee)
+  const cartStoreIds = Array.from(new Set(cartItems.map((ci) => ci.product.storeId)));
+  const cartStoreId = cartStoreIds[0] || null;
+  const cartStoreGroups: CartStoreGroup[] = cartStoreIds
+    .map((sid) => {
+      const store = stores.find((s) => s.id === sid);
+      if (!store) return null;
+      const items = cartItems.filter((ci) => ci.product.storeId === sid);
+      const subtotalEgp = items.reduce((sum, ci) => sum + ci.product.priceEgp * ci.quantity, 0);
+      return { store, items, subtotalEgp };
+    })
+    .filter((g): g is CartStoreGroup => g !== null);
+
+  const addToCart = (
+    product: ProductItem,
+    store: StoreItem
+  ): { success: boolean; conflictStore?: string; limitReached?: boolean } => {
+    const isNewStore = !cartStoreIds.includes(store.id);
+    if (isNewStore && cartStoreIds.length >= BLUEPRINT_LIMITS.MAX_ORDER_STOPS) {
       return {
         success: false,
-        conflictStore: currentStore ? currentStore.nameAr : 'متجر آخر',
+        limitReached: true,
+        conflictStore: `الحد الأقصى ${BLUEPRINT_LIMITS.MAX_ORDER_STOPS} متاجر في السلة المجمعة`,
       };
     }
 
-    setCartStoreId(store.id);
     setCartItems((prev) => {
       const existing = prev.find((i) => i.product.id === product.id);
       if (existing) {
@@ -1408,17 +2003,12 @@ export const MarketplaceProvider: React.FC<{ children: React.ReactNode }> = ({ c
     return { success: true };
   };
 
-  const forceAddToCartNewStore = (product: ProductItem, store: StoreItem) => {
-    setCartStoreId(store.id);
+  const forceAddToCartNewStore = (product: ProductItem, _store: StoreItem) => {
     setCartItems([{ product, quantity: 1 }]);
   };
 
   const removeFromCart = (productId: string) => {
-    setCartItems((prev) => {
-      const updated = prev.filter((i) => i.product.id !== productId);
-      if (updated.length === 0) setCartStoreId(null);
-      return updated;
-    });
+    setCartItems((prev) => prev.filter((i) => i.product.id !== productId));
   };
 
   const updateCartItemQty = (productId: string, qty: number) => {
@@ -1433,26 +2023,61 @@ export const MarketplaceProvider: React.FC<{ children: React.ReactNode }> = ({ c
 
   const clearCart = () => {
     setCartItems([]);
-    setCartStoreId(null);
   };
 
-  // Cart Calculations
+  // Multi-Stop Cart Calculations
   const cartSubtotalEgp = cartItems.reduce(
     (sum, item) => sum + item.product.priceEgp * item.quantity,
     0
   );
-  const activeCartStore = stores.find((s) => s.id === cartStoreId);
-  const cartDeliveryFeeEgp = cartItems.length > 0 ? (activeCartStore?.deliveryFeeEgp ?? 15) : 0;
-  const cartPlatformFeeEgp = cartItems.length > 0 ? Math.round(systemSettings.platformFeePiasters / 100) : 0;
+  const maxStoreDistanceKm = cartStoreGroups.reduce(
+    (mx, g) => Math.max(mx, g.store.distanceKm || 1.4),
+    1.4
+  );
+  const cartDeliveryFeeEgp =
+    cartItems.length > 0
+      ? Math.round(
+          calculateDeliveryFeePiasters({
+            stopsCount: Math.max(1, cartStoreGroups.length),
+            distanceKm: maxStoreDistanceKm,
+            isRural: false,
+          }) / 100
+        )
+      : 0;
+  const individualDeliverySumEgp = cartStoreGroups.reduce(
+    (s, g) => s + (g.store.deliveryFeeEgp ?? 15),
+    0
+  );
+  const cartMultiStopSavingsEgp =
+    cartStoreGroups.length > 1
+      ? Math.max(0, individualDeliverySumEgp - cartDeliveryFeeEgp)
+      : 0;
+  const cartPlatformFeeEgp =
+    cartItems.length > 0 ? Math.round(systemSettings.platformFeePiasters / 100) : 0;
   const cartTotalEgp = cartSubtotalEgp + cartDeliveryFeeEgp + cartPlatformFeeEgp;
 
-  // Submit new Store Order from Customer Cart
+  // Submit new Multi-Stop / Single-Store Order from Customer Cart
   const submitNewOrder = (params: {
     deliveryAddress: string;
     paymentMethod: 'cash' | 'instapay' | 'vodafone_cash' | 'wallet';
     notes?: string;
+    scheduled_for?: string | null;
+    hasVoiceNote?: boolean;
+    voiceNoteDurationSec?: number;
+    voiceNoteTranscript?: string;
+    driverTipEgp?: number;
+    cashChangeForEgp?: CashChangeOptionEgp;
+    promoCode?: string;
+    discountEgp?: number;
   }): MarketplaceOrder | null => {
-    if (cartItems.length === 0 || !activeCartStore) return null;
+    if (cartItems.length === 0 || cartStoreGroups.length === 0) return null;
+
+    const primaryStore = cartStoreGroups[0].store;
+    const allStoreIds = cartStoreGroups.map((g) => g.store.id);
+    const allStoreNames = cartStoreGroups.map((g) => g.store.nameAr);
+    const isMultiStop = cartStoreGroups.length > 1;
+    const isRural = params.deliveryAddress.includes('قرية');
+    const ruralSurchargeEgp = isRural ? Math.round(systemSettings.ruralSurchargePiasters / 100) : 0;
 
     const orderNum = `MSH-${Math.floor(9402 + Math.random() * 500)}`;
     const now = new Date();
@@ -1460,15 +2085,21 @@ export const MarketplaceProvider: React.FC<{ children: React.ReactNode }> = ({ c
     const itemsSummary = cartItems
       .map((ci) => `${ci.quantity}× ${ci.product.nameAr}`)
       .join(' + ');
+    const safeTipEgp = Math.max(0, Math.min(500, Math.round(params.driverTipEgp || 0)));
+    const safeDiscountEgp = Math.max(0, Math.min(250, Math.round(params.discountEgp || 0)));
+    const finalTotalEgp = Math.max(
+      10,
+      cartTotalEgp + ruralSurchargeEgp + safeTipEgp - safeDiscountEgp
+    );
 
-    if (params.paymentMethod === 'wallet' && customerWalletBalanceEgp >= cartTotalEgp) {
-      setCustomerWalletBalanceEgp((prev) => prev - cartTotalEgp);
+    if (params.paymentMethod === 'wallet' && customerWalletBalanceEgp >= finalTotalEgp) {
+      setCustomerWalletBalanceEgp((prev) => prev - finalTotalEgp);
       setWalletTransactions((prev) => [
         {
           id: `wtx_${Date.now()}`,
-          titleAr: `سداد طلب متجر ${activeCartStore.nameAr} (${orderNum})`,
+          titleAr: `سداد طلب ${isMultiStop ? 'سلة الباجور المجمعة' : primaryStore.nameAr} (${orderNum})`,
           type: 'debit',
-          amountEgp: cartTotalEgp,
+          amountEgp: finalTotalEgp,
           methodAr: 'خصم محفظة مشوار',
           timestampAr: `اليوم • ${timeStr}`,
           orderNumber: orderNum,
@@ -1477,52 +2108,95 @@ export const MarketplaceProvider: React.FC<{ children: React.ReactNode }> = ({ c
       ]);
     }
 
+    const orderId = `ord_${Date.now()}`;
     const newOrder: MarketplaceOrder = {
-      id: `ord_${Date.now()}`,
+      id: orderId,
       orderNumber: orderNum,
       serviceType: 'restaurant_store',
-      serviceTypeAr: 'طلبات مطاعم ومتاجر',
+      serviceTypeAr: isMultiStop ? `سلة الباجور المجمعة (${cartStoreGroups.length} متاجر)` : 'طلبات مطاعم ومتاجر',
       vehicleCategory: 'scooter',
-      storeId: activeCartStore.id,
-      storeName: activeCartStore.nameAr,
-      storeAddress: activeCartStore.address,
-      pickupAddress: activeCartStore.address,
+      storeId: primaryStore.id,
+      storeName: isMultiStop ? allStoreNames.join(' + ') : primaryStore.nameAr,
+      storeIds: allStoreIds,
+      storeNames: allStoreNames,
+      storeAddress: allStoreNames.join(' ← '),
+      pickupAddress: allStoreNames.join(' ← '),
       deliveryAddress: params.deliveryAddress,
-      distanceKm: activeCartStore.distanceKm,
-      estimatedMinutes: activeCartStore.deliveryTimeEst,
-      estimatedDuration: 20,
-      estimatedDurationMinutes: 20,
-      isRural: params.deliveryAddress.includes('قرية'),
+      distanceKm: maxStoreDistanceKm,
+      estimatedMinutes: isMultiStop ? '٢٥ - ٣٥ دقيقة' : primaryStore.deliveryTimeEst,
+      estimatedDuration: isMultiStop ? 30 : 20,
+      estimatedDurationMinutes: isMultiStop ? 30 : 20,
+      isRural,
       customerId: currentUser.role === 'customer' ? currentUser.id : 'usr_cust_1',
       customerName: currentUser.role === 'customer' ? currentUser.name : 'أحمد سعيد المنوفي',
       customerPhone: currentUser.role === 'customer' ? currentUser.phone : '01012345678',
-      items: cartItems.map((ci) => ({
-        productId: ci.product.id,
-        productName: ci.product.nameAr,
-        quantity: ci.quantity,
-        unitPriceEgp: ci.product.priceEgp,
-      })),
+      items: cartItems.map((ci) => {
+        const st = stores.find((s) => s.id === ci.product.storeId);
+        return {
+          productId: ci.product.id,
+          productName: ci.product.nameAr,
+          quantity: ci.quantity,
+          unitPriceEgp: ci.product.priceEgp,
+          storeId: ci.product.storeId,
+          storeName: st?.nameAr,
+        };
+      }),
       itemDescription: itemsSummary,
       subtotalEgp: cartSubtotalEgp,
       deliveryFeeEgp: cartDeliveryFeeEgp,
       platformFeeEgp: cartPlatformFeeEgp,
-      ruralSurchargeEgp: 0,
-      totalEgp: cartTotalEgp,
-      totalFarePiasters: cartTotalEgp * 100,
+      ruralSurchargeEgp,
+      discountEgp: safeDiscountEgp,
+      promoCode: params.promoCode,
+      cashChangeForEgp: params.paymentMethod === 'cash' ? (params.cashChangeForEgp ?? 0) : 0,
+      driverTipEgp: safeTipEgp,
+      totalEgp: finalTotalEgp,
+      totalFarePiasters: finalTotalEgp * 100,
       paymentMethod: params.paymentMethod,
       status: 'created',
       createdAt: timeStr,
       createdAtDate: now,
       notes: params.notes,
+      scheduled_for: params.scheduled_for ?? null,
+      hasVoiceNote: Boolean(params.hasVoiceNote || params.voiceNoteTranscript),
+      voiceNoteDurationSec: params.voiceNoteDurationSec ?? 0,
+      voiceNoteTranscript: params.voiceNoteTranscript?.trim() || '',
     };
 
     setOrders((prev) => [newOrder, ...prev]);
     clearCart();
 
+    // Sync to Firestore if authenticated
+    syncDeliveryOrderToFirestore({
+      orderId,
+      orderNumber: orderNum,
+      serviceType: 'restaurant_store',
+      storeName: newOrder.storeName,
+      storeIds: allStoreIds,
+      storeNames: allStoreNames,
+      pickupLandmark: newOrder.pickupAddress,
+      dropoffLandmark: newOrder.deliveryAddress,
+      itemsSummary: params.notes ? `${itemsSummary} • ${params.notes}` : itemsSummary,
+      isRural,
+      distanceKm: newOrder.distanceKm,
+      subtotalPiasters: cartSubtotalEgp * 100,
+      deliveryFeePiasters: cartDeliveryFeeEgp * 100,
+      driverTipPiasters: safeTipEgp * 100,
+      discountPiasters: safeDiscountEgp * 100,
+      promoCode: params.promoCode,
+      cashChangeForEgp: newOrder.cashChangeForEgp,
+      totalFarePiasters: finalTotalEgp * 100,
+      paymentMethod: params.paymentMethod,
+      scheduledFor: params.scheduled_for,
+      hasVoiceNote: newOrder.hasVoiceNote,
+      voiceNoteDurationSec: newOrder.voiceNoteDurationSec,
+      voiceNoteTranscript: newOrder.voiceNoteTranscript,
+    }).catch(() => {});
+
     pushNotification({
       recipientRole: 'merchant',
-      titleAr: `طلب جديد وارد #${orderNum} لـ ${activeCartStore.nameAr}`,
-      bodyAr: `${itemsSummary} • الإجمالي ${cartTotalEgp} ج.م`,
+      titleAr: `طلب جديد وارد #${orderNum} (${newOrder.storeName})`,
+      bodyAr: `${itemsSummary} • الإجمالي ${finalTotalEgp} ج.م${safeTipEgp > 0 ? ` (يشمل ${safeTipEgp} ج إكرامية)` : ''}`,
       orderNumber: orderNum,
     });
 
@@ -1536,6 +2210,14 @@ export const MarketplaceProvider: React.FC<{ children: React.ReactNode }> = ({ c
     deliveryAddress: string;
     paymentMethod: 'cash' | 'instapay' | 'vodafone_cash' | 'wallet';
     notes?: string;
+    scheduled_for?: string | null;
+    hasVoiceNote?: boolean;
+    voiceNoteDurationSec?: number;
+    voiceNoteTranscript?: string;
+    driverTipEgp?: number;
+    cashChangeForEgp?: CashChangeOptionEgp;
+    promoCode?: string;
+    discountEgp?: number;
   }): MarketplaceOrder | null => {
     const store = stores.find((s) => s.id === params.storeId);
     if (!store || params.items.length === 0) return null;
@@ -1548,7 +2230,12 @@ export const MarketplaceProvider: React.FC<{ children: React.ReactNode }> = ({ c
     const platformFeeEgp = Math.round(systemSettings.platformFeePiasters / 100);
     const isRural = params.deliveryAddress.includes('قرية');
     const ruralSurchargeEgp = isRural ? Math.round(systemSettings.ruralSurchargePiasters / 100) : 0;
-    const totalEgp = subtotalEgp + deliveryFeeEgp + platformFeeEgp + ruralSurchargeEgp;
+    const safeTipEgp = Math.max(0, Math.min(500, Math.round(params.driverTipEgp || 0)));
+    const safeDiscountEgp = Math.max(0, Math.min(250, Math.round(params.discountEgp || 0)));
+    const totalEgp = Math.max(
+      10,
+      subtotalEgp + deliveryFeeEgp + platformFeeEgp + ruralSurchargeEgp + safeTipEgp - safeDiscountEgp
+    );
     const itemsSummary = params.items.map((ci) => `${ci.quantity}× ${ci.product.nameAr}`).join(' + ');
 
     if (params.paymentMethod === 'wallet' && customerWalletBalanceEgp >= totalEgp) {
@@ -1567,14 +2254,17 @@ export const MarketplaceProvider: React.FC<{ children: React.ReactNode }> = ({ c
       ]);
     }
 
+    const orderId = `ord_${Date.now()}`;
     const newOrder: MarketplaceOrder = {
-      id: `ord_${Date.now()}`,
+      id: orderId,
       orderNumber: orderNum,
       serviceType: 'restaurant_store',
       serviceTypeAr: 'توصيل متاجر ومطاعم',
       vehicleCategory: 'scooter',
       storeId: store.id,
       storeName: store.nameAr,
+      storeIds: [store.id],
+      storeNames: [store.nameAr],
       storeAddress: store.address,
       pickupAddress: store.address,
       deliveryAddress: params.deliveryAddress,
@@ -1591,12 +2281,18 @@ export const MarketplaceProvider: React.FC<{ children: React.ReactNode }> = ({ c
         productName: ci.product.nameAr,
         quantity: ci.quantity,
         unitPriceEgp: ci.product.priceEgp,
+        storeId: store.id,
+        storeName: store.nameAr,
       })),
       itemDescription: itemsSummary,
       subtotalEgp,
       deliveryFeeEgp,
       platformFeeEgp,
       ruralSurchargeEgp,
+      discountEgp: safeDiscountEgp,
+      promoCode: params.promoCode,
+      cashChangeForEgp: params.paymentMethod === 'cash' ? (params.cashChangeForEgp ?? 0) : 0,
+      driverTipEgp: safeTipEgp,
       totalEgp,
       totalFarePiasters: totalEgp * 100,
       paymentMethod: params.paymentMethod,
@@ -1604,14 +2300,160 @@ export const MarketplaceProvider: React.FC<{ children: React.ReactNode }> = ({ c
       createdAt: timeStr,
       createdAtDate: now,
       notes: params.notes,
+      scheduled_for: params.scheduled_for ?? null,
+      hasVoiceNote: Boolean(params.hasVoiceNote || params.voiceNoteTranscript),
+      voiceNoteDurationSec: params.voiceNoteDurationSec ?? 0,
+      voiceNoteTranscript: params.voiceNoteTranscript?.trim() || '',
     };
 
     setOrders((prev) => [newOrder, ...prev]);
 
+    syncDeliveryOrderToFirestore({
+      orderId,
+      orderNumber: orderNum,
+      serviceType: 'restaurant_store',
+      storeName: store.nameAr,
+      storeIds: [store.id],
+      storeNames: [store.nameAr],
+      pickupLandmark: store.address,
+      dropoffLandmark: params.deliveryAddress,
+      itemsSummary: params.notes ? `${itemsSummary} • ${params.notes}` : itemsSummary,
+      isRural,
+      distanceKm: store.distanceKm,
+      subtotalPiasters: subtotalEgp * 100,
+      deliveryFeePiasters: deliveryFeeEgp * 100,
+      driverTipPiasters: safeTipEgp * 100,
+      discountPiasters: safeDiscountEgp * 100,
+      promoCode: params.promoCode,
+      cashChangeForEgp: newOrder.cashChangeForEgp,
+      totalFarePiasters: totalEgp * 100,
+      paymentMethod: params.paymentMethod,
+      scheduledFor: params.scheduled_for,
+      hasVoiceNote: newOrder.hasVoiceNote,
+      voiceNoteDurationSec: newOrder.voiceNoteDurationSec,
+      voiceNoteTranscript: newOrder.voiceNoteTranscript,
+    }).catch(() => {});
+
     pushNotification({
       recipientRole: 'merchant',
       titleAr: `طلب جديد وارد #${orderNum} لـ ${store.nameAr}`,
-      bodyAr: `${itemsSummary} • الإجمالي ${totalEgp} ج.م`,
+      bodyAr: `${itemsSummary} • الإجمالي ${totalEgp} ج.م${safeTipEgp > 0 ? ` (يشمل ${safeTipEgp} ج إكرامية)` : ''}`,
+      orderNumber: orderNum,
+    });
+
+    return newOrder;
+  };
+
+  // Submit AI Photo Prescription or Handwritten Grocery List Order (Starts in awaiting_quote)
+  const submitPrescriptionOrder = (params: {
+    storeId: string;
+    extractedItems: string[];
+    prescriptionSummary: string;
+    deliveryAddress: string;
+    paymentMethod: 'cash' | 'instapay' | 'vodafone_cash' | 'wallet';
+    notes?: string;
+    scheduled_for?: string | null;
+    voiceNoteTranscript?: string;
+    cashChangeForEgp?: CashChangeOptionEgp;
+    driverTipEgp?: number;
+  }): MarketplaceOrder | null => {
+    const store = stores.find((s) => s.id === params.storeId) || stores[1] || stores[0];
+    if (!store || params.extractedItems.length === 0) return null;
+
+    const orderNum = `RX-${Math.floor(4100 + Math.random() * 899)}`;
+    const now = new Date();
+    const timeStr = formatArabicClockTime(now);
+    const isRural = params.deliveryAddress.includes('قرية');
+    const deliveryFeeEgp = store.deliveryFeeEgp ?? 15;
+    const platformFeeEgp = Math.round(systemSettings.platformFeePiasters / 100);
+    const ruralSurchargeEgp = isRural ? Math.round(systemSettings.ruralSurchargePiasters / 100) : 0;
+    const safeTipEgp = Math.max(0, Math.min(500, Math.round(params.driverTipEgp || 0)));
+    const initialTotalEgp = deliveryFeeEgp + platformFeeEgp + ruralSurchargeEgp + safeTipEgp;
+    const itemsSummary = params.extractedItems.join(' + ');
+
+    const orderId = `ord_rx_${Date.now()}`;
+    const newOrder: MarketplaceOrder = {
+      id: orderId,
+      orderNumber: orderNum,
+      serviceType: 'prescription_list',
+      serviceTypeAr: store.category === 'pharmacy' ? 'روشتة طبية (بانتظار التسعير)' : 'ورقة مقاضي ذكية (بانتظار التسعير)',
+      vehicleCategory: 'scooter',
+      storeId: store.id,
+      storeName: store.nameAr,
+      storeIds: [store.id],
+      storeNames: [store.nameAr],
+      storeAddress: store.address,
+      pickupAddress: store.address,
+      deliveryAddress: params.deliveryAddress,
+      distanceKm: store.distanceKm,
+      estimatedMinutes: store.deliveryTimeEst,
+      estimatedDuration: 20,
+      estimatedDurationMinutes: 20,
+      isRural,
+      customerId: currentUser.role === 'customer' ? currentUser.id : 'usr_cust_1',
+      customerName: currentUser.role === 'customer' ? currentUser.name : 'أحمد سعيد المنوفي',
+      customerPhone: currentUser.role === 'customer' ? currentUser.phone : '01012345678',
+      items: params.extractedItems.map((itemText, idx) => ({
+        productId: `rx_item_${idx}`,
+        productName: itemText,
+        quantity: 1,
+        unitPriceEgp: 0,
+        storeId: store.id,
+        storeName: store.nameAr,
+      })),
+      itemDescription: itemsSummary,
+      aiExtractedItems: params.extractedItems,
+      prescriptionSummary: params.prescriptionSummary,
+      subtotalEgp: 0,
+      deliveryFeeEgp,
+      platformFeeEgp,
+      ruralSurchargeEgp,
+      cashChangeForEgp: params.paymentMethod === 'cash' ? (params.cashChangeForEgp ?? 0) : 0,
+      driverTipEgp: safeTipEgp,
+      totalEgp: initialTotalEgp,
+      totalFarePiasters: initialTotalEgp * 100,
+      paymentMethod: params.paymentMethod,
+      status: 'awaiting_quote',
+      createdAt: timeStr,
+      createdAtDate: now,
+      notes: params.notes,
+      scheduled_for: params.scheduled_for ?? null,
+      hasVoiceNote: Boolean(params.voiceNoteTranscript),
+      voiceNoteTranscript: params.voiceNoteTranscript?.trim() || '',
+    };
+
+    setOrders((prev) => [newOrder, ...prev]);
+
+    syncDeliveryOrderToFirestore({
+      orderId,
+      orderNumber: orderNum,
+      serviceType: 'prescription_list',
+      initialStatus: 'awaiting_quote',
+      storeName: store.nameAr,
+      storeIds: [store.id],
+      storeNames: [store.nameAr],
+      pickupLandmark: store.address,
+      dropoffLandmark: params.deliveryAddress,
+      itemsSummary: params.notes ? `${itemsSummary} • ${params.notes}` : itemsSummary,
+      aiExtractedItems: params.extractedItems,
+      prescriptionSummary: params.prescriptionSummary,
+      isRural,
+      distanceKm: store.distanceKm,
+      subtotalPiasters: 0,
+      deliveryFeePiasters: deliveryFeeEgp * 100,
+      driverTipPiasters: safeTipEgp * 100,
+      cashChangeForEgp: newOrder.cashChangeForEgp,
+      totalFarePiasters: initialTotalEgp * 100,
+      paymentMethod: params.paymentMethod,
+      scheduledFor: params.scheduled_for,
+      hasVoiceNote: newOrder.hasVoiceNote,
+      voiceNoteTranscript: newOrder.voiceNoteTranscript,
+    }).catch(() => {});
+
+    pushNotification({
+      recipientRole: 'merchant',
+      titleAr: `طلب روشتة/قائمة للتسعير #${orderNum}`,
+      bodyAr: `${store.nameAr} • ${params.extractedItems.length} أصناف مستخرجة بانتظار تسعيرك`,
       orderNumber: orderNum,
     });
 
@@ -1645,9 +2487,14 @@ export const MarketplaceProvider: React.FC<{ children: React.ReactNode }> = ({ c
       : Math.round(systemSettings.platformFeePiasters / 100);
     const vehicleExtraEgp = params.vehicleCategory === 'van' ? 10 : 0;
 
+    const safeTipEgp = Math.max(0, Math.min(500, Math.round(params.driverTipEgp || 0)));
+    const safeDiscountEgp = Math.max(0, Math.min(100, Math.round(params.discountEgp || 0)));
     const deliveryFeeEgp = baseFareEgp + distFareEgp + ruralEgp + vehicleExtraEgp;
-    const totalEgp = deliveryFeeEgp + platformEgp;
+    const totalEgp = Math.max(10, deliveryFeeEgp + platformEgp + safeTipEgp - safeDiscountEgp);
     const totalFarePiasters = totalEgp * 100;
+
+    // 4-Digit Security PIN for passenger rides
+    const ridePin = params.serviceType === 'ride' ? generateFourDigitPin() : undefined;
 
     if (params.paymentMethod === 'wallet' && customerWalletBalanceEgp >= totalEgp) {
       setCustomerWalletBalanceEgp((prev) => prev - totalEgp);
@@ -1682,8 +2529,9 @@ export const MarketplaceProvider: React.FC<{ children: React.ReactNode }> = ({ c
         ? 'مشوار خاص وتخليص فوري'
         : 'توصيل طرد وأمانات';
 
+    const orderId = `ord_ride_${Date.now()}`;
     const newOrder: MarketplaceOrder = {
-      id: `ord_ride_${Date.now()}`,
+      id: orderId,
       orderNumber: orderNum,
       serviceType: params.serviceType,
       serviceTypeAr: serviceLabel,
@@ -1731,6 +2579,12 @@ export const MarketplaceProvider: React.FC<{ children: React.ReactNode }> = ({ c
       deliveryFeeEgp,
       platformFeeEgp: platformEgp,
       ruralSurchargeEgp: ruralEgp,
+      discountEgp: safeDiscountEgp,
+      promoCode: params.promoCode,
+      cashChangeForEgp: params.paymentMethod === 'cash' ? (params.cashChangeForEgp ?? 0) : 0,
+      ridePin,
+      requiresFamilyTrustedDriver: Boolean(params.requiresFamilyTrustedDriver),
+      driverTipEgp: safeTipEgp,
       totalEgp,
       totalFarePiasters,
       paymentMethod: params.paymentMethod,
@@ -1740,14 +2594,65 @@ export const MarketplaceProvider: React.FC<{ children: React.ReactNode }> = ({ c
       quoteId: params.quoteData?.quoteId,
       quoteSignature: params.quoteData?.signature,
       notes: params.notes,
+      scheduled_for: params.scheduled_for ?? null,
+      hasVoiceNote: Boolean(params.hasVoiceNote || params.voiceNoteTranscript),
+      voiceNoteDurationSec: params.voiceNoteDurationSec ?? 0,
+      voiceNoteTranscript: params.voiceNoteTranscript?.trim() || '',
     };
 
     setOrders((prev) => [newOrder, ...prev]);
 
+    if (params.serviceType === 'ride') {
+      syncRideToFirestore({
+        rideId: orderId,
+        rideNumber: orderNum,
+        vehicleTier: params.vehicleCategory === 'car' ? 'car' : 'tuktuk',
+        pickupLandmark: params.pickupAddress,
+        dropoffLandmark: params.deliveryAddress,
+        distanceKm: params.distanceKm,
+        estimatedFarePiasters: totalFarePiasters,
+        driverTipPiasters: safeTipEgp * 100,
+        cashChangeForEgp: newOrder.cashChangeForEgp,
+        discountPiasters: safeDiscountEgp * 100,
+        promoCode: params.promoCode,
+        ridePin,
+        requiresFamilyTrustedDriver: Boolean(params.requiresFamilyTrustedDriver),
+        scheduledFor: params.scheduled_for,
+        paymentMethod: params.paymentMethod,
+      }).catch(() => {});
+    } else {
+      syncDeliveryOrderToFirestore({
+        orderId,
+        orderNumber: orderNum,
+        serviceType: params.serviceType === 'errand' ? 'errand' : 'package',
+        initialStatus: 'searching_captain',
+        storeName: serviceLabel,
+        pickupLandmark: params.pickupAddress,
+        dropoffLandmark: params.deliveryAddress,
+        itemsSummary: params.notes ? `${newOrder.itemDescription} • ${params.notes}` : newOrder.itemDescription,
+        isRural: params.isRural,
+        distanceKm: params.distanceKm,
+        subtotalPiasters: 0,
+        deliveryFeePiasters: deliveryFeeEgp * 100,
+        driverTipPiasters: safeTipEgp * 100,
+        discountPiasters: safeDiscountEgp * 100,
+        promoCode: params.promoCode,
+        cashChangeForEgp: newOrder.cashChangeForEgp,
+        totalFarePiasters,
+        paymentMethod: params.paymentMethod,
+        scheduledFor: params.scheduled_for,
+        hasVoiceNote: newOrder.hasVoiceNote,
+        voiceNoteDurationSec: newOrder.voiceNoteDurationSec,
+        voiceNoteTranscript: newOrder.voiceNoteTranscript,
+      }).catch(() => {});
+    }
+
     pushNotification({
       recipientRole: 'captain',
       titleAr: `طلب ${serviceLabel} جديد #${orderNum}`,
-      bodyAr: `من ${params.pickupAddress} إلى ${params.deliveryAddress} • الأجرة ${totalEgp} ج.م`,
+      bodyAr: `من ${params.pickupAddress} إلى ${params.deliveryAddress} • الأجرة ${totalEgp} ج.م${
+        params.requiresFamilyTrustedDriver ? ' • كابتن عائلات موثوق' : ''
+      }`,
       orderNumber: orderNum,
     });
 
@@ -1778,6 +2683,12 @@ export const MarketplaceProvider: React.FC<{ children: React.ReactNode }> = ({ c
       )
     );
 
+    updateDeliveryOrderInFirestore(orderId, {
+      status: 'captain_assigned',
+      assignedCaptainId: 'usr_capt_1',
+      assignedCaptainName: 'كابتن محمود الصياد',
+    }).catch(() => {});
+
     const targetOrder = orders.find((o) => o.id === orderId);
     if (targetOrder) {
       pushNotification({
@@ -1789,7 +2700,7 @@ export const MarketplaceProvider: React.FC<{ children: React.ReactNode }> = ({ c
     }
   };
 
-  // Customer cancels own order and updates status to 'cancelled' in the marketplace store
+  // Customer cancels own order and updates status to 'cancelled'
   const customerCancelOrder = (orderId: string, reason: string = 'إلغاء بناءً على رغبة العميل') => {
     setOrders((prev) =>
       prev.map((o) =>
@@ -1798,6 +2709,54 @@ export const MarketplaceProvider: React.FC<{ children: React.ReactNode }> = ({ c
           : o
       )
     );
+    updateDeliveryOrderInFirestore(orderId, { status: 'cancelled' }).catch(() => {});
+  };
+
+  // Customer approves Merchant/Pharmacist quote on prescription_list orders
+  const customerApproveOrderQuote = (orderId: string) => {
+    const target = orders.find((o) => o.id === orderId || o.orderNumber === orderId);
+    if (!target || target.status !== 'quote_ready') return;
+    const now = new Date();
+    const nowIso = now.toISOString();
+    const nowTimeAr = formatArabicClockTime(now);
+
+    if (target.paymentMethod === 'wallet' && customerWalletBalanceEgp >= target.totalEgp) {
+      setCustomerWalletBalanceEgp((prev) => prev - target.totalEgp);
+      setWalletTransactions((prev) => [
+        {
+          id: `wtx_rx_${Date.now()}`,
+          titleAr: `سداد طلب مسعّر ${target.storeName} (${target.orderNumber})`,
+          type: 'debit',
+          amountEgp: target.totalEgp,
+          methodAr: 'خصم محفظة مشوار',
+          timestampAr: `اليوم • ${nowTimeAr}`,
+          orderNumber: target.orderNumber,
+        },
+        ...prev,
+      ]);
+    }
+
+    setOrders((prev) =>
+      prev.map((o) =>
+        o.id === target.id
+          ? {
+              ...o,
+              status: 'accepted_by_store',
+              acceptedAt: o.acceptedAt || nowTimeAr,
+              acceptedAtIso: o.acceptedAtIso || nowIso,
+            }
+          : o
+      )
+    );
+
+    updateDeliveryOrderInFirestore(target.id, { status: 'accepted_by_store' }).catch(() => {});
+
+    pushNotification({
+      recipientRole: 'merchant',
+      titleAr: `وافق العميل على تسعيرة #${target.orderNumber}`,
+      bodyAr: `تم اعتماد مبلغ ${target.totalEgp} ج.م — يرجى تجهيز الأصناف للاستلام.`,
+      orderNumber: target.orderNumber,
+    });
   };
 
   // Customer rates captain performance post-delivery on a 1-5 star scale
@@ -1812,7 +2771,7 @@ export const MarketplaceProvider: React.FC<{ children: React.ReactNode }> = ({ c
     );
   };
 
-  // Customer updates orderNotes on an active or existing order and persists to marketplace store
+  // Customer updates orderNotes on an active or existing order
   const updateOrderNotes = (orderId: string, nextOrderNotes: string) => {
     setOrders((prev) => {
       const updated = prev.map((o) =>
@@ -1831,7 +2790,7 @@ export const MarketplaceProvider: React.FC<{ children: React.ReactNode }> = ({ c
     });
   };
 
-  // Customer leaves post-delivery Order Feedback comment in order history and persists to marketplace store
+  // Customer leaves post-delivery Order Feedback comment
   const updateOrderFeedback = (orderId: string, feedback: string) => {
     setOrders((prev) => {
       const updated = prev.map((o) =>
@@ -1848,6 +2807,40 @@ export const MarketplaceProvider: React.FC<{ children: React.ReactNode }> = ({ c
       }
       return updated;
     });
+  };
+
+  // Customer updates Driver Tip amount on an order and keeps totalEgp / totalFarePiasters synchronized
+  const updateOrderDriverTip = (orderId: string, tipEgp: number) => {
+    const safeTip = Math.max(0, Math.min(500, Math.round(Number(tipEgp) || 0)));
+    let nextTotalForSync = 0;
+    setOrders((prev) => {
+      const updated = prev.map((o) => {
+        if (o.id !== orderId && o.orderNumber !== orderId) return o;
+        const previousTip = Math.max(0, Math.round(o.driverTipEgp || 0));
+        const nextTotal = Math.max(0, o.totalEgp - previousTip + safeTip);
+        nextTotalForSync = nextTotal;
+        return {
+          ...o,
+          driverTipEgp: safeTip,
+          totalEgp: nextTotal,
+          totalFarePiasters: nextTotal * 100,
+        };
+      });
+      if (typeof window !== 'undefined') {
+        try {
+          window.localStorage.setItem(STORAGE_KEYS.ORDERS, JSON.stringify(updated));
+        } catch {
+          // ignore storage quota errors
+        }
+      }
+      return updated;
+    });
+    if (nextTotalForSync > 0) {
+      updateDeliveryOrderInFirestore(orderId, {
+        driverTipPiasters: safeTip * 100,
+        totalFarePiasters: nextTotalForSync * 100,
+      }).catch(() => {});
+    }
   };
 
   // Merchant Transitions
@@ -1869,6 +2862,8 @@ export const MarketplaceProvider: React.FC<{ children: React.ReactNode }> = ({ c
       )
     );
 
+    updateDeliveryOrderInFirestore(orderId, { status: 'accepted_by_store' }).catch(() => {});
+
     const ord = orders.find((o) => o.id === orderId);
     if (ord) {
       pushNotification({
@@ -1880,12 +2875,62 @@ export const MarketplaceProvider: React.FC<{ children: React.ReactNode }> = ({ c
     }
   };
 
+  const merchantSubmitOrderQuote = (
+    orderId: string,
+    quoteTotalEgp: number,
+    quoteNotes?: string
+  ) => {
+    const cleanQuote = Math.max(1, Math.round(Number(quoteTotalEgp) || 0));
+    const target = orders.find((o) => o.id === orderId);
+    if (!target || cleanQuote <= 0) return;
+
+    const tipEgp = Math.max(0, target.driverTipEgp || 0);
+    const discountEgp = Math.max(0, target.discountEgp || 0);
+    const nextTotalEgp = Math.max(
+      10,
+      cleanQuote + target.deliveryFeeEgp + target.platformFeeEgp + target.ruralSurchargeEgp + tipEgp - discountEgp
+    );
+
+    setOrders((prev) =>
+      prev.map((o) =>
+        o.id === orderId
+          ? {
+              ...o,
+              status: 'quote_ready',
+              quoteTotalEgp: cleanQuote,
+              quoteNotes: quoteNotes?.trim() || o.quoteNotes,
+              subtotalEgp: cleanQuote,
+              totalEgp: nextTotalEgp,
+              totalFarePiasters: nextTotalEgp * 100,
+            }
+          : o
+      )
+    );
+
+    updateDeliveryOrderInFirestore(orderId, {
+      status: 'quote_ready',
+      quoteTotalPiasters: cleanQuote * 100,
+      quoteNotes: quoteNotes?.trim(),
+      subtotalPiasters: cleanQuote * 100,
+      totalFarePiasters: nextTotalEgp * 100,
+    }).catch(() => {});
+
+    pushNotification({
+      recipientRole: 'customer',
+      titleAr: `تسعيرة جديدة لطلبك #${target.orderNumber}`,
+      bodyAr: `سعّر ${target.storeName} الأصناف بمبلغ ${cleanQuote} ج.م (الإجمالي بالتوصيل ${nextTotalEgp} ج.م). يرجى الاعتماد.`,
+      orderNumber: target.orderNumber,
+    });
+  };
+
   const merchantMarkReady = (orderId: string) => {
     setOrders((prev) =>
       prev.map((o) =>
         o.id === orderId ? { ...o, status: 'ready_for_pickup' } : o
       )
     );
+    updateDeliveryOrderInFirestore(orderId, { status: 'ready_for_pickup' }).catch(() => {});
+
     const ord = orders.find((o) => o.id === orderId);
     if (ord) {
       pushNotification({
@@ -1905,13 +2950,42 @@ export const MarketplaceProvider: React.FC<{ children: React.ReactNode }> = ({ c
           : o
       )
     );
+    updateDeliveryOrderInFirestore(orderId, { status: 'cancelled' }).catch(() => {});
   };
 
-  // Captain Transitions
-  const captainAcceptDelivery = (orderId: string) => {
+  // Captain Transitions (Enforces Cash Ceiling + Family Trusted verification)
+  const captainAcceptDelivery = (orderId: string): { success: boolean; messageAr?: string } => {
+    const targetOrder = orders.find((o) => o.id === orderId);
+    const currentCap =
+      captains.find(
+        (c) => c.id === (currentUser.captainRecordId || 'cpt_02') || c.userId === currentUser.id
+      ) || captains[1];
+
+    const currentCashPiasters = Math.max(
+      captainCashHoldingEgp * 100,
+      currentCap?.cashHoldingPiasters || 0
+    );
+    const ceilingPiasters = currentCap?.cashCeilingPiasters || systemSettings.cashCeilingPiasters;
+
+    if (targetOrder?.paymentMethod === 'cash' && currentCashPiasters >= ceilingPiasters) {
+      return {
+        success: false,
+        messageAr: `تم إيقاف استقبال طلبات الكاش مؤقتاً: عهدتك الحالية (${Math.round(currentCashPiasters / 100)} ج.م) وصلت للحد الأقصى (${Math.round(ceilingPiasters / 100)} ج.م). يرجى التوريد للإدارة أولاً.`,
+      };
+    }
+
+    if (targetOrder?.requiresFamilyTrustedDriver && currentCap && !currentCap.isFamilyTrusted) {
+      return {
+        success: false,
+        messageAr: 'هذا المشوار يتطلب كابتن موثوق للعائلات ومعتمد من الإدارة.',
+      };
+    }
+
     const now = new Date();
     const nowIso = now.toISOString();
     const nowTimeAr = formatArabicClockTime(now);
+    const assignedId = currentUser.role === 'captain' ? currentUser.id : 'usr_capt_1';
+    const assignedName = currentUser.role === 'captain' ? currentUser.name : 'كابتن محمود الصياد';
 
     setOrders((prev) =>
       prev.map((o) =>
@@ -1919,8 +2993,8 @@ export const MarketplaceProvider: React.FC<{ children: React.ReactNode }> = ({ c
           ? {
               ...o,
               status: 'captain_assigned',
-              assignedCaptainId: currentUser.role === 'captain' ? currentUser.id : 'usr_capt_1',
-              assignedCaptainName: currentUser.role === 'captain' ? currentUser.name : 'كابتن محمود الصياد',
+              assignedCaptainId: assignedId,
+              assignedCaptainName: assignedName,
               assignedCaptainPhone: currentUser.role === 'captain' ? currentUser.phone : '01198765432',
               assignedCaptainVehicle: currentUser.vehicleInfo || 'سكوتر بينيلي أسود • م ن ف ٤٩٢١',
               assignedCaptainRating: 4.92,
@@ -1931,21 +3005,68 @@ export const MarketplaceProvider: React.FC<{ children: React.ReactNode }> = ({ c
       )
     );
 
-    const ord = orders.find((o) => o.id === orderId);
-    if (ord) {
+    updateDeliveryOrderInFirestore(orderId, {
+      status: 'captain_assigned',
+      assignedCaptainId: assignedId,
+      assignedCaptainName: assignedName,
+    }).catch(() => {});
+
+    if (targetOrder) {
       pushNotification({
         recipientRole: 'customer',
-        titleAr: `تم تعيين الكابتن لطلبك #${ord.orderNumber}`,
-        bodyAr: `وقت القبول: ${ord.acceptedAt || nowTimeAr} • الكابتن في الطريق للاستلام.`,
-        orderNumber: ord.orderNumber,
+        titleAr: `تم تعيين الكابتن لطلبك #${targetOrder.orderNumber}`,
+        bodyAr: `وقت القبول: ${targetOrder.acceptedAt || nowTimeAr} • الكابتن في الطريق للاستلام.`,
+        orderNumber: targetOrder.orderNumber,
       });
     }
+
+    return { success: true };
+  };
+
+  // Captain verifies 4-digit security PIN before starting a passenger ride
+  const captainVerifyRidePinAndStart = (
+    orderId: string,
+    enteredPin: string
+  ): { success: boolean; messageAr: string } => {
+    const targetOrder = orders.find((o) => o.id === orderId);
+    if (!targetOrder) {
+      return { success: false, messageAr: 'الطلب غير موجود.' };
+    }
+    const cleanPin = enteredPin.trim();
+    if (targetOrder.ridePin && targetOrder.ridePin !== cleanPin) {
+      return {
+        success: false,
+        messageAr: 'كود الأمان غير صحيح. اطلب من العميل الرقم السري المكون من ٤ أرقام على شاشته.',
+      };
+    }
+
+    const nowTimeAr = formatArabicClockTime(new Date());
+    setOrders((prev) =>
+      prev.map((o) =>
+        o.id === orderId
+          ? {
+              ...o,
+              status: 'in_transit',
+              pickedUpAt: o.pickedUpAt || nowTimeAr,
+            }
+          : o
+      )
+    );
+
+    updateDeliveryOrderInFirestore(orderId, { status: 'in_transit' }).catch(() => {});
+    pushNotification({
+      recipientRole: 'customer',
+      titleAr: `بدأت رحلتك الآمنة #${targetOrder.orderNumber}`,
+      bodyAr: `تم التحقق من كود الأمان (${cleanPin}) — نتمنى لك رحلة سعيدة بالباجور.`,
+      orderNumber: targetOrder.orderNumber,
+    });
+
+    return { success: true, messageAr: 'تم مطابقة كود الأمان وبدء الرحلة بنجاح.' };
   };
 
   const awardLoyaltyForOrder = (orderId: string, overrideOrder?: MarketplaceOrder) => {
     const target = overrideOrder || orders.find((o) => o.id === orderId);
     if (!target) return;
-    // Prevent duplicate cashback award for the same completed order
     if (loyaltyHistory.some((entry) => entry.orderId === target.id)) return;
 
     const { cashbackPercent, cashbackAmountEgp, pointsEarned } = calculateOrderCashback(
@@ -2014,7 +3135,6 @@ export const MarketplaceProvider: React.FC<{ children: React.ReactNode }> = ({ c
           ? {
               ...o,
               status: nextStatus,
-              // Preserve acceptedAt & acceptedAtIso immutably across all post-acceptance transitions
               acceptedAt: o.acceptedAt,
               acceptedAtIso: o.acceptedAtIso,
               pickedUpAt:
@@ -2026,6 +3146,8 @@ export const MarketplaceProvider: React.FC<{ children: React.ReactNode }> = ({ c
           : o
       )
     );
+
+    updateDeliveryOrderInFirestore(orderId, { status: nextStatus }).catch(() => {});
 
     if (nextStatus === 'delivered' && targetOrder) {
       awardLoyaltyForOrder(orderId, targetOrder);
@@ -2043,18 +3165,25 @@ export const MarketplaceProvider: React.FC<{ children: React.ReactNode }> = ({ c
       )
     );
 
-    // 100% of delivery fee goes to captain (0% commission invariant)
-    setCaptainEarningsEgp((prev) => prev + targetOrder.deliveryFeeEgp);
-    setCaptainCompletedDeliveries((prev) => prev + 1);
-    setCaptainCashHoldingEgp((prev) => prev + targetOrder.totalEgp);
+    updateDeliveryOrderInFirestore(orderId, { status: 'delivered' }).catch(() => {});
 
-    // Also synchronize with the Fleet Captains table in Operations Dashboard
+    // 100% of delivery fee + tip goes to captain (0% commission invariant)
+    const captainEarned = targetOrder.deliveryFeeEgp + (targetOrder.driverTipEgp || 0);
+    setCaptainEarningsEgp((prev) => prev + captainEarned);
+    setCaptainCompletedDeliveries((prev) => prev + 1);
+    if (targetOrder.paymentMethod === 'cash') {
+      setCaptainCashHoldingEgp((prev) => prev + targetOrder.totalEgp);
+    }
+
     setCaptains((prev) =>
       prev.map((c) =>
         c.id === 'cpt_02' || c.userId === targetOrder.assignedCaptainId
           ? {
               ...c,
-              cashHoldingPiasters: c.cashHoldingPiasters + targetOrder.totalEgp * 100,
+              cashHoldingPiasters:
+                targetOrder.paymentMethod === 'cash'
+                  ? c.cashHoldingPiasters + targetOrder.totalEgp * 100
+                  : c.cashHoldingPiasters,
               completedToday: c.completedToday + 1,
             }
           : c
@@ -2071,7 +3200,7 @@ export const MarketplaceProvider: React.FC<{ children: React.ReactNode }> = ({ c
     awardLoyaltyForOrder(orderId, targetOrder);
   };
 
-  // Customer Wallet Top-up (Prototype Simulation with strict bounds validation)
+  // Legacy direct wallet topup helper (kept for compatibility, delegates safely)
   const topUpCustomerWallet = (amountEgp: number, methodAr: string) => {
     const sanitizedAmount = Math.round(Number(amountEgp));
     if (!Number.isFinite(sanitizedAmount) || sanitizedAmount < 10 || sanitizedAmount > 5000) return;
@@ -2080,14 +3209,244 @@ export const MarketplaceProvider: React.FC<{ children: React.ReactNode }> = ({ c
     setWalletTransactions((prev) => [
       {
         id: `wtx_${Date.now()}`,
-        titleAr: `شحن رصيد تجريبي (${methodAr} - Prototype)`,
+        titleAr: `شحن رصيد (${methodAr})`,
         type: 'credit',
         amountEgp: sanitizedAmount,
-        methodAr: `${methodAr} (محاكاة)`,
+        methodAr,
         timestampAr: `اليوم • ${nowTimeAr}`,
       },
       ...prev,
     ]);
+  };
+
+  // Real Proof-Verified Wallet Top-Up via backend /api/v1/payments/verify-proof + Firestore
+  const topUpCustomerWalletWithProof = async (
+    amountEgp: number,
+    methodAr: string,
+    proofRef: string
+  ): Promise<{ success: boolean; messageAr: string }> => {
+    const sanitizedAmount = Math.round(Number(amountEgp));
+    const trimmedRef = proofRef.trim();
+    if (!Number.isFinite(sanitizedAmount) || sanitizedAmount < 10 || sanitizedAmount > 5000) {
+      return { success: false, messageAr: 'يرجى إدخال مبلغ شحن بين ١٠ و ٥٠٠٠ ج.م.' };
+    }
+    if (trimmedRef.length < 4) {
+      return { success: false, messageAr: 'يرجى إدخال رقم مرجع التحويل الصحيح (مثال: IPN-849201).' };
+    }
+
+    try {
+      const resp = await fetch('/api/v1/payments/verify-proof', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          amountEgp: sanitizedAmount,
+          method: methodAr.includes('فودافون') ? 'vodafone_cash' : 'instapay',
+          referenceCode: trimmedRef,
+        }),
+      });
+      const json = await resp.json();
+      if (!resp.ok || !json?.success) {
+        return {
+          success: false,
+          messageAr: json?.errorAr || 'تعذر التحقق من مرجع التحويل، تأكد من الرقم.',
+        };
+      }
+
+      const nowTimeAr = formatArabicClockTime(new Date());
+      const topUpTxId = `wtx_${Date.now()}`;
+      const topUpTitleAr = `شحن رصيد موثق (${methodAr} • مرجع ${trimmedRef})`;
+      setCustomerWalletBalanceEgp((prev) => prev + sanitizedAmount);
+      setWalletTransactions((prev) => [
+        {
+          id: topUpTxId,
+          titleAr: topUpTitleAr,
+          type: 'credit',
+          amountEgp: sanitizedAmount,
+          methodAr,
+          timestampAr: `اليوم • ${nowTimeAr}`,
+        },
+        ...prev,
+      ]);
+
+      submitWalletTopUpProofInFirestore({
+        txId: topUpTxId,
+        amountPiasters: sanitizedAmount * 100,
+        proofRef: trimmedRef,
+        titleAr: topUpTitleAr,
+      }).catch(() => {});
+
+      return {
+        success: true,
+        messageAr: json?.data?.messageAr || `تم شحن ${sanitizedAmount} ج.م بنجاح (${trimmedRef}).`,
+      };
+    } catch {
+      return {
+        success: false,
+        messageAr: 'تعذر الاتصال بخادم التحقق حالياً، حاول مرة أخرى.',
+      };
+    }
+  };
+
+  // Validate Promo Coupon against backend /api/v1/promos/validate
+  const applyPromoCode = async (
+    code: string,
+    orderTotalEgp: number
+  ): Promise<{ valid: boolean; code: string; discountEgp: number; titleAr: string; errorAr?: string }> => {
+    const clean = code.trim().toUpperCase();
+    if (!clean) {
+      return { valid: false, code: '', discountEgp: 0, titleAr: '', errorAr: 'أدخل كود الخصم أولاً' };
+    }
+    try {
+      const resp = await fetch('/api/v1/promos/validate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ code: clean, orderTotalEgp }),
+      });
+      const json = await resp.json();
+      if (!resp.ok || !json?.success) {
+        return {
+          valid: false,
+          code: clean,
+          discountEgp: 0,
+          titleAr: '',
+          errorAr: json?.errorAr || 'كود الخصم غير صالح أو لم يبلغ الحد الأدنى',
+        };
+      }
+      return {
+        valid: true,
+        code: json.data.code,
+        discountEgp: json.data.discountEgp,
+        titleAr: json.data.titleAr,
+      };
+    } catch {
+      return {
+        valid: false,
+        code: clean,
+        discountEgp: 0,
+        titleAr: '',
+        errorAr: 'تعذر التحقق من الكود، يرجى المحاولة لاحقاً',
+      };
+    }
+  };
+
+  // Redeem Friend Referral Code (+15 EGP Wallet Credit)
+  const redeemReferralCode = (code: string): { success: boolean; messageAr: string } => {
+    const clean = code.trim().toUpperCase();
+    if (referredByCode) {
+      return { success: false, messageAr: `تم استخدام كود دعوة بالفعل (${referredByCode}).` };
+    }
+    if (!clean.startsWith('MSH-') || clean.length < 6) {
+      return { success: false, messageAr: 'صيغة كود الدعوة غير صحيحة (يبدأ بـ MSH-).' };
+    }
+    if (clean === referralCode) {
+      return { success: false, messageAr: 'لا يمكنك استخدام كود الدعوة الخاص بك.' };
+    }
+
+    const bonusEgp = 15;
+    const nowTimeAr = formatArabicClockTime(new Date());
+    setReferredByCode(clean);
+    if (typeof window !== 'undefined') {
+      try {
+        window.localStorage.setItem(STORAGE_KEYS.REFERRED_BY, clean);
+      } catch {
+        // ignore
+      }
+    }
+    setCustomerWalletBalanceEgp((prev) => prev + bonusEgp);
+    setWalletTransactions((prev) => [
+      {
+        id: `wtx_ref_${Date.now()}`,
+        titleAr: `مكافأة دعوة صديق (${clean})`,
+        type: 'credit',
+        amountEgp: bonusEgp,
+        methodAr: 'دعوة أصدقاء مشوار',
+        timestampAr: `اليوم • ${nowTimeAr}`,
+      },
+      ...prev,
+    ]);
+
+    return {
+      success: true,
+      messageAr: `تم تفعيل كود الدعوة ${clean} وإضافة ${bonusEgp} ج.م لمحفظتك بنجاح!`,
+    };
+  };
+
+  // Daily Village-to-Center Commute Subscriptions
+  const createCommuteSubscription = (input: {
+    fromLandmark: string;
+    toLandmark: string;
+    scheduleDays: string[];
+    morningTime: string;
+    returnTime?: string;
+    vehicleTier: 'tuktuk' | 'car';
+    planType: 'weekly' | 'monthly';
+  }): { success: boolean; subscription?: CommuteSubscriptionItem; errorAr?: string } => {
+    if (!input.fromLandmark || !input.toLandmark || input.scheduleDays.length === 0) {
+      return { success: false, errorAr: 'اختر نقطة الانطلاق والوصول وأيام الأسبوع أولاً.' };
+    }
+    if (input.fromLandmark === input.toLandmark) {
+      return { success: false, errorAr: 'يجب أن تختلف نقطة الوصول عن نقطة الانطلاق.' };
+    }
+
+    const fromLm = EL_BAGOUR_LANDMARKS_LIST.find((l) => l.nameAr === input.fromLandmark);
+    const toLm = EL_BAGOUR_LANDMARKS_LIST.find((l) => l.nameAr === input.toLandmark);
+    const estDistanceKm = Math.max(
+      2.5,
+      Math.abs((fromLm?.distanceFromCenterKm || 3) - (toLm?.distanceFromCenterKm || 1)) + 2
+    );
+
+    const pricePiasters = calculateCommuteSubscriptionPricePiasters({
+      distanceKm: estDistanceKm,
+      vehicleTier: input.vehicleTier,
+      planType: input.planType,
+      daysCount: input.scheduleDays.length,
+      hasReturnTrip: Boolean(input.returnTime),
+    });
+    const priceEgp = Math.round(pricePiasters / 100);
+
+    const newSub: CommuteSubscriptionItem = {
+      id: `sub_${Date.now()}`,
+      fromLandmark: input.fromLandmark,
+      toLandmark: input.toLandmark,
+      scheduleDays: input.scheduleDays,
+      morningTime: input.morningTime,
+      returnTime: input.returnTime,
+      vehicleTier: input.vehicleTier,
+      planType: input.planType,
+      priceEgp,
+      status: 'active',
+      createdAtAr: 'الآن',
+    };
+
+    setCommuteSubscriptions((prev) => [newSub, ...prev]);
+
+    createCommuteSubscriptionInFirestore({
+      id: newSub.id,
+      fromLandmark: input.fromLandmark,
+      toLandmark: input.toLandmark,
+      scheduleDays: input.scheduleDays,
+      morningTime: input.morningTime,
+      returnTime: input.returnTime,
+      vehicleTier: input.vehicleTier,
+      planType: input.planType,
+      pricePiasters,
+    }).catch(() => {});
+
+    pushNotification({
+      recipientRole: 'customer',
+      titleAr: `تم تفعيل اشتراك المشوار اليومي (${input.planType === 'monthly' ? 'شهري' : 'أسبوعي'})`,
+      bodyAr: `من ${input.fromLandmark} إلى ${input.toLandmark} • ${priceEgp} ج.م`,
+    });
+
+    return { success: true, subscription: newSub };
+  };
+
+  const toggleCommuteSubscriptionStatus = (subId: string) => {
+    setCommuteSubscriptions((prev) =>
+      prev.map((s) =>
+        s.id === subId ? { ...s, status: s.status === 'active' ? 'paused' : 'active' } : s
+      )
+    );
   };
 
   const markAllNotificationsRead = () => {
@@ -2114,7 +3473,6 @@ export const MarketplaceProvider: React.FC<{ children: React.ReactNode }> = ({ c
     };
     setComplaints((prev) => [newTicket, ...prev]);
 
-    // Also send to real backend /api/v1/complaints if available
     fetch('/api/v1/complaints', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -2123,9 +3481,7 @@ export const MarketplaceProvider: React.FC<{ children: React.ReactNode }> = ({ c
         subjectAr: input.subjectAr,
         descriptionAr: input.descriptionAr,
       }),
-    }).catch(() => {
-      // Keep local state synchronized
-    });
+    }).catch(() => {});
 
     return newTicket;
   };
@@ -2150,8 +3506,8 @@ export const MarketplaceProvider: React.FC<{ children: React.ReactNode }> = ({ c
     }
 
     const allowedDispatchStatuses =
-      targetOrder.serviceType === 'restaurant_store'
-        ? ['searching_captain', 'ready_for_pickup']
+      targetOrder.serviceType === 'restaurant_store' || targetOrder.serviceType === 'prescription_list'
+        ? ['searching_captain', 'ready_for_pickup', 'accepted_by_store']
         : ['searching_captain', 'ready_for_pickup', 'created'];
 
     if (!allowedDispatchStatuses.includes(targetOrder.status)) {
@@ -2182,6 +3538,13 @@ export const MarketplaceProvider: React.FC<{ children: React.ReactNode }> = ({ c
       };
     }
 
+    if (targetOrder.requiresFamilyTrustedDriver && !captain.isFamilyTrusted) {
+      return {
+        success: false,
+        message: `عذراً: هذا الطلب يشترط كابتن موثوق للعائلات.`,
+      };
+    }
+
     const now = new Date();
     const nowIso = now.toISOString();
     const nowTimeAr = formatArabicClockTime(now);
@@ -2203,6 +3566,12 @@ export const MarketplaceProvider: React.FC<{ children: React.ReactNode }> = ({ c
           : o
       )
     );
+
+    updateDeliveryOrderInFirestore(orderId, {
+      status: 'captain_assigned',
+      assignedCaptainId: captain.userId || captain.id,
+      assignedCaptainName: captain.name,
+    }).catch(() => {});
 
     setAuditLogs((prev) => [
       {
@@ -2247,6 +3616,8 @@ export const MarketplaceProvider: React.FC<{ children: React.ReactNode }> = ({ c
           : o
       )
     );
+
+    updateDeliveryOrderInFirestore(orderId, { status: 'cancelled' }).catch(() => {});
 
     setAuditLogs((prev) => [
       {
@@ -2377,12 +3748,43 @@ export const MarketplaceProvider: React.FC<{ children: React.ReactNode }> = ({ c
     ]);
   };
 
+  const adminToggleCaptainFamilyTrusted = (
+    captainId: string,
+    actorName: string,
+    actorRole: string
+  ) => {
+    const captain = captains.find((c) => c.id === captainId);
+    if (!captain) return;
+    const nextTrusted = !captain.isFamilyTrusted;
+
+    setCaptains((prev) =>
+      prev.map((c) =>
+        c.id === captainId ? { ...c, isFamilyTrusted: nextTrusted } : c
+      )
+    );
+
+    setAuditLogs((prev) => [
+      {
+        id: `aud_${Date.now()}`,
+        timestamp: 'الآن',
+        actorName,
+        actorRole,
+        actionType: 'CAPTAIN_FAMILY_TRUST_UPDATED',
+        target: `كابتن ${captain.name}`,
+        descriptionAr: nextTrusted
+          ? `اعتماد الكابتن ${captain.name} ضمن قائمة كباتن العائلات الموثوقين بالباجور.`
+          : `إلغاء شارة كباتن العائلات عن الكابتن ${captain.name}.`,
+      },
+      ...prev,
+    ]);
+  };
+
   const adminUpdateSettings = (
     newSettings: PlatformSystemSettings,
     actorName: string,
     actorRole: string
   ) => {
-    setSystemSettings({ ...newSettings, passengerLockEnabled: true });
+    setSystemSettings({ ...newSettings });
     setAuditLogs((prev) => [
       {
         id: `aud_${Date.now()}`,
@@ -2424,6 +3826,43 @@ export const MarketplaceProvider: React.FC<{ children: React.ReactNode }> = ({ c
         o.status !== 'delivered' &&
         o.status !== 'cancelled'
     ) || null;
+
+  const latestTrackedOrder =
+    activeCustomerOrder ||
+    orders.find((o) => o.customerId === currentUser.id || o.customerId === 'usr_cust_1') ||
+    null;
+
+  const activeOrderTrackingCard = latestTrackedOrder
+    ? {
+        order: latestTrackedOrder,
+        ...getOrderTrackingProgress(latestTrackedOrder.status),
+      }
+    : null;
+
+  const advanceOrderTrackingStage = (orderId: string) => {
+    const target = orders.find((o) => o.id === orderId);
+    if (!target || target.status === 'delivered' || target.status === 'cancelled') return;
+    if (target.status === 'quote_ready') {
+      customerApproveOrderQuote(orderId);
+      return;
+    }
+    const { stageIndex } = getOrderTrackingProgress(target.status);
+    if (stageIndex === 0) {
+      merchantAcceptOrder(orderId);
+      return;
+    }
+    if (stageIndex === 1) {
+      if (!target.assignedCaptainId) {
+        simulateInstantCaptainAccept(orderId);
+      } else {
+        captainUpdateStep(orderId, 'in_transit');
+      }
+      return;
+    }
+    if (stageIndex === 2) {
+      captainUpdateStep(orderId, 'delivered');
+    }
+  };
 
   const navigateToCustomerHistory = () => {
     const customerPersona = DEMO_PERSONAS.find((p) => p.role === 'customer');
@@ -2474,6 +3913,8 @@ export const MarketplaceProvider: React.FC<{ children: React.ReactNode }> = ({ c
     <MarketplaceContext.Provider
       value={{
         currentUser,
+        firebaseUser,
+        isFirestoreRealtimeActive: Boolean(firebaseUser),
         switchDemoUser,
         isAuthModalOpen,
         setIsAuthModalOpen,
@@ -2482,8 +3923,20 @@ export const MarketplaceProvider: React.FC<{ children: React.ReactNode }> = ({ c
         products,
         toggleProductAvailability,
         updateProductPrice,
+        favoriteProductIds: favoritesState.productIds,
+        favoriteStoreIds: favoritesState.storeIds,
+        favoriteServiceKeys: favoritesState.serviceKeys,
+        toggleFavoriteProduct,
+        toggleFavoriteStore,
+        toggleFavoriteService,
+        isFavoriteProduct,
+        isFavoriteStore,
+        isFavoriteService,
         cartItems,
         cartStoreId,
+        cartStoreIds,
+        cartStoreGroups,
+        cartMultiStopSavingsEgp,
         addToCart,
         removeFromCart,
         updateCartItemQty,
@@ -2496,13 +3949,17 @@ export const MarketplaceProvider: React.FC<{ children: React.ReactNode }> = ({ c
         orders,
         submitNewOrder,
         submitDirectStoreOrder,
+        submitPrescriptionOrder,
         submitRideOrPackageOrder,
         simulateInstantCaptainAccept,
         customerCancelOrder,
+        customerApproveOrderQuote,
         rateOrderCaptain,
         updateOrderNotes,
         updateOrderFeedback,
+        updateOrderDriverTip,
         merchantAcceptOrder,
+        merchantSubmitOrderQuote,
         merchantMarkReady,
         merchantRejectOrder,
         isCaptainOnline,
@@ -2511,11 +3968,20 @@ export const MarketplaceProvider: React.FC<{ children: React.ReactNode }> = ({ c
         captainCompletedDeliveries,
         captainCashHoldingEgp,
         captainAcceptDelivery,
+        captainVerifyRidePinAndStart,
         captainUpdateStep,
         captainConfirmCashCollection,
         customerWalletBalanceEgp,
         walletTransactions,
         topUpCustomerWallet,
+        topUpCustomerWalletWithProof,
+        referralCode,
+        referredByCode,
+        applyPromoCode,
+        redeemReferralCode,
+        commuteSubscriptions,
+        createCommuteSubscription,
+        toggleCommuteSubscriptionStatus,
         loyaltyPoints,
         loyaltyCashbackBalanceEgp,
         loyaltyTier: currentLoyaltyTierInfo.tier,
@@ -2537,10 +4003,13 @@ export const MarketplaceProvider: React.FC<{ children: React.ReactNode }> = ({ c
         adminEmergencyCancelOrder,
         adminSettleCaptainCash,
         adminRenewCaptainSubscription,
+        adminToggleCaptainFamilyTrusted,
         adminUpdateSettings,
         chatMessages,
         sendChatMessage,
         activeCustomerOrder,
+        activeOrderTrackingCard,
+        advanceOrderTrackingStage,
         refreshOrderStatus,
         customerNavTab,
         setCustomerNavTab,
@@ -2559,3 +4028,4 @@ export const useMarketplace = (): MarketplaceContextType => {
   }
   return ctx;
 };
+

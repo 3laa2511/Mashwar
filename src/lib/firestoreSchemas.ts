@@ -10,6 +10,14 @@ export const BLUEPRINT_LIMITS = {
   PHONE_MAX: 24,
   LANDMARK_MAX: 140,
   ITEMS_SUMMARY_MAX: 500,
+  AI_ITEM_MAX: 160,
+  AI_ITEMS_COUNT_MAX: 20,
+  PRESCRIPTION_SUMMARY_MAX: 240,
+  QUOTE_NOTES_MAX: 240,
+  PROMO_CODE_MAX: 24,
+  PROOF_REF_MAX: 64,
+  RIDE_PIN_MIN: 4,
+  RIDE_PIN_MAX: 6,
   VOICE_TRANSCRIPT_MAX: 300,
   VOICE_DURATION_MAX_SEC: 120,
   STORE_NAME_MAX: 100,
@@ -19,6 +27,7 @@ export const BLUEPRINT_LIMITS = {
   PLATE_LABEL_MAX: 32,
   SCHEDULED_FOR_MAX: 40,
   WELCOME_BONUS_PIASTERS: 2500,
+  REFERRAL_BONUS_PIASTERS: 1500,
 } as const;
 
 export type AppRole = 'customer' | 'captain' | 'merchant' | 'owner';
@@ -26,6 +35,7 @@ export type VehicleTier = 'tuktuk' | 'scooter' | 'car';
 export type DriverVehicleType = 'tuktuk' | 'scooter' | 'motorcycle' | 'car';
 export type StoreCategory = 'restaurant' | 'pharmacy' | 'supermarket';
 export type PaymentMethod = 'cash' | 'wallet' | 'vodafone_cash' | 'instapay';
+export type CashChangeOptionEgp = 0 | 50 | 100 | 200;
 
 export interface CityHub {
   id: string;
@@ -60,6 +70,7 @@ export const EL_BAGOUR_LANDMARKS: MenoufiaLandmark[] = [
   { id: 'lm_shantana', cityId: 'city_el_bagour', nameAr: 'قرية شنتنا الحجر - الوحدة الصحية', categoryAr: 'قرية', isRural: true, kmFromHub: 5.2 },
   { id: 'lm_garawan', cityId: 'city_el_bagour', nameAr: 'قرية جروان - كوبري الترعة', categoryAr: 'قرية', isRural: true, kmFromHub: 6.5 },
   { id: 'lm_meet_afif', cityId: 'city_el_bagour', nameAr: 'قرية ميت عفيف - السوق العمومي', categoryAr: 'قرية', isRural: true, kmFromHub: 4.8 },
+  { id: 'lm_subk_eldahhak', cityId: 'city_el_bagour', nameAr: 'قرية سبك الضحاك - مدخل القرية', categoryAr: 'قرية', isRural: true, kmFromHub: 7.0 },
   { id: 'lm_shebin_uni', cityId: 'city_shebin', nameAr: 'جامعة المنوفية - شبين الكوم', categoryAr: 'جامعة', isRural: false, kmFromHub: 11.0 },
   { id: 'lm_menouf_station', cityId: 'city_menouf', nameAr: 'محطة قطار منوف - الوسط', categoryAr: 'محطة', isRural: false, kmFromHub: 14.5 },
   { id: 'lm_ashmoun_center', cityId: 'city_ashmoun', nameAr: 'ميدان الخالدين - أشمون', categoryAr: 'ميدان', isRural: false, kmFromHub: 18.0 },
@@ -102,6 +113,10 @@ export function sanitizeDocId(raw: string): string {
   return cleaned.length > 0 ? cleaned : `id_${Date.now()}`;
 }
 
+export function generateFourDigitPin(): string {
+  return String(Math.floor(1000 + Math.random() * 9000));
+}
+
 export function formatEgpFromPiasters(piasters: number): string {
   const egp = Math.max(0, Math.round(piasters)) / 100;
   return Number.isInteger(egp) ? `${egp} ج.م` : `${egp.toFixed(2)} ج.م`;
@@ -134,4 +149,18 @@ export function calculateRideFarePiasters(tier: VehicleTier, distanceKm: number)
   const cfg = RIDE_TIER_PRICING[tier];
   const extraKm = Math.max(0, distanceKm - 1.5);
   return Math.max(1000, cfg.basePiasters + Math.round(extraKm * cfg.perKmPiasters));
+}
+
+export function calculateCommuteSubscriptionPricePiasters(params: {
+  distanceKm: number;
+  vehicleTier: 'tuktuk' | 'car';
+  planType: 'weekly' | 'monthly';
+  daysCount: number;
+  hasReturnTrip: boolean;
+}): number {
+  const singleRide = calculateRideFarePiasters(params.vehicleTier, params.distanceKm);
+  const tripsPerWeek = Math.max(1, params.daysCount) * (params.hasReturnTrip ? 2 : 1);
+  const weeks = params.planType === 'monthly' ? 4 : 1;
+  const discountFactor = params.planType === 'monthly' ? 0.78 : 0.85;
+  return Math.round(singleRide * tripsPerWeek * weeks * discountFactor);
 }

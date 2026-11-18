@@ -27,8 +27,12 @@ import {
   Zap,
   Volume2,
   VolumeX,
+  Lock,
+  Banknote,
+  CheckCircle2,
 } from 'lucide-react';
 import { ActiveOrderStaticMapThumbnail } from './ActiveOrderStaticMapThumbnail';
+import { SosEmergencySheet } from './SosEmergencySheet';
 import {
   useMarketplace,
   MarketplaceOrder,
@@ -46,17 +50,17 @@ export const OrderTrackingScreen: React.FC<OrderTrackingScreenProps> = ({
   order: propOrder,
   orderId,
   onBackToHome,
-  onOpenOrderSummary,
 }) => {
   const {
     orders,
     activeCustomerOrder,
     refreshOrderStatus,
     simulateInstantCaptainAccept,
+    customerApproveOrderQuote,
     captainUpdateStep,
     updateOrderNotes,
-    chatMessages,
-    sendChatMessage,
+    updateOrderDriverTip,
+    sendChatMessage: _sendChatMessage,
   } = useMarketplace();
 
   // Resolve target order
@@ -272,12 +276,15 @@ export const OrderTrackingScreen: React.FC<OrderTrackingScreenProps> = ({
   };
 
   // Interactive panels
-  const [activeInlineTool, setActiveInlineTool] = useState<'none' | 'notes' | 'tip' | 'share'>('none');
+  const [activeInlineTool, setActiveInlineTool] = useState<'none' | 'notes' | 'tip' | 'share' | 'call'>('none');
   const [isTimelineExpanded, setIsTimelineExpanded] = useState<boolean>(true);
   const [notesDraft, setNotesDraft] = useState<string>(order?.orderNotes || order?.notes || '');
   const [notesSaved, setNotesSaved] = useState<boolean>(false);
-  const [tipEgp, setTipEgp] = useState<number>(0);
+  const [customTipInput, setCustomTipInput] = useState<string>('');
+  const [showSosSheet, setShowSosSheet] = useState<boolean>(false);
   const [liveLinkCopied, setLiveLinkCopied] = useState<boolean>(false);
+  const [captainPhoneCopied, setCaptainPhoneCopied] = useState<boolean>(false);
+  const tipEgp = order?.driverTipEgp ?? 0;
 
   const pickupAddress = order?.storeAddress || order?.pickupAddress || 'ميدان المحطة - وسط الباجور';
   const dropoffAddress = order?.deliveryAddress || 'شارع الجيش - برج الشروق، الباجور';
@@ -354,7 +361,7 @@ export const OrderTrackingScreen: React.FC<OrderTrackingScreenProps> = ({
                 تتبع الطلب {order.orderNumber}
               </h2>
               <span className="text-[10px] font-mono font-black text-emerald-800 bg-emerald-50 px-1.5 py-0.2 rounded-md border border-emerald-200">
-                {order.totalEgp + tipEgp}.00 ج.م
+                {order.totalEgp}.00 ج.م
               </span>
             </div>
             <p className="text-[10px] text-slate-500 truncate">{order.storeName}</p>
@@ -399,6 +406,20 @@ export const OrderTrackingScreen: React.FC<OrderTrackingScreenProps> = ({
           >
             <RefreshCw className={`w-3 h-3 text-emerald-700 ${isRefreshing ? 'animate-spin' : ''}`} />
             <span>{isRefreshing ? '...' : 'تحديث'}</span>
+          </button>
+
+          <button
+            type="button"
+            data-testid="sos-emergency-btn"
+            onClick={() => {
+              triggerHaptic();
+              setShowSosSheet(true);
+            }}
+            className="px-2 py-1 rounded-lg bg-rose-600 hover:bg-rose-700 text-white text-[10px] font-black flex items-center gap-1 cursor-pointer shadow-2xs transition"
+            title="طوارئ الباجور ومشاركة GPS"
+          >
+            <ShieldCheck className="w-3 h-3" />
+            <span>SOS</span>
           </button>
         </div>
       </div>
@@ -496,6 +517,63 @@ export const OrderTrackingScreen: React.FC<OrderTrackingScreenProps> = ({
           </div>
         </div>
 
+        {/* Ride 4-Digit Security PIN + Family Trusted / Multi-Stop / Quote Cards */}
+        {order.ridePin && order.status !== 'delivered' && order.status !== 'cancelled' && (
+          <div
+            data-testid="ride-security-pin-card"
+            className="p-3 rounded-2xl bg-slate-900 text-white border border-emerald-500/40 flex items-center justify-between gap-2 shadow-sm"
+          >
+            <div className="flex items-center gap-2">
+              <div className="w-9 h-9 rounded-xl bg-emerald-600/20 border border-emerald-500/40 flex items-center justify-center shrink-0">
+                <Lock className="w-4 h-4 text-emerald-400" />
+              </div>
+              <div>
+                <div className="text-[11px] font-black text-emerald-300">كود أمان بدء الرحلة (OTP)</div>
+                <div className="text-[10px] text-slate-300">
+                  أخبر الكابتن بالكود عند الركوب فقط{order.requiresFamilyTrustedDriver ? ' • كابتن عائلات موثوق' : ''}
+                </div>
+              </div>
+            </div>
+            <div className="px-3 py-1.5 rounded-xl bg-emerald-500 text-slate-950 font-mono font-black text-base tracking-widest tabular-nums">
+              {order.ridePin}
+            </div>
+          </div>
+        )}
+
+        {order.status === 'quote_ready' && (
+          <div className="p-3 rounded-2xl bg-amber-50 border-2 border-amber-400 flex flex-col gap-2">
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-black text-amber-950">عرض سعر جاهز من {order.storeName}</span>
+              <span className="text-sm font-black text-emerald-800 tabular-nums">{order.totalEgp} ج.م</span>
+            </div>
+            {order.quoteNotes && (
+              <p className="text-[11px] text-amber-900 font-semibold">{order.quoteNotes}</p>
+            )}
+            <button
+              type="button"
+              onClick={() => customerApproveOrderQuote(order.id)}
+              className="w-full min-h-[44px] py-2 rounded-xl bg-emerald-700 hover:bg-emerald-800 text-white font-extrabold text-xs flex items-center justify-center gap-1.5 cursor-pointer"
+            >
+              <CheckCircle2 className="w-4 h-4" />
+              <span>اعتماد السعر والبدء بالتوصيل</span>
+            </button>
+          </div>
+        )}
+
+        {(order.storeNames && order.storeNames.length > 1) || (order.cashChangeForEgp && order.cashChangeForEgp > 0) ? (
+          <div className="px-3 py-2 rounded-xl bg-white border border-slate-200 flex flex-wrap items-center justify-between gap-2 text-[10px] font-bold text-slate-700">
+            {order.storeNames && order.storeNames.length > 1 && (
+              <span>سلة مجمعة ({order.storeNames.length} محلات): {order.storeNames.join(' ← ')}</span>
+            )}
+            {order.cashChangeForEgp && order.cashChangeForEgp > 0 && (
+              <span className="flex items-center gap-1 text-emerald-800">
+                <Banknote className="w-3.5 h-3.5" />
+                <span>فكة مطلوبة من ورقة {order.cashChangeForEgp} ج.م</span>
+              </span>
+            )}
+          </div>
+        ) : null}
+
         {/* Stepper Timeline */}
         <div className="bg-white rounded-2xl p-3 border border-slate-200/80 shadow-2xs flex flex-col gap-2">
           <div className="flex items-center justify-between">
@@ -541,7 +619,7 @@ export const OrderTrackingScreen: React.FC<OrderTrackingScreenProps> = ({
                 {
                   key: 'delivered',
                   title: 'تم إتمام المشوار والتسليم',
-                  desc: `${order.totalEgp + tipEgp}.00 ج.م`,
+                  desc: `${order.totalEgp}.00 ج.م`,
                   done: order.status === 'delivered',
                 },
               ].map((step, idx) => (
@@ -563,18 +641,20 @@ export const OrderTrackingScreen: React.FC<OrderTrackingScreenProps> = ({
           )}
         </div>
 
-        {/* Action Controls Grid (Call, Message, Notes, Tip, Share, Summary) */}
+        {/* Action Controls Grid (Call, Notes, Tip, Share) */}
         <div data-testid="active-order-actions-grid" className="grid grid-cols-4 gap-1.5">
           <button
             type="button"
             data-testid="call-captain-btn"
             onClick={() => {
               triggerHaptic();
-              alert(`الاتصال بالكابتن: ${order.assignedCaptainPhone || '01012345678'}`);
+              setActiveInlineTool((p) => (p === 'call' ? 'none' : 'call'));
             }}
-            className="p-2 rounded-xl bg-slate-50 hover:bg-emerald-50 border border-slate-200 flex flex-col items-center justify-center gap-1 text-slate-700 hover:text-emerald-900 transition hover:scale-105 active:scale-95 cursor-pointer"
+            className={`p-2 rounded-xl border flex flex-col items-center justify-center gap-1 transition hover:scale-105 active:scale-95 cursor-pointer ${
+              activeInlineTool === 'call' ? 'bg-emerald-700 text-white border-emerald-700' : 'bg-slate-50 hover:bg-emerald-50 border-slate-200 text-slate-700 hover:text-emerald-900'
+            }`}
           >
-            <Phone className="w-3.5 h-3.5 text-emerald-700" />
+            <Phone className={`w-3.5 h-3.5 ${activeInlineTool === 'call' ? 'text-white' : 'text-emerald-700'}`} />
             <span className="text-[10px] font-extrabold">اتصال</span>
           </button>
 
@@ -624,6 +704,48 @@ export const OrderTrackingScreen: React.FC<OrderTrackingScreenProps> = ({
           </button>
         </div>
 
+        {/* Inline Call Captain Panel */}
+        {activeInlineTool === 'call' && (
+          <div data-testid="call-captain-panel" className="p-3 rounded-2xl bg-emerald-50/90 border border-emerald-200 flex flex-col gap-2 text-xs">
+            <div className="flex items-center justify-between">
+              <span className="font-extrabold text-emerald-950">
+                التواصل مع الكابتن: {order.assignedCaptainName || 'جاري الإسناد'}
+              </span>
+              <button
+                type="button"
+                onClick={() => setActiveInlineTool('none')}
+                className="text-[11px] text-slate-500 font-bold cursor-pointer"
+              >
+                ✕
+              </button>
+            </div>
+            <div className="flex items-center gap-2">
+              <a
+                href={`tel:${order.assignedCaptainPhone || '01198765432'}`}
+                className="flex-1 min-h-[40px] py-2 px-3 rounded-xl bg-emerald-700 hover:bg-emerald-800 text-white font-extrabold text-xs flex items-center justify-center gap-1.5"
+              >
+                <Phone className="w-3.5 h-3.5" />
+                <span className="font-mono" dir="ltr">{order.assignedCaptainPhone || '01198765432'}</span>
+              </a>
+              <button
+                type="button"
+                onClick={() => {
+                  const phone = order.assignedCaptainPhone || '01198765432';
+                  if (typeof navigator !== 'undefined' && navigator.clipboard?.writeText) {
+                    navigator.clipboard.writeText(phone).catch(() => {});
+                  }
+                  setCaptainPhoneCopied(true);
+                  setTimeout(() => setCaptainPhoneCopied(false), 2000);
+                }}
+                className="px-3 py-2 rounded-xl bg-white border border-emerald-300 text-emerald-900 font-extrabold text-[11px] flex items-center gap-1 cursor-pointer"
+              >
+                {captainPhoneCopied ? <Check className="w-3.5 h-3.5 text-emerald-700" /> : <Copy className="w-3.5 h-3.5" />}
+                <span>{captainPhoneCopied ? 'تم النسخ' : 'نسخ'}</span>
+              </button>
+            </div>
+          </div>
+        )}
+
         {/* Inline Notes Panel */}
         {activeInlineTool === 'notes' && (
           <form
@@ -669,12 +791,15 @@ export const OrderTrackingScreen: React.FC<OrderTrackingScreenProps> = ({
               <span className="text-[10px] font-black text-emerald-800">+{tipEgp} ج.م</span>
             </div>
             <div className="grid grid-cols-4 gap-1.5">
-              {[5, 10, 15].map((amt) => (
+              {[5, 10, 20].map((amt) => (
                 <button
                   key={amt}
                   type="button"
                   data-testid={`tip-preset-${amt}`}
-                  onClick={() => setTipEgp(amt)}
+                  onClick={() => {
+                    updateOrderDriverTip(order.id, amt);
+                    setCustomTipInput(String(amt));
+                  }}
                   className={`py-1.5 rounded-xl font-extrabold text-[11px] border cursor-pointer ${
                     tipEgp === amt ? 'bg-emerald-700 text-white border-emerald-700' : 'bg-white text-slate-800 border-slate-200'
                   }`}
@@ -684,12 +809,39 @@ export const OrderTrackingScreen: React.FC<OrderTrackingScreenProps> = ({
               ))}
               <button
                 type="button"
-                onClick={() => setTipEgp(0)}
+                onClick={() => {
+                  updateOrderDriverTip(order.id, 0);
+                  setCustomTipInput('');
+                }}
                 className="py-1.5 rounded-xl font-bold text-[10px] bg-white text-slate-500 border border-slate-200 cursor-pointer"
               >
                 بدون
               </button>
             </div>
+            <form
+              onSubmit={(e) => {
+                e.preventDefault();
+                updateOrderDriverTip(order.id, Math.max(0, Math.round(Number(customTipInput) || 0)));
+              }}
+              className="flex items-center gap-1.5"
+            >
+              <input
+                type="number"
+                min={0}
+                max={500}
+                step={1}
+                value={customTipInput}
+                onChange={(e) => setCustomTipInput(e.target.value)}
+                placeholder="مبلغ مخصص بالجنيه..."
+                className="flex-1 px-2.5 py-1.5 rounded-xl bg-white border border-emerald-200 text-xs font-mono text-slate-900"
+              />
+              <button
+                type="submit"
+                className="px-3 py-1.5 rounded-xl bg-slate-900 text-white text-[11px] font-extrabold cursor-pointer"
+              >
+                تطبيق
+              </button>
+            </form>
           </div>
         )}
 
@@ -726,6 +878,13 @@ export const OrderTrackingScreen: React.FC<OrderTrackingScreenProps> = ({
           </div>
         )}
       </div>
+
+      <SosEmergencySheet
+        isOpen={showSosSheet}
+        onClose={() => setShowSosSheet(false)}
+        orderId={order.id}
+        orderNumber={order.orderNumber}
+      />
     </div>
   );
 };

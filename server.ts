@@ -13,7 +13,7 @@ async function startServer() {
   const app = express();
   const PORT = Number(process.env.PORT) || 3000;
 
-  app.use(express.json());
+  app.use(express.json({ limit: '6mb' }));
 
   // Mount Mashwar Authoritative REST API Router
   app.use('/api/v1', apiRouter);

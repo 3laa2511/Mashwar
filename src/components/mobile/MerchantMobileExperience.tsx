@@ -17,9 +17,17 @@ import {
   User,
   ShieldCheck,
   Filter,
-  Info
+  Info,
+  Volume2,
+  VolumeX,
+  FileText,
 } from 'lucide-react';
 import { useMarketplace, ProductItem, DEMO_PERSONAS } from '../../store/marketplaceStore';
+import {
+  playDispatchChime,
+  isDispatchSoundMuted,
+  setDispatchSoundMuted,
+} from './SoundAlertHelper';
 
 interface MerchantMobileExperienceProps {
   onOpenAuthModal?: () => void;
@@ -38,6 +46,7 @@ export const MerchantMobileExperience: React.FC<MerchantMobileExperienceProps> =
     updateProductPrice,
     orders,
     merchantAcceptOrder,
+    merchantSubmitOrderQuote,
     merchantMarkReady,
     merchantRejectOrder,
     setIsAuthModalOpen,
@@ -50,6 +59,12 @@ export const MerchantMobileExperience: React.FC<MerchantMobileExperienceProps> =
   // Tabs: Orders, Products, Sales, Profile
   const [activeTab, setActiveTab] = useState<'orders' | 'products' | 'sales' | 'profile'>('orders');
 
+  // Quote inputs & sound mute
+  const [soundMuted, setSoundMuted] = useState<boolean>(isDispatchSoundMuted);
+  const [quotePriceDraft, setQuotePriceDraft] = useState<Record<string, string>>({});
+  const [quoteNotesDraft, setQuoteNotesDraft] = useState<Record<string, string>>({});
+  const prevPendingCountRef = React.useRef<number>(0);
+
   // Edit Product Price Modal State
   const [editingProduct, setEditingProduct] = useState<ProductItem | null>(null);
   const [newPriceInput, setNewPriceInput] = useState<string>('');
@@ -58,13 +73,15 @@ export const MerchantMobileExperience: React.FC<MerchantMobileExperienceProps> =
   const [rejectModalOrder, setRejectModalOrder] = useState<string | null>(null);
   const [rejectReason, setRejectReason] = useState<string>('');
 
-  // Strict Data Isolation:
-  // ONLY orders for this specific store
-  const storeOrders = orders.filter((o) => o.storeId === currentStore.id);
-  // ONLY products for this specific store
+  // Strict Store Isolation (including multi-stop baskets that stop at this store):
+  const storeOrders = orders.filter(
+    (o) => o.storeId === currentStore.id || o.storeIds?.includes(currentStore.id)
+  );
   const storeProducts = products.filter((p) => p.storeId === currentStore.id);
 
-  // Filter orders by status (supports canonical accepted_by_store, preparing, picked_up)
+  // Filter orders by status
+  const quoteRequests = storeOrders.filter((o) => o.status === 'awaiting_quote');
+  const awaitingApprovalQuotes = storeOrders.filter((o) => o.status === 'quote_ready');
   const incomingOrders = storeOrders.filter((o) => o.status === 'created');
   const preparingOrders = storeOrders.filter(
     (o) => o.status === 'accepted_by_store' || o.status === 'preparing' || o.status === 'merchant_accepted'
@@ -73,6 +90,14 @@ export const MerchantMobileExperience: React.FC<MerchantMobileExperienceProps> =
     ['ready_for_pickup', 'captain_assigned', 'at_pickup', 'picked_up', 'in_transit'].includes(o.status)
   );
   const completedOrders = storeOrders.filter((o) => o.status === 'delivered');
+
+  React.useEffect(() => {
+    const pendingTotal = incomingOrders.length + quoteRequests.length;
+    if (pendingTotal > prevPendingCountRef.current) {
+      playDispatchChime('merchant');
+    }
+    prevPendingCountRef.current = pendingTotal;
+  }, [incomingOrders.length, quoteRequests.length]);
 
   // Sales KPIs strictly for this merchant
   const totalSalesRevenueEgp = completedOrders.reduce((sum, o) => sum + o.subtotalEgp, 0);
@@ -116,8 +141,25 @@ export const MerchantMobileExperience: React.FC<MerchantMobileExperienceProps> =
           </div>
         </div>
 
-        {/* Store Open/Close & Auth Switcher Trigger */}
-        <div className="flex items-center gap-2">
+        {/* Store Open/Close, Sound Toggle & Auth Switcher */}
+        <div className="flex items-center gap-1.5">
+          <button
+            type="button"
+            onClick={() => {
+              const next = !soundMuted;
+              setSoundMuted(next);
+              setDispatchSoundMuted(next);
+            }}
+            className={`p-1.5 rounded-lg border text-[11px] font-bold cursor-pointer ${
+              soundMuted
+                ? 'bg-slate-100 border-slate-200 text-slate-500'
+                : 'bg-amber-50 border-amber-300 text-amber-900'
+            }`}
+            title={soundMuted ? 'تفعيل صوت التنبيهات' : 'كتم صوت التنبيهات'}
+          >
+            {soundMuted ? <VolumeX className="w-3.5 h-3.5" /> : <Volume2 className="w-3.5 h-3.5" />}
+          </button>
+
           <button
             onClick={() => toggleStoreStatus(currentStore.id)}
             className={`px-2.5 py-1 rounded-xl font-bold text-xs flex items-center gap-1 transition-all shadow-2xs ${
@@ -207,6 +249,114 @@ export const MerchantMobileExperience: React.FC<MerchantMobileExperienceProps> =
                 </p>
               </div>
             </div>
+
+            {/* Section: Quote Requests (Prescription / Grocery List awaiting merchant pricing) */}
+            {(quoteRequests.length > 0 || awaitingApprovalQuotes.length > 0) && (
+              <div className="flex flex-col gap-2.5">
+                <h3 className="font-extrabold text-xs text-amber-900 flex items-center gap-1.5">
+                  <FileText className="w-4 h-4 text-amber-600" />
+                  <span>روشتات وقوائم بانتظار التسعير ({quoteRequests.length})</span>
+                </h3>
+
+                {quoteRequests.map((ord) => (
+                  <div
+                    key={ord.id}
+                    className="bg-white p-3.5 rounded-2xl border-2 border-amber-500 shadow-md flex flex-col gap-2.5 text-xs"
+                  >
+                    <div className="flex items-center justify-between">
+                      <span className="font-extrabold text-slate-900">
+                        {ord.orderNumber} • {ord.customerName}
+                      </span>
+                      <span className="text-[10px] font-black px-2 py-0.5 rounded-lg bg-amber-100 text-amber-900">
+                        بانتظار سعرك
+                      </span>
+                    </div>
+
+                    {ord.prescriptionSummary && (
+                      <div className="text-[11px] font-bold text-slate-700 bg-amber-50/70 p-2 rounded-xl border border-amber-200">
+                        {ord.prescriptionSummary}
+                      </div>
+                    )}
+
+                    <div className="p-2.5 bg-slate-50 rounded-xl space-y-1 text-slate-800">
+                      {(ord.aiExtractedItems && ord.aiExtractedItems.length > 0
+                        ? ord.aiExtractedItems
+                        : ord.items.map((i) => i.productName)
+                      ).map((line, idx) => (
+                        <div key={idx} className="font-bold flex items-center gap-1.5">
+                          <span className="text-amber-700">•</span>
+                          <span>{line}</span>
+                        </div>
+                      ))}
+                    </div>
+
+                    {ord.voiceNoteTranscript && (
+                      <div className="text-[10px] text-amber-900 bg-amber-50 px-2.5 py-1.5 rounded-lg">
+                        🎙️ {ord.voiceNoteTranscript}
+                      </div>
+                    )}
+
+                    <div className="grid grid-cols-2 gap-2">
+                      <input
+                        type="number"
+                        min={1}
+                        value={quotePriceDraft[ord.id] || ''}
+                        onChange={(e) =>
+                          setQuotePriceDraft((prev) => ({ ...prev, [ord.id]: e.target.value }))
+                        }
+                        placeholder="سعر الأصناف (ج.م)"
+                        className="px-2.5 py-2 rounded-xl border border-slate-300 bg-slate-50 font-bold text-xs text-slate-900"
+                      />
+                      <input
+                        type="text"
+                        value={quoteNotesDraft[ord.id] || ''}
+                        onChange={(e) =>
+                          setQuoteNotesDraft((prev) => ({ ...prev, [ord.id]: e.target.value }))
+                        }
+                        placeholder="بديل متوفر / ملاحظة..."
+                        className="px-2.5 py-2 rounded-xl border border-slate-300 bg-slate-50 text-[11px] text-slate-900"
+                      />
+                    </div>
+
+                    <div className="grid grid-cols-3 gap-2">
+                      <button
+                        type="button"
+                        onClick={() => setRejectModalOrder(ord.id)}
+                        className="py-2 rounded-xl border border-rose-200 text-rose-700 hover:bg-rose-50 font-bold text-xs cursor-pointer"
+                      >
+                        اعتذار
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const price = Number(quotePriceDraft[ord.id]);
+                          if (!Number.isFinite(price) || price <= 0) return;
+                          merchantSubmitOrderQuote(ord.id, price, quoteNotesDraft[ord.id]);
+                        }}
+                        className="col-span-2 py-2 rounded-xl bg-amber-600 hover:bg-amber-700 text-white font-extrabold text-xs shadow-sm cursor-pointer"
+                      >
+                        إرسال التسعيرة للعميل
+                      </button>
+                    </div>
+                  </div>
+                ))}
+
+                {awaitingApprovalQuotes.map((ord) => (
+                  <div
+                    key={ord.id}
+                    className="bg-amber-50/60 p-3 rounded-2xl border border-amber-200 flex items-center justify-between text-xs"
+                  >
+                    <div>
+                      <span className="font-extrabold text-slate-900">{ord.orderNumber}</span>
+                      <span className="text-[11px] text-slate-600 block">
+                        تم إرسال السعر ({ord.quoteTotalEgp} ج.م) — بانتظار موافقة العميل
+                      </span>
+                    </div>
+                    <Clock className="w-4 h-4 text-amber-600" />
+                  </div>
+                ))}
+              </div>
+            )}
 
             {/* Section: Incoming Orders (created) */}
             <div>

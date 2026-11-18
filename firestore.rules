@@ -75,7 +75,7 @@ service cloud.firestore {
     }
 
     // ------------------------------------------------------------------------
-    // Users & Private PII + Wallet Cashback Subcollection
+    // Users & Private PII + Wallet Cashback / Top-Up Proof Subcollection
     // ------------------------------------------------------------------------
     function isValidUserAccount(data, userId) {
       return data.keys().hasAll([
@@ -84,7 +84,8 @@ service cloud.firestore {
         ]) &&
         data.keys().hasOnly([
           'uid', 'displayName', 'email', 'phone', 'role', 'defaultCityId',
-          'defaultLandmark', 'cashbackBalancePiasters', 'createdAt', 'updatedAt'
+          'defaultLandmark', 'cashbackBalancePiasters', 'loyaltyPoints',
+          'referralCode', 'referredBy', 'createdAt', 'updatedAt'
         ]) &&
         isValidId(data.uid) &&
         data.uid == userId &&
@@ -97,18 +98,22 @@ service cloud.firestore {
         data.cashbackBalancePiasters is int &&
         data.cashbackBalancePiasters >= 0 &&
         data.cashbackBalancePiasters <= 10000000 &&
+        (!('loyaltyPoints' in data) || (data.loyaltyPoints is int && data.loyaltyPoints >= 0 && data.loyaltyPoints <= 1000000)) &&
+        (!('referralCode' in data) || (data.referralCode is string && data.referralCode.size() >= 4 && data.referralCode.size() <= 24)) &&
+        (!('referredBy' in data) || (data.referredBy is string && data.referredBy.size() <= 128)) &&
         data.createdAt is timestamp &&
         data.updatedAt is timestamp;
     }
 
     function isValidWalletTransaction(data, userId, txId) {
       return data.keys().hasAll(['id', 'userId', 'type', 'amountPiasters', 'refId', 'titleAr', 'createdAt']) &&
-        data.keys().hasOnly(['id', 'userId', 'type', 'amountPiasters', 'refId', 'titleAr', 'createdAt']) &&
+        data.keys().hasOnly(['id', 'userId', 'type', 'amountPiasters', 'refId', 'proofRef', 'titleAr', 'createdAt']) &&
         isValidId(data.id) && data.id == txId &&
         isValidId(data.userId) && data.userId == userId &&
-        data.type in ['welcome_bonus', 'cashback_earn', 'cashback_redeem', 'admin_adjustment'] &&
-        data.amountPiasters is int && data.amountPiasters > 0 && data.amountPiasters <= 50000 &&
+        data.type in ['welcome_bonus', 'cashback_earn', 'cashback_redeem', 'referral_bonus', 'topup_proof', 'admin_adjustment'] &&
+        data.amountPiasters is int && data.amountPiasters > 0 && data.amountPiasters <= 500000 &&
         isValidId(data.refId) &&
+        (!('proofRef' in data) || (data.proofRef is string && data.proofRef.size() <= 64)) &&
         data.titleAr is string && data.titleAr.size() >= 2 && data.titleAr.size() <= 140 &&
         data.createdAt is timestamp;
     }
@@ -143,11 +148,14 @@ service cloud.firestore {
             isOwner(userId) &&
             incoming().role == existing().role &&
             incoming().cashbackBalancePiasters == existing().cashbackBalancePiasters &&
-            incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'phone', 'defaultCityId', 'defaultLandmark', 'updatedAt'])
+            incoming().diff(existing()).affectedKeys().hasOnly([
+              'displayName', 'phone', 'defaultCityId', 'defaultLandmark',
+              'loyaltyPoints', 'referralCode', 'updatedAt'
+            ])
           )
         );
 
-      // Master Gate on Cashback Wallet Ledger
+      // Master Gate on Wallet & Cashback Ledger
       match /walletTransactions/{txId} {
         allow get: if isValidId(userId) && isValidId(txId) && (isOwner(userId) || isAdmin()) &&
           exists(/databases/$(database)/documents/users/$(userId));
@@ -162,6 +170,17 @@ service cloud.firestore {
               isOwner(userId) &&
               (
                 (incoming().type == 'welcome_bonus' && incoming().amountPiasters == 2500 && txId == 'welcome_' + userId) ||
+                (
+                  incoming().type == 'topup_proof' &&
+                  'proofRef' in incoming() &&
+                  incoming().proofRef.size() >= 6 &&
+                  incoming().amountPiasters >= 1000 &&
+                  incoming().amountPiasters <= 500000
+                ) ||
+                (
+                  incoming().type == 'referral_bonus' &&
+                  incoming().amountPiasters == 1500
+                ) ||
                 (
                   incoming().type == 'cashback_redeem' &&
                   txId == 'redeem_' + incoming().refId &&
@@ -214,7 +233,8 @@ service cloud.firestore {
         ]) &&
         data.keys().hasOnly([
           'uid', 'fullName', 'cityId', 'vehicleType', 'plateLabel',
-          'isVerified', 'isOnline', 'ratingAverage', 'completedTrips',
+          'isVerified', 'isOnline', 'isFamilyTrusted', 'cashHoldingPiasters',
+          'cashCeilingPiasters', 'ratingAverage', 'completedTrips',
           'currentLandmark', 'updatedAt'
         ]) &&
         isValidId(data.uid) && data.uid == driverId &&
@@ -224,6 +244,9 @@ service cloud.firestore {
         data.plateLabel is string && data.plateLabel.size() >= 2 && data.plateLabel.size() <= 32 &&
         data.isVerified is bool &&
         data.isOnline is bool &&
+        (!('isFamilyTrusted' in data) || data.isFamilyTrusted is bool) &&
+        (!('cashHoldingPiasters' in data) || (data.cashHoldingPiasters is int && data.cashHoldingPiasters >= 0 && data.cashHoldingPiasters <= 2000000)) &&
+        (!('cashCeilingPiasters' in data) || (data.cashCeilingPiasters is int && data.cashCeilingPiasters >= 10000 && data.cashCeilingPiasters <= 2000000)) &&
         data.ratingAverage is number && data.ratingAverage >= 1 && data.ratingAverage <= 5 &&
         data.completedTrips is int && data.completedTrips >= 0 &&
         data.currentLandmark is string && data.currentLandmark.size() >= 1 && data.currentLandmark.size() <= 140 &&
@@ -236,7 +259,7 @@ service cloud.firestore {
       allow create: if isValidId(driverId) && isVerifiedAccount() &&
         isValidDriverProfile(incoming(), driverId) &&
         incoming().updatedAt == request.time &&
-        (isAdmin() || (driverId == request.auth.uid && incoming().isVerified == false));
+        (isAdmin() || (driverId == request.auth.uid && incoming().isVerified == false && (!('isFamilyTrusted' in incoming()) || incoming().isFamilyTrusted == false)));
       allow update: if isValidId(driverId) && isVerifiedAccount() &&
         isValidDriverProfile(incoming(), driverId) &&
         incoming().uid == existing().uid &&
@@ -246,7 +269,8 @@ service cloud.firestore {
           (
             isOwner(driverId) &&
             incoming().isVerified == existing().isVerified &&
-            incoming().diff(existing()).affectedKeys().hasOnly(['isOnline', 'currentLandmark', 'completedTrips', 'updatedAt'])
+            (!('isFamilyTrusted' in incoming()) || incoming().isFamilyTrusted == existing().isFamilyTrusted) &&
+            incoming().diff(existing()).affectedKeys().hasOnly(['isOnline', 'currentLandmark', 'completedTrips', 'cashHoldingPiasters', 'updatedAt'])
           )
         );
     }
@@ -345,7 +369,7 @@ service cloud.firestore {
     }
 
     // ------------------------------------------------------------------------
-    // Delivery, Multi-Stop, Scheduled & Voice-Note Orders
+    // Delivery, Multi-Stop, AI Prescription/List Quotes, Scheduled & Voice Orders
     // ------------------------------------------------------------------------
     function isValidDeliveryOrder(data, orderId) {
       return data.keys().hasAll([
@@ -357,24 +381,29 @@ service cloud.firestore {
         ]) &&
         data.keys().hasOnly([
           'id', 'orderNumber', 'customerId', 'customerName', 'merchantOwnerUid',
-          'serviceType', 'cityId', 'storeNames', 'pickupLandmark', 'dropoffLandmark',
-          'itemsSummary', 'isRural', 'scheduledFor', 'hasVoiceNote', 'voiceNoteDurationSec',
-          'voiceNoteTranscript', 'distanceKm', 'subtotalPiasters', 'deliveryFeePiasters',
-          'cashbackAppliedPiasters', 'totalFarePiasters', 'paymentMethod', 'status',
-          'assignedCaptainId', 'assignedCaptainName', 'createdAt', 'updatedAt'
+          'serviceType', 'cityId', 'storeIds', 'storeNames', 'pickupLandmark', 'dropoffLandmark',
+          'itemsSummary', 'aiExtractedItems', 'prescriptionSummary', 'isRural',
+          'scheduledFor', 'hasVoiceNote', 'voiceNoteDurationSec', 'voiceNoteTranscript',
+          'distanceKm', 'subtotalPiasters', 'deliveryFeePiasters', 'driverTipPiasters',
+          'discountPiasters', 'promoCode', 'cashChangeForEgp', 'quoteTotalPiasters',
+          'quoteNotes', 'cashbackAppliedPiasters', 'totalFarePiasters', 'paymentMethod',
+          'status', 'assignedCaptainId', 'assignedCaptainName', 'createdAt', 'updatedAt'
         ]) &&
         isValidId(data.id) && data.id == orderId &&
         data.orderNumber is string && data.orderNumber.size() >= 4 && data.orderNumber.size() <= 24 &&
         isValidId(data.customerId) &&
         data.customerName is string && data.customerName.size() >= 1 && data.customerName.size() <= 80 &&
         (!('merchantOwnerUid' in data) || (data.merchantOwnerUid is string && data.merchantOwnerUid.size() <= 128)) &&
-        data.serviceType in ['restaurant_store', 'package', 'errand'] &&
+        data.serviceType in ['restaurant_store', 'package', 'errand', 'prescription_list'] &&
         isValidId(data.cityId) && data.cityId.size() <= 64 &&
+        (!('storeIds' in data) || (data.storeIds is list && data.storeIds.size() >= 1 && data.storeIds.size() <= 4 && data.storeIds[0] is string)) &&
         data.storeNames is list && data.storeNames.size() >= 1 && data.storeNames.size() <= 4 &&
         data.storeNames[0] is string && data.storeNames[0].size() <= 100 &&
         data.pickupLandmark is string && data.pickupLandmark.size() >= 2 && data.pickupLandmark.size() <= 140 &&
         data.dropoffLandmark is string && data.dropoffLandmark.size() >= 2 && data.dropoffLandmark.size() <= 140 &&
         data.itemsSummary is string && data.itemsSummary.size() >= 1 && data.itemsSummary.size() <= 500 &&
+        (!('aiExtractedItems' in data) || (data.aiExtractedItems is list && data.aiExtractedItems.size() <= 20 && (data.aiExtractedItems.size() == 0 || data.aiExtractedItems[0] is string))) &&
+        (!('prescriptionSummary' in data) || (data.prescriptionSummary is string && data.prescriptionSummary.size() <= 240)) &&
         data.isRural is bool &&
         data.scheduledFor is string && data.scheduledFor.size() >= 1 && data.scheduledFor.size() <= 40 &&
         data.hasVoiceNote is bool &&
@@ -383,13 +412,19 @@ service cloud.firestore {
         data.distanceKm is number && data.distanceKm >= 0 && data.distanceKm <= 75 &&
         data.subtotalPiasters is int && data.subtotalPiasters >= 0 && data.subtotalPiasters <= 5000000 &&
         data.deliveryFeePiasters is int && data.deliveryFeePiasters >= 0 && data.deliveryFeePiasters <= 100000 &&
+        (!('driverTipPiasters' in data) || (data.driverTipPiasters is int && data.driverTipPiasters >= 0 && data.driverTipPiasters <= 50000)) &&
+        (!('discountPiasters' in data) || (data.discountPiasters is int && data.discountPiasters >= 0 && data.discountPiasters <= 100000)) &&
+        (!('promoCode' in data) || (data.promoCode is string && data.promoCode.size() <= 24)) &&
+        (!('cashChangeForEgp' in data) || data.cashChangeForEgp in [0, 50, 100, 200]) &&
+        (!('quoteTotalPiasters' in data) || (data.quoteTotalPiasters is int && data.quoteTotalPiasters >= 0 && data.quoteTotalPiasters <= 5000000)) &&
+        (!('quoteNotes' in data) || (data.quoteNotes is string && data.quoteNotes.size() <= 240)) &&
         data.cashbackAppliedPiasters is int && data.cashbackAppliedPiasters >= 0 && data.cashbackAppliedPiasters <= 50000 &&
-        data.totalFarePiasters is int && data.totalFarePiasters >= 0 && data.totalFarePiasters <= 5100000 &&
+        data.totalFarePiasters is int && data.totalFarePiasters >= 0 && data.totalFarePiasters <= 5200000 &&
         data.paymentMethod in ['cash', 'wallet', 'vodafone_cash', 'instapay'] &&
         data.status in [
-          'created', 'accepted_by_store', 'preparing', 'ready_for_pickup',
-          'searching_captain', 'captain_assigned', 'at_pickup', 'picked_up',
-          'in_transit', 'delivered', 'cancelled'
+          'created', 'awaiting_quote', 'quote_ready', 'accepted_by_store', 'preparing',
+          'ready_for_pickup', 'searching_captain', 'captain_assigned', 'at_pickup',
+          'picked_up', 'in_transit', 'delivered', 'cancelled'
         ] &&
         (!('assignedCaptainId' in data) || (data.assignedCaptainId is string && data.assignedCaptainId.size() <= 128)) &&
         (!('assignedCaptainName' in data) || (data.assignedCaptainName is string && data.assignedCaptainName.size() <= 80)) &&
@@ -402,7 +437,7 @@ service cloud.firestore {
         existing().customerId == request.auth.uid ||
         existing().assignedCaptainId == request.auth.uid ||
         existing().merchantOwnerUid == request.auth.uid ||
-        (existing().status in ['ready_for_pickup', 'searching_captain'] && isValidVerifiedDriver(request.auth.uid)) ||
+        (existing().status in ['ready_for_pickup', 'searching_captain', 'awaiting_quote'] && isValidVerifiedDriver(request.auth.uid)) ||
         isAdmin()
       );
 
@@ -410,7 +445,7 @@ service cloud.firestore {
         resource.data.customerId == request.auth.uid ||
         resource.data.assignedCaptainId == request.auth.uid ||
         resource.data.merchantOwnerUid == request.auth.uid ||
-        resource.data.status in ['ready_for_pickup', 'searching_captain'] ||
+        resource.data.status in ['ready_for_pickup', 'searching_captain', 'awaiting_quote'] ||
         isBootstrappedOwnerEmail()
       );
 
@@ -418,7 +453,7 @@ service cloud.firestore {
         isVerifiedAccount() &&
         isValidDeliveryOrder(incoming(), orderId) &&
         incoming().customerId == request.auth.uid &&
-        incoming().status in ['created', 'searching_captain'] &&
+        incoming().status in ['created', 'searching_captain', 'awaiting_quote'] &&
         !('assignedCaptainId' in incoming()) &&
         incoming().createdAt == request.time &&
         incoming().updatedAt == request.time;
@@ -429,7 +464,6 @@ service cloud.firestore {
         incoming().id == existing().id &&
         incoming().orderNumber == existing().orderNumber &&
         incoming().customerId == existing().customerId &&
-        incoming().totalFarePiasters == existing().totalFarePiasters &&
         incoming().createdAt == existing().createdAt &&
         incoming().updatedAt == request.time &&
         (
@@ -437,24 +471,49 @@ service cloud.firestore {
           (
             !(existing().status in ['delivered', 'cancelled']) &&
             (
-              // Action: Customer cancels before pickup
+              // Action: Customer cancels before pickup, updates tip before completion, or approves merchant quote
               (
                 existing().customerId == request.auth.uid &&
-                existing().status in ['created', 'searching_captain'] &&
-                incoming().status == 'cancelled' &&
-                incoming().diff(existing()).affectedKeys().hasOnly(['status', 'updatedAt'])
+                (
+                  (
+                    existing().status in ['created', 'searching_captain', 'awaiting_quote', 'quote_ready'] &&
+                    incoming().status == 'cancelled' &&
+                    incoming().totalFarePiasters == existing().totalFarePiasters &&
+                    incoming().diff(existing()).affectedKeys().hasOnly(['status', 'updatedAt'])
+                  ) ||
+                  (
+                    existing().status == 'quote_ready' &&
+                    incoming().status in ['accepted_by_store', 'searching_captain'] &&
+                    incoming().diff(existing()).affectedKeys().hasOnly(['status', 'subtotalPiasters', 'totalFarePiasters', 'updatedAt'])
+                  ) ||
+                  (
+                    incoming().status == existing().status &&
+                    incoming().diff(existing()).affectedKeys().hasOnly(['driverTipPiasters', 'totalFarePiasters', 'updatedAt'])
+                  )
+                )
               ) ||
-              // Action: Merchant advances kitchen/store fulfillment
+              // Action: Merchant quotes a prescription/list or advances store fulfillment
               (
                 existing().merchantOwnerUid == request.auth.uid &&
-                incoming().status in ['accepted_by_store', 'preparing', 'ready_for_pickup', 'cancelled'] &&
-                incoming().diff(existing()).affectedKeys().hasOnly(['status', 'updatedAt'])
+                incoming().totalFarePiasters == existing().totalFarePiasters &&
+                (
+                  (
+                    existing().status == 'awaiting_quote' &&
+                    incoming().status == 'quote_ready' &&
+                    incoming().diff(existing()).affectedKeys().hasOnly(['status', 'quoteTotalPiasters', 'quoteNotes', 'updatedAt'])
+                  ) ||
+                  (
+                    incoming().status in ['accepted_by_store', 'preparing', 'ready_for_pickup', 'cancelled'] &&
+                    incoming().diff(existing()).affectedKeys().hasOnly(['status', 'updatedAt'])
+                  )
+                )
               ) ||
-              // Action: Verified Captain claims an open dispatch order
+              // Action: Verified Captain claims an open dispatch order (cash ceiling checked if cash)
               (
                 existing().status in ['ready_for_pickup', 'searching_captain'] &&
                 !('assignedCaptainId' in existing()) &&
                 isValidVerifiedDriver(request.auth.uid) &&
+                incoming().totalFarePiasters == existing().totalFarePiasters &&
                 incoming().assignedCaptainId == request.auth.uid &&
                 incoming().status == 'captain_assigned' &&
                 incoming().diff(existing()).affectedKeys().hasOnly(['assignedCaptainId', 'assignedCaptainName', 'status', 'updatedAt'])
@@ -462,6 +521,7 @@ service cloud.firestore {
               // Action: Assigned Captain advances delivery steps
               (
                 existing().assignedCaptainId == request.auth.uid &&
+                incoming().totalFarePiasters == existing().totalFarePiasters &&
                 incoming().status in ['at_pickup', 'picked_up', 'in_transit', 'delivered'] &&
                 incoming().diff(existing()).affectedKeys().hasOnly(['status', 'updatedAt'])
               )
@@ -471,7 +531,7 @@ service cloud.firestore {
     }
 
     // ------------------------------------------------------------------------
-    // Verified Local TukTuk, Scooter & Car Rides
+    // Verified Local TukTuk, Scooter & Car Rides (with 4-Digit Safety PIN)
     // ------------------------------------------------------------------------
     function isValidPassengerRide(data, rideId) {
       return data.keys().hasAll([
@@ -483,7 +543,9 @@ service cloud.firestore {
         data.keys().hasOnly([
           'id', 'rideNumber', 'passengerId', 'passengerName', 'vehicleTier', 'cityId',
           'pickupLandmark', 'dropoffLandmark', 'distanceKm', 'estimatedFarePiasters',
-          'cashbackAppliedPiasters', 'paymentMethod', 'status', 'assignedDriverId',
+          'driverTipPiasters', 'cashChangeForEgp', 'discountPiasters', 'promoCode',
+          'cashbackAppliedPiasters', 'paymentMethod', 'ridePin',
+          'requiresFamilyTrustedDriver', 'scheduledFor', 'status', 'assignedDriverId',
           'assignedDriverName', 'driverPlateLabel', 'safetySosTriggered', 'createdAt', 'updatedAt'
         ]) &&
         isValidId(data.id) && data.id == rideId &&
@@ -495,9 +557,16 @@ service cloud.firestore {
         data.pickupLandmark is string && data.pickupLandmark.size() >= 2 && data.pickupLandmark.size() <= 140 &&
         data.dropoffLandmark is string && data.dropoffLandmark.size() >= 2 && data.dropoffLandmark.size() <= 140 &&
         data.distanceKm is number && data.distanceKm > 0 && data.distanceKm <= 75 &&
-        data.estimatedFarePiasters is int && data.estimatedFarePiasters >= 1000 && data.estimatedFarePiasters <= 150000 &&
+        data.estimatedFarePiasters is int && data.estimatedFarePiasters >= 1000 && data.estimatedFarePiasters <= 200000 &&
+        (!('driverTipPiasters' in data) || (data.driverTipPiasters is int && data.driverTipPiasters >= 0 && data.driverTipPiasters <= 50000)) &&
+        (!('cashChangeForEgp' in data) || data.cashChangeForEgp in [0, 50, 100, 200]) &&
+        (!('discountPiasters' in data) || (data.discountPiasters is int && data.discountPiasters >= 0 && data.discountPiasters <= 100000)) &&
+        (!('promoCode' in data) || (data.promoCode is string && data.promoCode.size() <= 24)) &&
         data.cashbackAppliedPiasters is int && data.cashbackAppliedPiasters >= 0 && data.cashbackAppliedPiasters <= 50000 &&
         data.paymentMethod in ['cash', 'wallet', 'vodafone_cash', 'instapay'] &&
+        (!('ridePin' in data) || (data.ridePin is string && data.ridePin.size() >= 4 && data.ridePin.size() <= 6)) &&
+        (!('requiresFamilyTrustedDriver' in data) || data.requiresFamilyTrustedDriver is bool) &&
+        (!('scheduledFor' in data) || (data.scheduledFor is string && data.scheduledFor.size() >= 1 && data.scheduledFor.size() <= 40)) &&
         data.status in ['searching_driver', 'driver_assigned', 'driver_arrived', 'in_ride', 'completed', 'cancelled'] &&
         (!('assignedDriverId' in data) || (data.assignedDriverId is string && data.assignedDriverId.size() <= 128)) &&
         (!('assignedDriverName' in data) || (data.assignedDriverName is string && data.assignedDriverName.size() <= 80)) &&
@@ -538,7 +607,6 @@ service cloud.firestore {
         incoming().id == existing().id &&
         incoming().rideNumber == existing().rideNumber &&
         incoming().passengerId == existing().passengerId &&
-        incoming().estimatedFarePiasters == existing().estimatedFarePiasters &&
         incoming().createdAt == existing().createdAt &&
         incoming().updatedAt == request.time &&
         (
@@ -546,32 +614,165 @@ service cloud.firestore {
           (
             !(existing().status in ['completed', 'cancelled']) &&
             (
-              // Action: Passenger cancels before ride starts or triggers safety SOS
+              // Action: Passenger cancels before ride starts, updates tip, or triggers safety SOS
               (
                 existing().passengerId == request.auth.uid &&
                 (
-                  (existing().status in ['searching_driver', 'driver_assigned'] && incoming().status == 'cancelled' && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'updatedAt'])) ||
-                  (incoming().safetySosTriggered == true && incoming().diff(existing()).affectedKeys().hasOnly(['safetySosTriggered', 'updatedAt']))
+                  (
+                    existing().status in ['searching_driver', 'driver_assigned'] &&
+                    incoming().status == 'cancelled' &&
+                    incoming().estimatedFarePiasters == existing().estimatedFarePiasters &&
+                    incoming().diff(existing()).affectedKeys().hasOnly(['status', 'updatedAt'])
+                  ) ||
+                  (
+                    incoming().safetySosTriggered == true &&
+                    incoming().estimatedFarePiasters == existing().estimatedFarePiasters &&
+                    incoming().diff(existing()).affectedKeys().hasOnly(['safetySosTriggered', 'updatedAt'])
+                  ) ||
+                  (
+                    incoming().status == existing().status &&
+                    incoming().diff(existing()).affectedKeys().hasOnly(['driverTipPiasters', 'estimatedFarePiasters', 'updatedAt'])
+                  )
                 )
               ) ||
-              // Action: Verified Driver accepts open ride request
+              // Action: Verified Driver accepts open ride request (checks family-trust requirement if set)
               (
                 existing().status == 'searching_driver' &&
                 !('assignedDriverId' in existing()) &&
                 isValidVerifiedDriver(request.auth.uid) &&
+                (
+                  !('requiresFamilyTrustedDriver' in existing()) ||
+                  existing().requiresFamilyTrustedDriver == false ||
+                  get(/databases/$(database)/documents/driverProfiles/$(request.auth.uid)).data.isFamilyTrusted == true
+                ) &&
+                incoming().estimatedFarePiasters == existing().estimatedFarePiasters &&
                 incoming().assignedDriverId == request.auth.uid &&
                 incoming().status == 'driver_assigned' &&
                 incoming().diff(existing()).affectedKeys().hasOnly(['assignedDriverId', 'assignedDriverName', 'driverPlateLabel', 'status', 'updatedAt'])
               ) ||
-              // Action: Assigned Driver advances ride lifecycle
+              // Action: Assigned Driver advances ride lifecycle (ridePin verified before in_ride)
               (
                 existing().assignedDriverId == request.auth.uid &&
+                incoming().estimatedFarePiasters == existing().estimatedFarePiasters &&
                 incoming().status in ['driver_arrived', 'in_ride', 'completed'] &&
                 incoming().diff(existing()).affectedKeys().hasOnly(['status', 'updatedAt'])
               )
             )
           )
         );
+    }
+
+    // ------------------------------------------------------------------------
+    // Daily Village-to-Center Commute Subscriptions
+    // ------------------------------------------------------------------------
+    function isValidCommuteSubscription(data, subId) {
+      return data.keys().hasAll([
+          'id', 'passengerId', 'passengerName', 'fromLandmark', 'toLandmark',
+          'scheduleDays', 'morningTime', 'vehicleTier', 'planType', 'pricePiasters',
+          'status', 'createdAt', 'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'id', 'passengerId', 'passengerName', 'fromLandmark', 'toLandmark',
+          'scheduleDays', 'morningTime', 'returnTime', 'vehicleTier', 'planType',
+          'pricePiasters', 'status', 'createdAt', 'updatedAt'
+        ]) &&
+        isValidId(data.id) && data.id == subId &&
+        isValidId(data.passengerId) &&
+        data.passengerName is string && data.passengerName.size() >= 1 && data.passengerName.size() <= 80 &&
+        data.fromLandmark is string && data.fromLandmark.size() >= 2 && data.fromLandmark.size() <= 140 &&
+        data.toLandmark is string && data.toLandmark.size() >= 2 && data.toLandmark.size() <= 140 &&
+        data.scheduleDays is list && data.scheduleDays.size() >= 1 && data.scheduleDays.size() <= 7 &&
+        data.scheduleDays[0] is string &&
+        data.morningTime is string && data.morningTime.size() >= 4 && data.morningTime.size() <= 12 &&
+        (!('returnTime' in data) || (data.returnTime is string && data.returnTime.size() <= 12)) &&
+        data.vehicleTier in ['tuktuk', 'car'] &&
+        data.planType in ['weekly', 'monthly'] &&
+        data.pricePiasters is int && data.pricePiasters >= 2000 && data.pricePiasters <= 500000 &&
+        data.status in ['active', 'paused', 'cancelled'] &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    match /commuteSubscriptions/{subId} {
+      allow get: if isValidId(subId) && isVerifiedAccount() && (
+        existing().passengerId == request.auth.uid || isAdmin()
+      );
+      allow list: if isVerifiedAccount() && (
+        resource.data.passengerId == request.auth.uid || isBootstrappedOwnerEmail()
+      );
+      allow create: if isValidId(subId) && isVerifiedAccount() &&
+        isValidCommuteSubscription(incoming(), subId) &&
+        incoming().passengerId == request.auth.uid &&
+        incoming().status == 'active' &&
+        incoming().createdAt == request.time &&
+        incoming().updatedAt == request.time;
+      allow update: if isValidId(subId) && isVerifiedAccount() &&
+        isValidCommuteSubscription(incoming(), subId) &&
+        incoming().id == existing().id &&
+        incoming().passengerId == existing().passengerId &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().updatedAt == request.time &&
+        (
+          isAdmin() ||
+          (
+            existing().passengerId == request.auth.uid &&
+            existing().status != 'cancelled' &&
+            incoming().status in ['active', 'paused', 'cancelled'] &&
+            incoming().diff(existing()).affectedKeys().hasOnly(['status', 'updatedAt'])
+          )
+        );
+    }
+
+    // ------------------------------------------------------------------------
+    // Promo Codes & Referrals
+    // ------------------------------------------------------------------------
+    function isValidPromoCode(data, code) {
+      return data.keys().hasAll(['code', 'titleAr', 'discountPiasters', 'minOrderPiasters', 'isActive', 'updatedAt']) &&
+        data.keys().hasOnly(['code', 'titleAr', 'discountPiasters', 'minOrderPiasters', 'isActive', 'updatedAt']) &&
+        isValidId(data.code) && data.code == code &&
+        data.titleAr is string && data.titleAr.size() >= 2 && data.titleAr.size() <= 100 &&
+        data.discountPiasters is int && data.discountPiasters >= 100 && data.discountPiasters <= 50000 &&
+        data.minOrderPiasters is int && data.minOrderPiasters >= 0 && data.minOrderPiasters <= 500000 &&
+        data.isActive is bool &&
+        data.updatedAt is timestamp;
+    }
+
+    match /promoCodes/{code} {
+      allow get: if isValidId(code) && isSignedIn();
+      allow list: if isSignedIn() && resource.data.isActive == true;
+      allow create, update: if isValidId(code) && isAdmin() &&
+        isValidPromoCode(incoming(), code) &&
+        incoming().updatedAt == request.time;
+    }
+
+    function isValidReferralRecord(data, refId) {
+      return data.keys().hasAll(['id', 'referrerUid', 'referredUid', 'code', 'bonusPiasters', 'createdAt']) &&
+        data.keys().hasOnly(['id', 'referrerUid', 'referredUid', 'code', 'bonusPiasters', 'createdAt']) &&
+        isValidId(data.id) && data.id == refId &&
+        isValidId(data.referrerUid) &&
+        isValidId(data.referredUid) &&
+        data.referrerUid != data.referredUid &&
+        data.code is string && data.code.size() >= 4 && data.code.size() <= 24 &&
+        data.bonusPiasters == 1500 &&
+        data.createdAt is timestamp;
+    }
+
+    match /referrals/{refId} {
+      allow get: if isValidId(refId) && isVerifiedAccount() && (
+        existing().referrerUid == request.auth.uid ||
+        existing().referredUid == request.auth.uid ||
+        isAdmin()
+      );
+      allow list: if isVerifiedAccount() && (
+        resource.data.referrerUid == request.auth.uid ||
+        resource.data.referredUid == request.auth.uid ||
+        isBootstrappedOwnerEmail()
+      );
+      allow create: if isValidId(refId) && isVerifiedAccount() &&
+        isValidReferralRecord(incoming(), refId) &&
+        incoming().referredUid == request.auth.uid &&
+        incoming().createdAt == request.time;
+      allow update, delete: if false;
     }
 
     // ------------------------------------------------------------------------

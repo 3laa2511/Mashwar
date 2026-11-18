@@ -2,7 +2,7 @@
   "entities": {
     "UserAccount": {
       "title": "UserAccount",
-      "description": "Authenticated user account, role assignment, default village landmark, and cashback wallet balance.",
+      "description": "Authenticated user account, role assignment, default village landmark, referral code, and cashback wallet balance.",
       "type": "object",
       "properties": {
         "uid": {
@@ -44,6 +44,19 @@
         "cashbackBalancePiasters": {
           "type": "integer"
         },
+        "loyaltyPoints": {
+          "type": "integer"
+        },
+        "referralCode": {
+          "type": "string",
+          "minLength": 4,
+          "maxLength": 24
+        },
+        "referredBy": {
+          "type": "string",
+          "minLength": 0,
+          "maxLength": 128
+        },
         "createdAt": {
           "type": "string",
           "format": "date-time"
@@ -66,7 +79,7 @@
     },
     "DriverProfile": {
       "title": "DriverProfile",
-      "description": "Publicly visible verified local TukTuk, Scooter, Motorcycle, and Car driver profile.",
+      "description": "Publicly visible verified local TukTuk, Scooter, Motorcycle, and Car driver profile with family trust badge and cash ceiling.",
       "type": "object",
       "properties": {
         "uid": {
@@ -100,6 +113,15 @@
         },
         "isOnline": {
           "type": "boolean"
+        },
+        "isFamilyTrusted": {
+          "type": "boolean"
+        },
+        "cashHoldingPiasters": {
+          "type": "integer"
+        },
+        "cashCeilingPiasters": {
+          "type": "integer"
         },
         "ratingAverage": {
           "type": "number"
@@ -274,7 +296,7 @@
     },
     "DeliveryOrder": {
       "title": "DeliveryOrder",
-      "description": "Single-store, multi-stop, scheduled, or voice-note delivery/errand order.",
+      "description": "Single-store, multi-stop, AI prescription/list quote, scheduled, or voice-note delivery/errand order.",
       "type": "object",
       "properties": {
         "id": {
@@ -306,13 +328,16 @@
         },
         "serviceType": {
           "type": "string",
-          "enum": ["restaurant_store", "package", "errand"]
+          "enum": ["restaurant_store", "package", "errand", "prescription_list"]
         },
         "cityId": {
           "type": "string",
           "minLength": 1,
           "maxLength": 64,
           "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "storeIds": {
+          "type": "array"
         },
         "storeNames": {
           "type": "array"
@@ -331,6 +356,14 @@
           "type": "string",
           "minLength": 1,
           "maxLength": 500
+        },
+        "aiExtractedItems": {
+          "type": "array"
+        },
+        "prescriptionSummary": {
+          "type": "string",
+          "minLength": 0,
+          "maxLength": 240
         },
         "isRural": {
           "type": "boolean"
@@ -360,6 +393,28 @@
         "deliveryFeePiasters": {
           "type": "integer"
         },
+        "driverTipPiasters": {
+          "type": "integer"
+        },
+        "discountPiasters": {
+          "type": "integer"
+        },
+        "promoCode": {
+          "type": "string",
+          "minLength": 0,
+          "maxLength": 24
+        },
+        "cashChangeForEgp": {
+          "type": "integer"
+        },
+        "quoteTotalPiasters": {
+          "type": "integer"
+        },
+        "quoteNotes": {
+          "type": "string",
+          "minLength": 0,
+          "maxLength": 240
+        },
         "cashbackAppliedPiasters": {
           "type": "integer"
         },
@@ -374,6 +429,8 @@
           "type": "string",
           "enum": [
             "created",
+            "awaiting_quote",
+            "quote_ready",
             "accepted_by_store",
             "preparing",
             "ready_for_pickup",
@@ -434,7 +491,7 @@
     },
     "PassengerRide": {
       "title": "PassengerRide",
-      "description": "Verified local TukTuk, Scooter, or Economy Car passenger ride in El Bagour and Menoufia.",
+      "description": "Verified local TukTuk, Scooter, or Economy Car passenger ride in El Bagour and Menoufia with 4-digit OTP safety PIN and family trust mode.",
       "type": "object",
       "properties": {
         "id": {
@@ -485,12 +542,39 @@
         "estimatedFarePiasters": {
           "type": "integer"
         },
+        "driverTipPiasters": {
+          "type": "integer"
+        },
+        "cashChangeForEgp": {
+          "type": "integer"
+        },
+        "discountPiasters": {
+          "type": "integer"
+        },
+        "promoCode": {
+          "type": "string",
+          "minLength": 0,
+          "maxLength": 24
+        },
         "cashbackAppliedPiasters": {
           "type": "integer"
         },
         "paymentMethod": {
           "type": "string",
           "enum": ["cash", "wallet", "vodafone_cash", "instapay"]
+        },
+        "ridePin": {
+          "type": "string",
+          "minLength": 4,
+          "maxLength": 6
+        },
+        "requiresFamilyTrustedDriver": {
+          "type": "boolean"
+        },
+        "scheduledFor": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 40
         },
         "status": {
           "type": "string",
@@ -549,6 +633,161 @@
         "updatedAt"
       ]
     },
+    "CommuteSubscription": {
+      "title": "CommuteSubscription",
+      "description": "Recurring daily village-to-center or university commute pass in El Bagour and Menoufia.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "passengerId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "passengerName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 80
+        },
+        "fromLandmark": {
+          "type": "string",
+          "minLength": 2,
+          "maxLength": 140
+        },
+        "toLandmark": {
+          "type": "string",
+          "minLength": 2,
+          "maxLength": 140
+        },
+        "scheduleDays": {
+          "type": "array"
+        },
+        "morningTime": {
+          "type": "string",
+          "minLength": 4,
+          "maxLength": 12
+        },
+        "returnTime": {
+          "type": "string",
+          "minLength": 0,
+          "maxLength": 12
+        },
+        "vehicleTier": {
+          "type": "string",
+          "enum": ["tuktuk", "car"]
+        },
+        "planType": {
+          "type": "string",
+          "enum": ["weekly", "monthly"]
+        },
+        "pricePiasters": {
+          "type": "integer"
+        },
+        "status": {
+          "type": "string",
+          "enum": ["active", "paused", "cancelled"]
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "id",
+        "passengerId",
+        "passengerName",
+        "fromLandmark",
+        "toLandmark",
+        "scheduleDays",
+        "morningTime",
+        "vehicleTier",
+        "planType",
+        "pricePiasters",
+        "status",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "PromoCode": {
+      "title": "PromoCode",
+      "description": "Discount coupon code for El Bagour deliveries and rides.",
+      "type": "object",
+      "properties": {
+        "code": {
+          "type": "string",
+          "minLength": 3,
+          "maxLength": 24,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "titleAr": {
+          "type": "string",
+          "minLength": 2,
+          "maxLength": 100
+        },
+        "discountPiasters": {
+          "type": "integer"
+        },
+        "minOrderPiasters": {
+          "type": "integer"
+        },
+        "isActive": {
+          "type": "boolean"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["code", "titleAr", "discountPiasters", "minOrderPiasters", "isActive", "updatedAt"]
+    },
+    "ReferralRecord": {
+      "title": "ReferralRecord",
+      "description": "Friend referral bonus record linking referrer and referred customer.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 80,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "referrerUid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "referredUid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "code": {
+          "type": "string",
+          "minLength": 4,
+          "maxLength": 24
+        },
+        "bonusPiasters": {
+          "type": "integer"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["id", "referrerUid", "referredUid", "code", "bonusPiasters", "createdAt"]
+    },
     "ChatMessage": {
       "title": "ChatMessage",
       "description": "Real-time message in an order or ride communication thread.",
@@ -589,7 +828,7 @@
     },
     "WalletTransaction": {
       "title": "WalletTransaction",
-      "description": "Immutable loyalty cashback credit or redemption entry.",
+      "description": "Immutable loyalty cashback credit, top-up proof, referral bonus, or redemption entry.",
       "type": "object",
       "properties": {
         "id": {
@@ -606,7 +845,14 @@
         },
         "type": {
           "type": "string",
-          "enum": ["welcome_bonus", "cashback_earn", "cashback_redeem", "admin_adjustment"]
+          "enum": [
+            "welcome_bonus",
+            "cashback_earn",
+            "cashback_redeem",
+            "referral_bonus",
+            "topup_proof",
+            "admin_adjustment"
+          ]
         },
         "amountPiasters": {
           "type": "integer"
@@ -616,6 +862,11 @@
           "minLength": 1,
           "maxLength": 128,
           "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "proofRef": {
+          "type": "string",
+          "minLength": 0,
+          "maxLength": 64
         },
         "titleAr": {
           "type": "string",
@@ -633,15 +884,15 @@
   "firestore": {
     "/users/{userId}": {
       "schema": { "$ref": "#/entities/UserAccount" },
-      "description": "Private user account profiles, default landmark, role, and cashback balance."
+      "description": "Private user account profiles, default landmark, referral code, role, and cashback balance."
     },
     "/users/{userId}/walletTransactions/{txId}": {
       "schema": { "$ref": "#/entities/WalletTransaction" },
-      "description": "User loyalty cashback earn and redemption ledger entries."
+      "description": "User loyalty cashback earn, top-up proof, referral bonus, and redemption ledger entries."
     },
     "/driverProfiles/{driverId}": {
       "schema": { "$ref": "#/entities/DriverProfile" },
-      "description": "Publicly readable verified driver summary without private phone or national ID PII."
+      "description": "Publicly readable verified driver summary with family trust badge and cash ceiling."
     },
     "/stores/{storeId}": {
       "schema": { "$ref": "#/entities/StoreFront" },
@@ -653,11 +904,23 @@
     },
     "/orders/{orderId}": {
       "schema": { "$ref": "#/entities/DeliveryOrder" },
-      "description": "Multi-stop, scheduled, or voice-note delivery orders."
+      "description": "Single-store, multi-stop, AI prescription/list quote, scheduled, or voice-note delivery orders."
     },
     "/rides/{rideId}": {
       "schema": { "$ref": "#/entities/PassengerRide" },
-      "description": "Verified local TukTuk, Scooter, and Car passenger rides."
+      "description": "Verified local TukTuk, Scooter, and Car passenger rides with 4-digit OTP safety PIN."
+    },
+    "/commuteSubscriptions/{subId}": {
+      "schema": { "$ref": "#/entities/CommuteSubscription" },
+      "description": "Recurring daily village-to-center commute subscriptions."
+    },
+    "/promoCodes/{code}": {
+      "schema": { "$ref": "#/entities/PromoCode" },
+      "description": "Active discount coupons for El Bagour users."
+    },
+    "/referrals/{refId}": {
+      "schema": { "$ref": "#/entities/ReferralRecord" },
+      "description": "Friend referral bonus records."
     },
     "/threads/{threadId}/messages/{messageId}": {
       "schema": { "$ref": "#/entities/ChatMessage" },

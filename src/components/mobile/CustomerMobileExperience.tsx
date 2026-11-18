@@ -32,7 +32,6 @@ import {
   ArrowUpDown,
   HeadphonesIcon,
   Zap,
-  Lock,
   RefreshCw,
   Share2,
   Edit3,
@@ -48,14 +47,29 @@ import {
   Moon,
   Volume2,
   VolumeX,
-  RotateCcw
+  RotateCcw,
+  Heart,
+  Calendar,
+  Mic,
+  Camera,
+  Tag,
+  Repeat,
+  Gift,
+  Shield,
+  KeyRound
 } from 'lucide-react';
 import { EgyptianMapCanvas } from './EgyptianMapCanvas';
 import { PinchZoomPan } from '../common/PinchZoomPan';
 import { OrderTrackingScreen } from './OrderTrackingScreen';
 import { ActiveOrderStaticMapThumbnail } from './ActiveOrderStaticMapThumbnail';
+import { OrderTrackingStatusCard } from './OrderTrackingStatusCard';
+import { SosEmergencySheet } from './SosEmergencySheet';
 import { MultiStepOrderWizard, type WizardServiceCategory } from './MultiStepOrderWizard';
 import { auth } from '../../lib/firebase';
+import {
+  calculateCommuteSubscriptionPricePiasters,
+  type CashChangeOptionEgp,
+} from '../../lib/firestoreSchemas';
 import {
   useMarketplace,
   StoreItem,
@@ -141,6 +155,9 @@ export const CustomerMobileExperience: React.FC<CustomerMobileExperienceProps> =
     products,
     cartItems,
     cartStoreId,
+    cartStoreIds,
+    cartStoreGroups,
+    cartMultiStopSavingsEgp,
     addToCart,
     removeFromCart,
     updateCartItemQty,
@@ -155,17 +172,33 @@ export const CustomerMobileExperience: React.FC<CustomerMobileExperienceProps> =
     simulateInstantCaptainAccept,
     captainUpdateStep,
     customerCancelOrder,
+    customerApproveOrderQuote,
     rateOrderCaptain,
     updateOrderNotes,
     updateOrderFeedback,
+    updateOrderDriverTip,
     refreshOrderStatus,
     activeCustomerOrder,
+    activeOrderTrackingCard,
+    favoriteProductIds,
+    favoriteStoreIds,
+    toggleFavoriteProduct,
+    toggleFavoriteStore,
+    isFavoriteProduct,
+    isFavoriteStore,
     chatMessages,
     sendChatMessage,
     setIsAuthModalOpen,
     customerWalletBalanceEgp,
     walletTransactions,
-    topUpCustomerWallet,
+    topUpCustomerWalletWithProof,
+    referralCode,
+    referredByCode,
+    applyPromoCode,
+    redeemReferralCode,
+    commuteSubscriptions,
+    createCommuteSubscription,
+    toggleCommuteSubscriptionStatus,
     loyaltyPoints,
     loyaltyCashbackBalanceEgp,
     loyaltyTier,
@@ -198,34 +231,61 @@ export const CustomerMobileExperience: React.FC<CustomerMobileExperienceProps> =
 
   // Browsing & Store Views
   const [selectedStore, setSelectedStore] = useState<StoreItem | null>(null);
-  const [storeCategoryFilter, setStoreCategoryFilter] = useState<'all' | 'restaurant' | 'pharmacy' | 'supermarket'>('all');
+  const [storeCategoryFilter, setStoreCategoryFilter] = useState<'all' | 'favorites' | 'restaurant' | 'pharmacy' | 'supermarket'>('all');
   const [searchQuery, setSearchQuery] = useState('');
 
-  // Ride & Package Booking Flow State
+  // Ride & Package Booking Flow State (Unified TukTuk/Car + Errands + Commute Subscriptions)
   const [wizardInitialCategory, setWizardInitialCategory] = useState<WizardServiceCategory>('ride');
   const [useMultiStepWizard, setUseMultiStepWizard] = useState<boolean>(true);
-  const [bookingServiceMode, setBookingServiceMode] = useState<'errand' | 'package' | 'heavy' | 'passenger_locked'>('errand');
+  const [bookingServiceMode, setBookingServiceMode] = useState<'tuktuk_car' | 'errand' | 'package' | 'commute'>('tuktuk_car');
+  const [quickVehicleTier, setQuickVehicleTier] = useState<'tuktuk' | 'car'>('tuktuk');
+  const [quickFamilyTrusted, setQuickFamilyTrusted] = useState<boolean>(false);
   const [pickupLandmarkId, setPickupLandmarkId] = useState<string>('lm_station');
-  const [dropoffLandmarkId, setDropoffLandmarkId] = useState<string>('lm_army_st');
+  const [dropoffLandmarkId, setDropoffLandmarkId] = useState<string>('lm_shorouk');
   const [customPickupNote, setCustomPickupNote] = useState<string>('');
   const [customDropoffNote, setCustomDropoffNote] = useState<string>('');
-  const [tripNotes, setTripNotes] = useState<string>('مشوار خاص سريع داخل الباجور');
+  const [tripNotes, setTripNotes] = useState<string>('مشوار سريع داخل الباجور');
   const [recipientPhone, setRecipientPhone] = useState<string>('01012345678');
   const [bookingPaymentMethod, setBookingPaymentMethod] = useState<'cash' | 'wallet' | 'instapay' | 'vodafone_cash'>('cash');
   const [bookingError, setBookingError] = useState<string | null>(null);
   const [quoteData, setQuoteData] = useState<QuotePreviewData | null>(null);
   const [isLoadingQuote, setIsLoadingQuote] = useState<boolean>(false);
 
+  // Daily Village-to-Center Commute Subscription State
+  const [commuteFrom, setCommuteFrom] = useState<string>('قرية كفر الباجور');
+  const [commuteTo, setCommuteTo] = useState<string>('ميدان المحطة - وسط الباجور');
+  const [commuteDays, setCommuteDays] = useState<string[]>(['السبت', 'الأحد', 'الإثنين', 'الثلاثاء', 'الأربعاء']);
+  const [commuteMorning, setCommuteMorning] = useState<string>('07:30');
+  const [commuteReturn, setCommuteReturn] = useState<string>('15:00');
+  const [commuteHasReturn, setCommuteHasReturn] = useState<boolean>(true);
+  const [commuteVehicle, setCommuteVehicle] = useState<'tuktuk' | 'car'>('tuktuk');
+  const [commutePlan, setCommutePlan] = useState<'weekly' | 'monthly'>('monthly');
+  const [commuteFeedback, setCommuteFeedback] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+
   // Cart / Checkout Drawer state
   const [isCartOpen, setIsCartOpen] = useState(false);
   const [deliveryAddress, setDeliveryAddress] = useState('شارع الجيش - برج الشروق، الباجور');
   const [paymentMethod, setPaymentMethod] = useState<'cash' | 'wallet' | 'instapay' | 'vodafone_cash'>('cash');
   const [orderNotes, setOrderNotes] = useState('');
+  const [cartDriverTipEgp, setCartDriverTipEgp] = useState<number>(0);
+  const [cartCustomTipInput, setCartCustomTipInput] = useState<string>('');
+  const [cartCashChangeForEgp, setCartCashChangeForEgp] = useState<CashChangeOptionEgp>(0);
+  const [cartPromoInput, setCartPromoInput] = useState<string>('');
+  const [cartAppliedPromo, setCartAppliedPromo] = useState<{ code: string; discountEgp: number; titleAr: string } | null>(null);
+  const [cartPromoFeedback, setCartPromoFeedback] = useState<string | null>(null);
+  const [isApplyingPromo, setIsApplyingPromo] = useState<boolean>(false);
 
-  // Wallet Top-Up Modal State
+  // Wallet Top-Up Proof Modal & Referral State
   const [showAddFundsModal, setShowAddFundsModal] = useState(false);
   const [topUpAmountEgp, setTopUpAmountEgp] = useState<number>(100);
   const [topUpMethodLabel, setTopUpMethodLabel] = useState<string>('إنستاباي (InstaPay)');
+  const [topUpProofRef, setTopUpProofRef] = useState<string>('');
+  const [topUpErrorMsg, setTopUpErrorMsg] = useState<string | null>(null);
+  const [topUpSuccessMsg, setTopUpSuccessMsg] = useState<string | null>(null);
+  const [isSubmittingTopUp, setIsSubmittingTopUp] = useState<boolean>(false);
+  const [referralInput, setReferralInput] = useState<string>('');
+  const [referralMsg, setReferralMsg] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+  const [copiedReferralCode, setCopiedReferralCode] = useState<boolean>(false);
 
   // Notifications & Support Modals
   const [showNotificationsDrawer, setShowNotificationsDrawer] = useState(false);
@@ -234,12 +294,13 @@ export const CustomerMobileExperience: React.FC<CustomerMobileExperienceProps> =
   const [complaintSubject, setComplaintSubject] = useState('');
   const [complaintDetails, setComplaintDetails] = useState('');
 
-  // Conflict modal state when trying to add from another store
+  // Conflict modal state when trying to exceed 4-store multi-stop cap
   const [conflictModal, setConflictModal] = useState<{
     show: boolean;
     pendingProduct?: ProductItem;
     pendingStore?: StoreItem;
     currentStoreName?: string;
+    limitReached?: boolean;
   }>({ show: false });
 
   // Chat modal state
@@ -484,20 +545,24 @@ export const CustomerMobileExperience: React.FC<CustomerMobileExperienceProps> =
     setTimeout(() => setMobileNotesSaved(false), 2000);
   };
 
-  // Add Tip (Captain Gratuity) state inside mobile app
-  const [mobileTipEgp, setMobileTipEgp] = useState<number>(0);
+  // Add Tip (Captain Gratuity) state synced with MarketplaceProvider order
+  const mobileTipEgp = activeCustomerOrder?.driverTipEgp ?? 0;
   const [mobileCustomTipInput, setMobileCustomTipInput] = useState<string>('');
 
   const handleSelectMobilePresetTip = (amount: number) => {
-    setMobileTipEgp(amount);
-    setMobileCustomTipInput(String(amount));
+    if (activeCustomerOrder) {
+      updateOrderDriverTip(activeCustomerOrder.id, amount);
+    }
+    setMobileCustomTipInput(amount > 0 ? String(amount) : '');
     setIsFareBreakdownOpen(true);
   };
 
   const handleApplyMobileCustomTip = (e: React.FormEvent) => {
     e.preventDefault();
-    const parsed = Math.max(0, Math.round(Number(mobileCustomTipInput) || 0));
-    setMobileTipEgp(parsed);
+    const parsed = Math.max(0, Math.min(500, Math.round(Number(mobileCustomTipInput) || 0)));
+    if (activeCustomerOrder) {
+      updateOrderDriverTip(activeCustomerOrder.id, parsed);
+    }
     setIsFareBreakdownOpen(true);
   };
 
@@ -522,8 +587,6 @@ export const CustomerMobileExperience: React.FC<CustomerMobileExperienceProps> =
   const [copiedCaptainPhone, setCopiedCaptainPhone] = useState(false);
   const [showCancelConfirmModal, setShowCancelConfirmModal] = useState(false);
   const [showSosEmergencyModal, setShowSosEmergencyModal] = useState(false);
-  const [mobileSosLocationShared, setMobileSosLocationShared] = useState(false);
-  const [mobileSosCalledService, setMobileSosCalledService] = useState<string | null>(null);
   const [summarySheetOrder, setSummarySheetOrder] = useState<MarketplaceOrder | null>(null);
 
   // Order History Feedback drafts & saved indicators
@@ -538,13 +601,13 @@ export const CustomerMobileExperience: React.FC<CustomerMobileExperienceProps> =
   useEffect(() => {
     let isMounted = true;
     const computeQuote = async () => {
-      if (pickupLandmark.id === dropoffLandmark.id) {
-        setBookingError('يرجى اختيار نقطة وصول مختلفة عن نقطة الانطلاق لحساب المسافة والتسعيرة.');
+      if (bookingServiceMode === 'commute') {
+        setBookingError(null);
         setQuoteData(null);
         return;
       }
-      if (bookingServiceMode === 'passenger_locked') {
-        setBookingError(null);
+      if (pickupLandmark.id === dropoffLandmark.id) {
+        setBookingError('يرجى اختيار نقطة وصول مختلفة عن نقطة الانطلاق لحساب المسافة والتسعيرة.');
         setQuoteData(null);
         return;
       }
@@ -558,14 +621,14 @@ export const CustomerMobileExperience: React.FC<CustomerMobileExperienceProps> =
         ).toFixed(1)
       );
       const isRuralRoute = pickupLandmark.isRural || dropoffLandmark.isRural;
-      const heavyExtraEgp = bookingServiceMode === 'heavy' ? 10 : 0;
+      const carMultiplierEgp = bookingServiceMode === 'tuktuk_car' && quickVehicleTier === 'car' ? 12 : 0;
 
       try {
         const res = await fetch('/api/v1/quotes', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            serviceTypeId: bookingServiceMode === 'errand' ? 'errand' : 'package',
+            serviceTypeId: bookingServiceMode === 'package' ? 'package' : 'errand',
             distanceKm: distKm,
             isRuralOrVillage: isRuralRoute,
             pickupLandmark: pickupLandmark.nameAr,
@@ -577,7 +640,7 @@ export const CustomerMobileExperience: React.FC<CustomerMobileExperienceProps> =
           const json = await res.json();
           if (isMounted && json.data) {
             const q = json.data;
-            const baseFareEgp = Math.round((q.baseFarePiasters ?? 1500) / 100) + heavyExtraEgp;
+            const baseFareEgp = Math.round((q.baseFarePiasters ?? 1500) / 100) + carMultiplierEgp;
             const distanceFareEgp = Math.round((q.distanceFarePiasters ?? 0) / 100);
             const ruralSurchargeEgp = Math.round((q.ruralSurchargePiasters ?? 0) / 100);
             const platformFeeEgp = Math.round((q.platformFeePiasters ?? 200) / 100);
@@ -606,7 +669,7 @@ export const CustomerMobileExperience: React.FC<CustomerMobileExperienceProps> =
       }
 
       if (isMounted) {
-        const baseFareEgp = (bookingServiceMode === 'heavy' ? 25 : 15);
+        const baseFareEgp = 15 + carMultiplierEgp;
         const distanceFareEgp = Math.max(0, Math.round(Math.max(0, distKm - 1.5) * 4));
         const ruralSurchargeEgp = isRuralRoute ? 5 : 0;
         const platformFeeEgp = 2;
@@ -632,7 +695,7 @@ export const CustomerMobileExperience: React.FC<CustomerMobileExperienceProps> =
     return () => {
       isMounted = false;
     };
-  }, [pickupLandmarkId, dropoffLandmarkId, bookingServiceMode, pickupLandmark, dropoffLandmark]);
+  }, [pickupLandmarkId, dropoffLandmarkId, bookingServiceMode, quickVehicleTier, pickupLandmark, dropoffLandmark]);
 
   // Swap pickup and dropoff
   const handleSwapLocations = () => {
@@ -643,10 +706,7 @@ export const CustomerMobileExperience: React.FC<CustomerMobileExperienceProps> =
 
   // Submit direct Ride / Errand / Package booking
   const handleConfirmRideOrPackage = () => {
-    if (bookingServiceMode === 'passenger_locked') {
-      setBookingError('خدمة نقل الركاب بالسيارات الخاصة معلقة نظامياً التزاماً بالقانون رقم ٧٣ لسنة ٢٠١٨. يمكنك حجز "مشوار خاص سريع (سكوتر)" أو "توصيل طرد".');
-      return;
-    }
+    if (bookingServiceMode === 'commute') return;
     if (pickupLandmarkId === dropoffLandmarkId) {
       setBookingError('نقطة الانطلاق ونقطة الوصول متطابقتان. يرجى اختيار وجهة مختلفة.');
       return;
@@ -670,10 +730,10 @@ export const CustomerMobileExperience: React.FC<CustomerMobileExperienceProps> =
       : dropoffLandmark.nameAr;
 
     const created = submitRideOrPackageOrder({
-      serviceType: bookingServiceMode === 'errand' ? 'errand' : 'package',
+      serviceType: bookingServiceMode === 'tuktuk_car' ? 'ride' : bookingServiceMode,
       vehicleCategory:
-        bookingServiceMode === 'heavy'
-          ? 'van'
+        bookingServiceMode === 'tuktuk_car'
+          ? quickVehicleTier
           : bookingServiceMode === 'package'
           ? 'motorcycle'
           : 'scooter',
@@ -683,11 +743,12 @@ export const CustomerMobileExperience: React.FC<CustomerMobileExperienceProps> =
       isRural: pickupLandmark.isRural || dropoffLandmark.isRural,
       paymentMethod: bookingPaymentMethod,
       notes: tripNotes,
+      requiresFamilyTrustedDriver: bookingServiceMode === 'tuktuk_car' ? quickFamilyTrusted : false,
       itemDescription:
-        bookingServiceMode === 'errand'
+        bookingServiceMode === 'tuktuk_car'
+          ? `مشوار ${quickVehicleTier === 'car' ? 'سيارة ملاكي مكيفة' : 'توكتوك معتمد'}: ${tripNotes || 'رحلة ركاب داخل الباجور'}`
+          : bookingServiceMode === 'errand'
           ? `مشوار خاص سريع: ${tripNotes || 'طلب خاص داخل الباجور'}`
-          : bookingServiceMode === 'heavy'
-          ? `نقل خفيف وبضائع: ${tripNotes || 'شحنة تجارية'}`
           : `توصيل طرد وأمانة: ${tripNotes || 'طرد مغلف'}`,
       recipientPhone: recipientPhone.trim(),
       quoteData: {
@@ -711,7 +772,11 @@ export const CustomerMobileExperience: React.FC<CustomerMobileExperienceProps> =
   // Filtered stores
   const filteredStores = stores.filter((s) => {
     const matchCategory =
-      storeCategoryFilter === 'all' || s.category === storeCategoryFilter;
+      storeCategoryFilter === 'all'
+        ? true
+        : storeCategoryFilter === 'favorites'
+        ? isFavoriteStore(s.id)
+        : s.category === storeCategoryFilter;
     const matchSearch =
       s.nameAr.toLowerCase().includes(searchQuery.toLowerCase()) ||
       s.categoryAr.toLowerCase().includes(searchQuery.toLowerCase()) ||
@@ -719,10 +784,10 @@ export const CustomerMobileExperience: React.FC<CustomerMobileExperienceProps> =
     return matchCategory && matchSearch;
   });
 
-  // Current store in cart
+  // Current primary store in cart
   const currentCartStore = stores.find((s) => s.id === cartStoreId);
 
-  // Handle Add to cart with single-store rule
+  // Handle Add to cart (supports up to 4 stores in one multi-stop combined trip)
   const handleAddProduct = (prod: ProductItem, store: StoreItem) => {
     const res = addToCart(prod, store);
     if (!res.success) {
@@ -731,6 +796,7 @@ export const CustomerMobileExperience: React.FC<CustomerMobileExperienceProps> =
         pendingProduct: prod,
         pendingStore: store,
         currentStoreName: res.conflictStore,
+        limitReached: res.limitReached,
       });
     }
   };
@@ -742,15 +808,41 @@ export const CustomerMobileExperience: React.FC<CustomerMobileExperienceProps> =
     setConflictModal({ show: false });
   };
 
+  // Handle Apply Promo Code inside Cart
+  const handleApplyCartPromo = async () => {
+    if (!cartPromoInput.trim()) return;
+    setIsApplyingPromo(true);
+    setCartPromoFeedback(null);
+    const res = await applyPromoCode(cartPromoInput.trim(), cartTotalEgp);
+    setIsApplyingPromo(false);
+    if (res.valid) {
+      setCartAppliedPromo({ code: res.code, discountEgp: res.discountEgp, titleAr: res.titleAr });
+      setCartPromoFeedback(`تم تطبيق ${res.titleAr} (خصم ${res.discountEgp} ج.م)`);
+    } else {
+      setCartAppliedPromo(null);
+      setCartPromoFeedback(res.errorAr || 'الكود غير صالح.');
+    }
+  };
+
   // Handle Checkout submission
   const handlePlaceOrder = () => {
     const newOrd = submitNewOrder({
       deliveryAddress,
       paymentMethod,
       notes: orderNotes,
+      driverTipEgp: cartDriverTipEgp,
+      cashChangeForEgp: paymentMethod === 'cash' ? cartCashChangeForEgp : 0,
+      promoCode: cartAppliedPromo?.code,
+      discountEgp: cartAppliedPromo?.discountEgp || 0,
     });
     if (newOrd) {
       setIsCartOpen(false);
+      setCartDriverTipEgp(0);
+      setCartCustomTipInput('');
+      setCartCashChangeForEgp(0);
+      setCartPromoInput('');
+      setCartAppliedPromo(null);
+      setCartPromoFeedback(null);
       setSelectedStore(null);
       setActiveTab('home');
     }
@@ -764,12 +856,28 @@ export const CustomerMobileExperience: React.FC<CustomerMobileExperienceProps> =
     setInputChatText('');
   };
 
-  // Handle Add Funds submission
-  const handleConfirmTopUp = (e: React.FormEvent) => {
+  // Handle Verified Wallet Top-Up submission with Proof Reference
+  const handleConfirmTopUp = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (topUpAmountEgp <= 0) return;
-    topUpCustomerWallet(topUpAmountEgp, topUpMethodLabel);
-    setShowAddFundsModal(false);
+    setTopUpErrorMsg(null);
+    setTopUpSuccessMsg(null);
+    if (topUpAmountEgp < 10) {
+      setTopUpErrorMsg('الحد الأدنى للشحن ١٠ ج.م.');
+      return;
+    }
+    setIsSubmittingTopUp(true);
+    const res = await topUpCustomerWalletWithProof(topUpAmountEgp, topUpMethodLabel, topUpProofRef);
+    setIsSubmittingTopUp(false);
+    if (!res.success) {
+      setTopUpErrorMsg(res.messageAr);
+      return;
+    }
+    setTopUpSuccessMsg(res.messageAr);
+    setTopUpProofRef('');
+    window.setTimeout(() => {
+      setShowAddFundsModal(false);
+      setTopUpSuccessMsg(null);
+    }, 1100);
   };
 
   // Handle Complaint submission
@@ -1046,21 +1154,36 @@ export const CustomerMobileExperience: React.FC<CustomerMobileExperienceProps> =
                         </span>
                       </div>
                       <p className="text-[10px] text-slate-300 truncate mt-0.5">
-                        {activeCustomerOrder.storeName} • {activeCustomerOrder.totalEgp + mobileTipEgp}.00 ج.م
+                        {activeCustomerOrder.storeName} • {activeCustomerOrder.totalEgp}.00 ج.م
                       </p>
                     </div>
                   </div>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      triggerMobileHapticFeedback();
-                      setIsTrackingSheetMinimized(false);
-                    }}
-                    className="px-3 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-[11px] font-extrabold flex items-center gap-1 shrink-0 shadow-sm cursor-pointer hover:scale-105 active:scale-95 transition"
-                  >
-                    <span>توسيع التتبع</span>
-                    <ChevronUp className="w-3.5 h-3.5" />
-                  </button>
+                  <div className="flex items-center gap-1.5 shrink-0">
+                    <button
+                      type="button"
+                      data-testid="sos-minimized-btn"
+                      onClick={() => {
+                        triggerMobileHapticFeedback();
+                        setShowSosEmergencyModal(true);
+                      }}
+                      className="px-2 py-1.5 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-[10px] font-black flex items-center gap-1 cursor-pointer"
+                      title="طوارئ الباجور ومشاركة GPS"
+                    >
+                      <ShieldCheck className="w-3 h-3" />
+                      <span>SOS</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        triggerMobileHapticFeedback();
+                        setIsTrackingSheetMinimized(false);
+                      }}
+                      className="px-3 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-[11px] font-extrabold flex items-center gap-1 shrink-0 shadow-sm cursor-pointer hover:scale-105 active:scale-95 transition"
+                    >
+                      <span>توسيع التتبع</span>
+                      <ChevronUp className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
                 </div>
               </div>
             )}
@@ -1255,16 +1378,15 @@ export const CustomerMobileExperience: React.FC<CustomerMobileExperienceProps> =
                     {/* SOS Emergency Assistance Button */}
                     <button
                       type="button"
+                      data-testid="sos-emergency-btn"
                       onClick={() => {
                         triggerMobileHapticFeedback();
-                        setMobileSosLocationShared(false);
-                        setMobileSosCalledService(null);
                         setShowSosEmergencyModal(true);
                       }}
-                      className="px-2 py-1 rounded-xl bg-rose-50 hover:bg-rose-100 border border-rose-200 text-rose-700 text-[10px] font-black flex items-center gap-1 transition cursor-pointer hover:scale-105 active:scale-95"
+                      className="px-2 py-1 rounded-xl bg-rose-600 hover:bg-rose-700 border border-rose-500 text-white text-[10px] font-black flex items-center gap-1 transition cursor-pointer hover:scale-105 active:scale-95 shadow-2xs"
                       title="طوارئ الباجور ومشاركة الموقع"
                     >
-                      <ShieldCheck className="w-3 h-3 text-rose-600" />
+                      <ShieldCheck className="w-3 h-3 text-white" />
                       <span>SOS</span>
                     </button>
                   </div>
@@ -1275,6 +1397,8 @@ export const CustomerMobileExperience: React.FC<CustomerMobileExperienceProps> =
                   <div className="flex items-center gap-2 min-w-0">
                     <span className="w-2.5 h-2.5 rounded-full bg-emerald-600 animate-ping shrink-0" />
                     <span className="font-extrabold text-xs sm:text-sm text-slate-900 truncate">
+                      {activeCustomerOrder.status === 'awaiting_quote' && 'بانتظار تسعيرة الصيدلية أو المتجر للروشتة/القائمة...'}
+                      {activeCustomerOrder.status === 'quote_ready' && 'عرض السعر جاهز! راجع التكلفة واعتمد التجهيز ✓'}
                       {activeCustomerOrder.status === 'created' && 'تم إرسال الطلب للمتجر • بانتظار الموافقة'}
                       {activeCustomerOrder.status === 'searching_captain' && 'جاري البحث عن أقرب كابتن متاح في الباجور...'}
                       {(activeCustomerOrder.status === 'accepted_by_store' ||
@@ -1293,6 +1417,58 @@ export const CustomerMobileExperience: React.FC<CustomerMobileExperienceProps> =
                     {activeCustomerOrder.orderNumber}
                   </span>
                 </div>
+
+                {/* Prescription / List Quote Approval Card */}
+                {activeCustomerOrder.status === 'quote_ready' && (
+                  <div className="p-3 rounded-2xl bg-indigo-50 border border-indigo-200 flex flex-col gap-2 text-xs">
+                    <div className="flex items-center justify-between">
+                      <span className="font-extrabold text-indigo-950">عرض سعر {activeCustomerOrder.storeName}</span>
+                      <span className="font-black text-sm text-indigo-900">
+                        {activeCustomerOrder.quoteTotalEgp || activeCustomerOrder.subtotalEgp} ج.م + توصيل
+                      </span>
+                    </div>
+                    {activeCustomerOrder.quoteNotes && (
+                      <p className="text-[11px] text-indigo-800 bg-white/80 rounded-lg px-2 py-1 border border-indigo-100">
+                        ملاحظة المتجر: {activeCustomerOrder.quoteNotes}
+                      </p>
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => customerApproveOrderQuote(activeCustomerOrder.id)}
+                      className="w-full py-2 rounded-xl bg-emerald-700 hover:bg-emerald-800 text-white font-black text-xs shadow-xs cursor-pointer"
+                    >
+                      اعتماد السعر وتجهيز الطلب الآن ({activeCustomerOrder.totalEgp} ج.م إجمالي)
+                    </button>
+                  </div>
+                )}
+
+                {/* 4-Digit Ride Security PIN Banner */}
+                {activeCustomerOrder.ridePin && (
+                  <div className="p-2.5 rounded-2xl bg-slate-900 text-white border border-slate-700 flex items-center justify-between gap-2">
+                    <div className="flex items-center gap-2">
+                      <KeyRound className="w-4 h-4 text-amber-400 shrink-0" />
+                      <div>
+                        <div className="text-[11px] font-extrabold text-amber-300">
+                          كود أمان بدء الرحلة (شارك الكود عند الركوب)
+                        </div>
+                        {activeCustomerOrder.requiresFamilyTrustedDriver && (
+                          <div className="text-[9px] text-emerald-300 font-bold">
+                            🛡️ مخصص لكباتن العائلات الموثوقين
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                    <span
+                      dir="ltr"
+                      className="px-2.5 py-1 rounded-xl bg-amber-400 text-slate-950 font-mono font-black text-sm tracking-widest shrink-0"
+                    >
+                      {activeCustomerOrder.ridePin}
+                    </span>
+                  </div>
+                )}
+
+                {/* Real-Time 4-Stage Order Tracking Status Card (Received -> Preparing -> Out for Delivery -> Delivered) */}
+                <OrderTrackingStatusCard compact={true} />
 
                 {/* =====================================================================
                     EMBEDDED INTERACTIVE MAP THUMBNAIL INSIDE MOBILE TRACKING SHEET
@@ -1541,7 +1717,7 @@ export const CustomerMobileExperience: React.FC<CustomerMobileExperienceProps> =
                           {
                             key: 'delivered',
                             title: 'إتمام التسليم وتحصيل الحساب',
-                            desc: `${activeCustomerOrder.totalEgp + mobileTipEgp}.00 ج.م`,
+                            desc: `${activeCustomerOrder.totalEgp}.00 ج.م`,
                             done: activeCustomerOrder.status === 'delivered',
                             active: activeCustomerOrder.status === 'delivered',
                           },
@@ -1792,7 +1968,7 @@ export const CustomerMobileExperience: React.FC<CustomerMobileExperienceProps> =
                       </span>
                     </div>
                     <div className="grid grid-cols-4 gap-1.5">
-                      {[5, 10, 15].map((amt) => (
+                      {[5, 10, 20].map((amt) => (
                         <button
                           key={amt}
                           type="button"
@@ -1808,10 +1984,7 @@ export const CustomerMobileExperience: React.FC<CustomerMobileExperienceProps> =
                       ))}
                       <button
                         type="button"
-                        onClick={() => {
-                          setMobileTipEgp(0);
-                          setMobileCustomTipInput('');
-                        }}
+                        onClick={() => handleSelectMobilePresetTip(0)}
                         className="py-1.5 rounded-xl font-bold text-[10px] bg-white text-slate-500 border border-slate-200 hover:bg-slate-100 cursor-pointer"
                       >
                         بدون
@@ -1908,7 +2081,7 @@ export const CustomerMobileExperience: React.FC<CustomerMobileExperienceProps> =
                       onClick={() => setIsFareBreakdownOpen((prev) => !prev)}
                       className="font-black text-emerald-800 flex items-center gap-1 cursor-pointer hover:underline"
                     >
-                      <span>{activeCustomerOrder.totalEgp + mobileTipEgp}.00 ج.م</span>
+                      <span>{activeCustomerOrder.totalEgp}.00 ج.م</span>
                       {isFareBreakdownOpen ? (
                         <ChevronUp className="w-3.5 h-3.5 text-slate-500" />
                       ) : (
@@ -1960,7 +2133,7 @@ export const CustomerMobileExperience: React.FC<CustomerMobileExperienceProps> =
                       <div className="flex justify-between pt-1 border-t border-slate-100 font-black text-slate-900 text-[11px]">
                         <span>الإجمالي الكلي المستحق:</span>
                         <span className="text-emerald-800">
-                          {activeCustomerOrder.totalEgp + mobileTipEgp}.00 ج.م
+                          {activeCustomerOrder.totalEgp}.00 ج.م
                         </span>
                       </div>
                     </div>
@@ -1991,7 +2164,12 @@ export const CustomerMobileExperience: React.FC<CustomerMobileExperienceProps> =
                     </div>
                   )}
 
-                  <div className="text-[10px] text-slate-600 pt-1 border-t border-slate-200 space-y-0.5">
+                  <div className="text-[10px] text-slate-600 pt-1 border-t border-slate-200 space-y-1">
+                    {activeCustomerOrder.storeNames && activeCustomerOrder.storeNames.length > 1 && (
+                      <div className="text-[10px] font-bold text-emerald-800 bg-emerald-50 px-2 py-0.5 rounded-lg border border-emerald-200">
+                        سلة مجمعة من {activeCustomerOrder.storeNames.length} متاجر: {activeCustomerOrder.storeNames.join(' + ')}
+                      </div>
+                    )}
                     <div className="flex items-center justify-between">
                       <span className="truncate">من: {activeCustomerOrder.storeAddress}</span>
                       {activeCustomerOrder.distanceKm && (
@@ -2003,7 +2181,9 @@ export const CustomerMobileExperience: React.FC<CustomerMobileExperienceProps> =
                       <span className="font-bold text-amber-800 shrink-0">
                         الدفع:{' '}
                         {activeCustomerOrder.paymentMethod === 'cash'
-                          ? 'كاش عند الاستلام'
+                          ? activeCustomerOrder.cashChangeForEgp && activeCustomerOrder.cashChangeForEgp > 0
+                            ? `كاش (فكة لـ ${activeCustomerOrder.cashChangeForEgp} ج)`
+                            : 'كاش عند الاستلام'
                           : activeCustomerOrder.paymentMethod === 'wallet'
                           ? 'محفظة مشوار'
                           : 'إلكتروني'}
@@ -2061,6 +2241,7 @@ export const CustomerMobileExperience: React.FC<CustomerMobileExperienceProps> =
             ) : (
               /* If no active order: show Complete Service Launcher (Ride / Package / Stores) + Nearby Stores */
               <div className="relative z-10 mt-auto p-3.5 flex flex-col gap-2.5">
+                {activeOrderTrackingCard && <OrderTrackingStatusCard compact={true} />}
                 {/* Primary Service Selection Hub */}
                 <div className="bg-white/95 backdrop-blur-md rounded-2xl p-3 shadow-xl border border-slate-100 flex flex-col gap-2.5">
                   <div className="flex items-center justify-between">
@@ -2070,47 +2251,70 @@ export const CustomerMobileExperience: React.FC<CustomerMobileExperienceProps> =
                     </span>
                   </div>
 
-                  <div className="grid grid-cols-3 gap-2">
+                  <div className="grid grid-cols-2 gap-2">
                     <button
                       onClick={() => {
                         setWizardInitialCategory('ride');
                         setUseMultiStepWizard(true);
-                        setBookingServiceMode('errand');
+                        setBookingServiceMode('tuktuk_car');
                         setActiveTab('ride_booking');
                       }}
-                      className="p-2.5 rounded-2xl bg-emerald-50/90 hover:bg-emerald-100 border border-emerald-200 flex flex-col items-center text-center gap-1 transition-all active:scale-95 cursor-pointer"
+                      className="p-2.5 rounded-2xl bg-emerald-50/90 hover:bg-emerald-100 border border-emerald-200 flex items-center gap-2.5 text-right transition-all active:scale-95 cursor-pointer"
                     >
-                      <div className="w-9 h-9 rounded-xl bg-emerald-700 text-white flex items-center justify-center shadow-xs">
+                      <div className="w-9 h-9 rounded-xl bg-emerald-700 text-white flex items-center justify-center shadow-xs shrink-0">
                         <Car className="w-5 h-5" />
                       </div>
-                      <span className="font-extrabold text-[11px] text-slate-900">مشوار توكتوك/سيارة</span>
-                      <span className="text-[9px] text-emerald-800 font-bold">خطوة بخطوة</span>
+                      <div className="min-w-0">
+                        <div className="font-extrabold text-[11px] text-slate-900 truncate">مشوار توكتوك / سيارة</div>
+                        <div className="text-[9px] text-emerald-800 font-bold truncate">كود أمان + كباتن عائلات</div>
+                      </div>
                     </button>
 
                     <button
                       onClick={() => {
-                        setWizardInitialCategory('delivery');
+                        setWizardInitialCategory('prescription_list');
                         setUseMultiStepWizard(true);
                         setActiveTab('ride_booking');
                       }}
-                      className="p-2.5 rounded-2xl bg-amber-50/90 hover:bg-amber-100 border border-amber-200 flex flex-col items-center text-center gap-1 transition-all active:scale-95 cursor-pointer"
+                      className="p-2.5 rounded-2xl bg-indigo-50/90 hover:bg-indigo-100 border border-indigo-200 flex items-center gap-2.5 text-right transition-all active:scale-95 cursor-pointer"
                     >
-                      <div className="w-9 h-9 rounded-xl bg-amber-500 text-slate-950 flex items-center justify-center shadow-xs">
-                        <ShoppingBag className="w-5 h-5" />
+                      <div className="w-9 h-9 rounded-xl bg-indigo-600 text-white flex items-center justify-center shadow-xs shrink-0">
+                        <Camera className="w-5 h-5" />
                       </div>
-                      <span className="font-extrabold text-[11px] text-slate-900">توصيل متاجر</span>
-                      <span className="text-[9px] text-amber-900 font-bold">مطاعم وصيدليات</span>
+                      <div className="min-w-0">
+                        <div className="font-extrabold text-[11px] text-slate-900 truncate">روشتة أو ورقة مقاضي</div>
+                        <div className="text-[9px] text-indigo-800 font-bold truncate">قراءة ذكية وتسعير</div>
+                      </div>
                     </button>
 
                     <button
                       onClick={() => setActiveTab('stores')}
-                      className="p-2.5 rounded-2xl bg-slate-100 hover:bg-slate-200/80 border border-slate-200 flex flex-col items-center text-center gap-1 transition-all active:scale-95 cursor-pointer"
+                      className="p-2.5 rounded-2xl bg-amber-50/90 hover:bg-amber-100 border border-amber-200 flex items-center gap-2.5 text-right transition-all active:scale-95 cursor-pointer"
                     >
-                      <div className="w-9 h-9 rounded-xl bg-slate-900 text-emerald-400 flex items-center justify-center shadow-xs">
-                        <Store className="w-5 h-5" />
+                      <div className="w-9 h-9 rounded-xl bg-amber-500 text-slate-950 flex items-center justify-center shadow-xs shrink-0">
+                        <ShoppingBag className="w-5 h-5" />
                       </div>
-                      <span className="font-extrabold text-[11px] text-slate-900">تصفح المتاجر</span>
-                      <span className="text-[9px] text-slate-600 font-bold">عروض الباجور</span>
+                      <div className="min-w-0">
+                        <div className="font-extrabold text-[11px] text-slate-900 truncate">سلة الباجور المجمعة</div>
+                        <div className="text-[9px] text-amber-900 font-bold truncate">حتى ٤ محلات بتوصيلة واحدة</div>
+                      </div>
+                    </button>
+
+                    <button
+                      onClick={() => {
+                        setUseMultiStepWizard(false);
+                        setBookingServiceMode('commute');
+                        setActiveTab('ride_booking');
+                      }}
+                      className="p-2.5 rounded-2xl bg-slate-100 hover:bg-slate-200/80 border border-slate-200 flex items-center gap-2.5 text-right transition-all active:scale-95 cursor-pointer"
+                    >
+                      <div className="w-9 h-9 rounded-xl bg-slate-900 text-emerald-400 flex items-center justify-center shadow-xs shrink-0">
+                        <Repeat className="w-5 h-5" />
+                      </div>
+                      <div className="min-w-0">
+                        <div className="font-extrabold text-[11px] text-slate-900 truncate">اشتراك مشوار يومي</div>
+                        <div className="text-[9px] text-slate-600 font-bold truncate">خطوط القرى والجامعة</div>
+                      </div>
                     </button>
                   </div>
                 </div>
@@ -2130,7 +2334,9 @@ export const CustomerMobileExperience: React.FC<CustomerMobileExperienceProps> =
 
                   {/* Horizontal Stores Carousel */}
                   <div className="flex items-center gap-2.5 overflow-x-auto pb-1 no-scrollbar">
-                    {stores.map((store) => (
+                    {stores.map((store) => {
+                      const isStoreFav = isFavoriteStore(store.id);
+                      return (
                       <div
                         key={store.id}
                         onClick={() => setSelectedStore(store)}
@@ -2146,6 +2352,22 @@ export const CustomerMobileExperience: React.FC<CustomerMobileExperienceProps> =
                           <span className="absolute top-1 right-1 text-[8px] font-bold px-1.5 py-0.5 rounded-sm bg-white/95 text-slate-800 shadow-2xs">
                             {store.deliveryTimeEst}
                           </span>
+                          <button
+                            type="button"
+                            aria-label={`تفضيل ${store.nameAr}`}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              triggerMobileHapticFeedback();
+                              toggleFavoriteStore(store.id);
+                            }}
+                            className="absolute top-1 left-1 w-5 h-5 rounded-md bg-white/90 flex items-center justify-center shadow-2xs cursor-pointer"
+                          >
+                            <Heart
+                              className={`w-3 h-3 ${
+                                isStoreFav ? 'fill-rose-500 text-rose-500' : 'text-slate-500'
+                              }`}
+                            />
+                          </button>
                         </div>
                         <div className="font-bold text-[11px] text-slate-900 truncate">{store.nameAr}</div>
                         <div className="text-[9px] text-slate-500 mt-0.5 flex items-center justify-between">
@@ -2155,7 +2377,8 @@ export const CustomerMobileExperience: React.FC<CustomerMobileExperienceProps> =
                           </span>
                         </div>
                       </div>
-                    ))}
+                      );
+                    })}
                   </div>
                 </div>
               </div>
@@ -2228,9 +2451,41 @@ export const CustomerMobileExperience: React.FC<CustomerMobileExperienceProps> =
               {/* Service Category Tabs */}
               <div>
                 <label className="text-[11px] font-extrabold text-slate-700 block mb-1.5">
-                  ١. اختر نوع الخدمة والمركبة:
+                  ١. اختر نوع الخدمة:
                 </label>
                 <div className="grid grid-cols-2 gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setBookingServiceMode('tuktuk_car')}
+                    className={`p-2.5 rounded-xl border text-right transition-all flex items-start gap-2 cursor-pointer ${
+                      bookingServiceMode === 'tuktuk_car'
+                        ? 'border-emerald-600 bg-emerald-50/90 text-emerald-950 shadow-2xs'
+                        : 'border-slate-200 bg-white text-slate-700'
+                    }`}
+                  >
+                    <Car className="w-4 h-4 text-emerald-700 shrink-0 mt-0.5" />
+                    <div>
+                      <div className="font-extrabold text-xs">مشوار ركاب</div>
+                      <div className="text-[10px] text-slate-500">توكتوك أو سيارة مكيفة</div>
+                    </div>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setBookingServiceMode('commute')}
+                    className={`p-2.5 rounded-xl border text-right transition-all flex items-start gap-2 cursor-pointer ${
+                      bookingServiceMode === 'commute'
+                        ? 'border-indigo-600 bg-indigo-50/90 text-indigo-950 shadow-2xs'
+                        : 'border-slate-200 bg-white text-slate-700'
+                    }`}
+                  >
+                    <Repeat className="w-4 h-4 text-indigo-700 shrink-0 mt-0.5" />
+                    <div>
+                      <div className="font-extrabold text-xs">اشتراك مشوار يومي</div>
+                      <div className="text-[10px] text-slate-500">أسبوعي/شهري للقرى والجامعة</div>
+                    </div>
+                  </button>
+
                   <button
                     type="button"
                     onClick={() => setBookingServiceMode('errand')}
@@ -2262,252 +2517,521 @@ export const CustomerMobileExperience: React.FC<CustomerMobileExperienceProps> =
                       <div className="text-[10px] text-slate-500">مستندات، أدوية، طرود</div>
                     </div>
                   </button>
-
-                  <button
-                    type="button"
-                    onClick={() => setBookingServiceMode('heavy')}
-                    className={`p-2.5 rounded-xl border text-right transition-all flex items-start gap-2 cursor-pointer ${
-                      bookingServiceMode === 'heavy'
-                        ? 'border-emerald-600 bg-emerald-50/90 text-emerald-950 shadow-2xs'
-                        : 'border-slate-200 bg-white text-slate-700'
-                    }`}
-                  >
-                    <Car className="w-4 h-4 text-emerald-700 shrink-0 mt-0.5" />
-                    <div>
-                      <div className="font-extrabold text-xs">نقل خفيف وبضائع</div>
-                      <div className="text-[10px] text-slate-500">شحنات ثقيلة للتجار</div>
-                    </div>
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={() => setBookingServiceMode('passenger_locked')}
-                    className={`p-2.5 rounded-xl border text-right transition-all flex items-start gap-2 cursor-pointer ${
-                      bookingServiceMode === 'passenger_locked'
-                        ? 'border-amber-500 bg-amber-50 text-amber-950'
-                        : 'border-slate-200 bg-slate-50 text-slate-500'
-                    }`}
-                  >
-                    <Lock className="w-4 h-4 text-amber-700 shrink-0 mt-0.5" />
-                    <div>
-                      <div className="font-extrabold text-xs">نقل ركاب ملاكي</div>
-                      <div className="text-[9px] text-amber-800 font-bold">معلق (قانون ٧٣/٢٠١٨)</div>
-                    </div>
-                  </button>
                 </div>
               </div>
 
-              {/* Regulatory Notice if Passenger Ride is clicked */}
-              {bookingServiceMode === 'passenger_locked' && (
-                <div className="p-3 rounded-2xl bg-amber-50 border border-amber-300 text-xs text-amber-950 flex flex-col gap-1.5">
-                  <div className="font-extrabold flex items-center gap-1.5 text-amber-900">
-                    <AlertTriangle className="w-4 h-4 text-amber-700 shrink-0" />
-                    <span>تنبيه الامتثال التنظيمي (القانون رقم ٧٣ لسنة ٢٠١٨)</span>
-                  </div>
-                  <p className="text-[11px] leading-relaxed">
-                    يرفض الخادم الخلفي (`POST /api/v1/quotes`) طلبات نقل الركاب بالسيارات الملاكي برمز `451 Unavailable For Legal Reasons` لحين استكمال ترخيص جهاز تنظيم النقل البري. يمكنك فوراً استخدام <strong>مشوار خاص سريع</strong> أو <strong>توصيل طرد</strong>.
-                  </p>
-                </div>
-              )}
-
-              {/* Pickup & Destination Selection Card */}
-              <div className="bg-white p-3 rounded-2xl border border-slate-200/90 shadow-2xs flex flex-col gap-2.5">
-                <div className="flex items-center justify-between">
-                  <span className="text-[11px] font-extrabold text-slate-800">٢. تحديد نقطة الانطلاق والوصول بالباجور:</span>
-                  <button
-                    type="button"
-                    onClick={handleSwapLocations}
-                    className="px-2 py-1 rounded-lg bg-slate-100 hover:bg-emerald-50 text-slate-700 hover:text-emerald-800 text-[10px] font-bold flex items-center gap-1 cursor-pointer"
-                  >
-                    <ArrowUpDown className="w-3 h-3" />
-                    <span>عكس المسار</span>
-                  </button>
-                </div>
-
-                {/* Pickup Select */}
-                <div className="flex flex-col gap-1">
-                  <label className="text-[10px] font-bold text-emerald-800 flex items-center gap-1">
-                    <span className="w-2 h-2 rounded-full bg-emerald-600" />
-                    <span>نقطة الانطلاق (الاستلام):</span>
-                  </label>
-                  <select
-                    value={pickupLandmarkId}
-                    onChange={(e) => setPickupLandmarkId(e.target.value)}
-                    className="w-full px-2.5 py-2 rounded-xl border border-slate-200 bg-slate-50 text-xs font-bold text-slate-900 focus:outline-hidden focus:border-emerald-600"
-                  >
-                    {EL_BAGOUR_LANDMARKS_LIST.map((lm) => (
-                      <option key={lm.id} value={lm.id}>
-                        {lm.nameAr} {lm.isRural ? '(قرية / أطراف)' : '(وسط المدينة)'}
-                      </option>
-                    ))}
-                  </select>
-                  <input
-                    type="text"
-                    value={customPickupNote}
-                    onChange={(e) => setCustomPickupNote(e.target.value)}
-                    placeholder="تفاصيل إضافية للانطلاق (مثال: بجوار صيدلية...)"
-                    className="w-full px-2.5 py-1.5 rounded-lg border border-slate-200 bg-white text-[11px] text-slate-700"
-                  />
-                </div>
-
-                {/* Dropoff Select */}
-                <div className="flex flex-col gap-1 pt-1 border-t border-slate-100">
-                  <label className="text-[10px] font-bold text-rose-700 flex items-center gap-1">
-                    <span className="w-2 h-2 rounded-full bg-rose-600" />
-                    <span>نقطة الوصول (التسليم):</span>
-                  </label>
-                  <select
-                    value={dropoffLandmarkId}
-                    onChange={(e) => setDropoffLandmarkId(e.target.value)}
-                    className="w-full px-2.5 py-2 rounded-xl border border-slate-200 bg-slate-50 text-xs font-bold text-slate-900 focus:outline-hidden focus:border-emerald-600"
-                  >
-                    {EL_BAGOUR_LANDMARKS_LIST.map((lm) => (
-                      <option key={lm.id} value={lm.id}>
-                        {lm.nameAr} {lm.isRural ? '(قرية / أطراف)' : '(وسط المدينة)'}
-                      </option>
-                    ))}
-                  </select>
-                  <input
-                    type="text"
-                    value={customDropoffNote}
-                    onChange={(e) => setCustomDropoffNote(e.target.value)}
-                    placeholder="تفاصيل إضافية للوصول (مثال: الدور الثالث شقة ٥)"
-                    className="w-full px-2.5 py-1.5 rounded-lg border border-slate-200 bg-white text-[11px] text-slate-700"
-                  />
-                </div>
-              </div>
-
-              {/* Trip Description & Recipient Phone */}
-              <div className="bg-white p-3 rounded-2xl border border-slate-200/90 shadow-2xs grid grid-cols-1 gap-2">
-                <div>
-                  <label className="text-[10px] font-bold text-slate-700 block mb-1">
-                    وصف المشوار أو محتوى الطرد:
-                  </label>
-                  <input
-                    type="text"
-                    value={tripNotes}
-                    onChange={(e) => setTripNotes(e.target.value)}
-                    placeholder="مثال: توصيل أوراق هامة / شراء طلبات..."
-                    className="w-full px-2.5 py-1.5 rounded-xl border border-slate-200 bg-slate-50 text-xs text-slate-800"
-                  />
-                </div>
-                <div>
-                  <label className="text-[10px] font-bold text-slate-700 block mb-1">
-                    رقم هاتف المستلم للتواصل:
-                  </label>
-                  <input
-                    type="tel"
-                    value={recipientPhone}
-                    onChange={(e) => setRecipientPhone(e.target.value)}
-                    placeholder="01012345678"
-                    className="w-full px-2.5 py-1.5 rounded-xl border border-slate-200 bg-slate-50 text-xs font-mono text-slate-800"
-                  />
-                </div>
-              </div>
-
-              {/* Payment Method Selection */}
-              <div className="bg-white p-3 rounded-2xl border border-slate-200/90 shadow-2xs">
-                <label className="text-[10px] font-bold text-slate-700 block mb-1.5">
-                  ٣. وسيلة الدفع المفضلة:
-                </label>
-                <div className="grid grid-cols-3 gap-1.5 text-[10px]">
-                  <button
-                    type="button"
-                    onClick={() => setBookingPaymentMethod('cash')}
-                    className={`p-2 rounded-xl border font-bold text-center cursor-pointer ${
-                      bookingPaymentMethod === 'cash'
-                        ? 'border-emerald-600 bg-emerald-50 text-emerald-950'
-                        : 'border-slate-200 bg-white text-slate-600'
-                    }`}
-                  >
-                    💵 كاش للكابتن
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setBookingPaymentMethod('wallet')}
-                    className={`p-2 rounded-xl border font-bold text-center cursor-pointer ${
-                      bookingPaymentMethod === 'wallet'
-                        ? 'border-emerald-600 bg-emerald-50 text-emerald-950'
-                        : 'border-slate-200 bg-white text-slate-600'
-                    }`}
-                  >
-                    💳 المحفظة ({customerWalletBalanceEgp} ج)
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setBookingPaymentMethod('instapay')}
-                    className={`p-2 rounded-xl border font-bold text-center cursor-pointer ${
-                      bookingPaymentMethod === 'instapay'
-                        ? 'border-emerald-600 bg-emerald-50 text-emerald-950'
-                        : 'border-slate-200 bg-white text-slate-600'
-                    }`}
-                  >
-                    ⚡ إنستاباي
-                  </button>
-                </div>
-              </div>
-
-              {/* Authoritative Quote Breakdown Card */}
-              {quoteData && (
-                <div className="p-3 rounded-2xl bg-slate-900 text-white flex flex-col gap-1.5 text-xs shadow-md">
-                  <div className="flex items-center justify-between border-b border-slate-800 pb-1.5">
-                    <span className="font-extrabold text-emerald-400 flex items-center gap-1">
-                      <ShieldCheck className="w-3.5 h-3.5" />
-                      <span>تسعيرة الخادم الموقعة (Piasters Engine)</span>
-                    </span>
-                    <span className="text-[9px] font-mono text-emerald-300 bg-emerald-950/80 px-1.5 py-0.5 rounded border border-emerald-800">
-                      {quoteData.isLiveBackendQuote ? `LIVE API • #${quoteData.signaturePreview}` : `#${quoteData.signaturePreview}`}
-                    </span>
-                  </div>
-                  <div className="grid grid-cols-2 gap-1 text-[11px] text-slate-300">
-                    <div>فتحة العداد الأساسية: <strong className="text-white">{quoteData.baseFareEgp} ج.م</strong></div>
-                    <div>حساب المسافة ({quoteData.distanceKm} كم): <strong className="text-white">{quoteData.distanceFareEgp} ج.م</strong></div>
-                    {quoteData.ruralSurchargeEgp > 0 && (
-                      <div>بدل قرى / وزن إضافي: <strong className="text-amber-300">{quoteData.ruralSurchargeEgp} ج.م</strong></div>
-                    )}
-                    <div>رسوم تشغيل المنصة: <strong className="text-white">{quoteData.platformFeeEgp} ج.م</strong></div>
-                  </div>
-                  <div className="flex items-center justify-between pt-1.5 border-t border-slate-800">
-                    <div>
-                      <span className="text-[10px] text-slate-400 block">الإجمالي النهائي المستحق</span>
-                      <span className="text-base font-black text-emerald-400">
-                        {quoteData.totalEgp}.00 ج.م{' '}
-                        <span className="text-[10px] text-slate-400 font-mono">({quoteData.totalPiasters} قرش)</span>
+              {bookingServiceMode === 'commute' ? (
+                /* Daily Village-to-Center Commute Subscription Builder */
+                <div className="flex flex-col gap-3">
+                  <div className="bg-white p-3.5 rounded-2xl border border-indigo-200 shadow-2xs flex flex-col gap-2.5 text-xs">
+                    <div className="flex items-center justify-between">
+                      <span className="font-black text-indigo-950 flex items-center gap-1.5">
+                        <Repeat className="w-4 h-4 text-indigo-700" />
+                        <span>اشتراك خط مشاوير يومي (القرى ↔ الباجور / الجامعة)</span>
+                      </span>
+                      <span className="text-[10px] font-black text-emerald-800 bg-emerald-50 px-2 py-0.5 rounded border border-emerald-200">
+                        توفير حتى ٢٢٪
                       </span>
                     </div>
-                    <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-950 text-emerald-300 border border-emerald-800">
-                      ١٠٠٪ من التوصيل للكابتن
-                    </span>
+
+                    <div className="grid grid-cols-1 gap-2">
+                      <div>
+                        <label className="text-[10px] font-bold text-slate-600 block mb-1">نقطة الانطلاق اليومية (القرية / الحي):</label>
+                        <select
+                          value={commuteFrom}
+                          onChange={(e) => setCommuteFrom(e.target.value)}
+                          className="w-full px-2.5 py-2 rounded-xl border border-slate-200 bg-slate-50 text-xs font-bold text-slate-900"
+                        >
+                          {EL_BAGOUR_LANDMARKS_LIST.map((lm) => (
+                            <option key={lm.id} value={lm.nameAr}>
+                              {lm.nameAr}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                      <div>
+                        <label className="text-[10px] font-bold text-slate-600 block mb-1">الوجهة الثابتة (المركز / المدرسة / جامعة شبين):</label>
+                        <select
+                          value={commuteTo}
+                          onChange={(e) => setCommuteTo(e.target.value)}
+                          className="w-full px-2.5 py-2 rounded-xl border border-slate-200 bg-slate-50 text-xs font-bold text-slate-900"
+                        >
+                          {EL_BAGOUR_LANDMARKS_LIST.map((lm) => (
+                            <option key={lm.id} value={lm.nameAr}>
+                              {lm.nameAr}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                    </div>
+
+                    <div>
+                      <label className="text-[10px] font-bold text-slate-600 block mb-1">أيام الدوام الأسبوعية:</label>
+                      <div className="flex flex-wrap gap-1">
+                        {['السبت', 'الأحد', 'الإثنين', 'الثلاثاء', 'الأربعاء', 'الخميس'].map((day) => {
+                          const active = commuteDays.includes(day);
+                          return (
+                            <button
+                              key={day}
+                              type="button"
+                              onClick={() =>
+                                setCommuteDays((prev) =>
+                                  prev.includes(day) ? prev.filter((d) => d !== day) : [...prev, day]
+                                )
+                              }
+                              className={`px-2.5 py-1 rounded-lg text-[10px] font-extrabold border cursor-pointer ${
+                                active
+                                  ? 'bg-indigo-700 text-white border-indigo-700'
+                                  : 'bg-slate-50 text-slate-600 border-slate-200'
+                              }`}
+                            >
+                              {day}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-2">
+                      <div>
+                        <label className="text-[10px] font-bold text-slate-600 block mb-1">موعد الذهاب:</label>
+                        <input
+                          type="time"
+                          value={commuteMorning}
+                          onChange={(e) => setCommuteMorning(e.target.value)}
+                          className="w-full px-2.5 py-1.5 rounded-xl border border-slate-200 bg-slate-50 text-xs font-mono"
+                        />
+                      </div>
+                      <div>
+                        <div className="flex items-center justify-between mb-1">
+                          <label className="text-[10px] font-bold text-slate-600">موعد العودة:</label>
+                          <label className="flex items-center gap-1 text-[10px] font-bold text-indigo-800 cursor-pointer">
+                            <input
+                              type="checkbox"
+                              checked={commuteHasReturn}
+                              onChange={(e) => setCommuteHasReturn(e.target.checked)}
+                            />
+                            <span>ذهاب وعودة</span>
+                          </label>
+                        </div>
+                        <input
+                          type="time"
+                          disabled={!commuteHasReturn}
+                          value={commuteReturn}
+                          onChange={(e) => setCommuteReturn(e.target.value)}
+                          className="w-full px-2.5 py-1.5 rounded-xl border border-slate-200 bg-slate-50 text-xs font-mono disabled:opacity-50"
+                        />
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-2">
+                      <button
+                        type="button"
+                        onClick={() => setCommuteVehicle('tuktuk')}
+                        className={`py-2 rounded-xl border text-[11px] font-extrabold cursor-pointer ${
+                          commuteVehicle === 'tuktuk'
+                            ? 'bg-emerald-700 text-white border-emerald-700'
+                            : 'bg-white text-slate-700 border-slate-200'
+                        }`}
+                      >
+                        🛺 توكتوك معتمد
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setCommuteVehicle('car')}
+                        className={`py-2 rounded-xl border text-[11px] font-extrabold cursor-pointer ${
+                          commuteVehicle === 'car'
+                            ? 'bg-emerald-700 text-white border-emerald-700'
+                            : 'bg-white text-slate-700 border-slate-200'
+                        }`}
+                      >
+                        🚗 سيارة ملاكي مكيفة
+                      </button>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-2">
+                      <button
+                        type="button"
+                        onClick={() => setCommutePlan('weekly')}
+                        className={`py-2 rounded-xl border text-[11px] font-extrabold cursor-pointer ${
+                          commutePlan === 'weekly'
+                            ? 'bg-indigo-700 text-white border-indigo-700'
+                            : 'bg-white text-slate-700 border-slate-200'
+                        }`}
+                      >
+                        باقة أسبوعية (خصم ١٥٪)
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setCommutePlan('monthly')}
+                        className={`py-2 rounded-xl border text-[11px] font-extrabold cursor-pointer ${
+                          commutePlan === 'monthly'
+                            ? 'bg-indigo-700 text-white border-indigo-700'
+                            : 'bg-white text-slate-700 border-slate-200'
+                        }`}
+                      >
+                        باقة شهرية (خصم ٢٢٪)
+                      </button>
+                    </div>
+
+                    {(() => {
+                      const fromLm = EL_BAGOUR_LANDMARKS_LIST.find((l) => l.nameAr === commuteFrom);
+                      const toLm = EL_BAGOUR_LANDMARKS_LIST.find((l) => l.nameAr === commuteTo);
+                      const estKm = Math.max(
+                        2.5,
+                        Math.abs((fromLm?.distanceFromCenterKm || 3) - (toLm?.distanceFromCenterKm || 1)) + 2
+                      );
+                      const previewEgp = Math.round(
+                        calculateCommuteSubscriptionPricePiasters({
+                          distanceKm: estKm,
+                          vehicleTier: commuteVehicle,
+                          planType: commutePlan,
+                          daysCount: Math.max(1, commuteDays.length),
+                          hasReturnTrip: commuteHasReturn,
+                        }) / 100
+                      );
+                      return (
+                        <div className="p-3 rounded-xl bg-slate-900 text-white flex items-center justify-between">
+                          <div>
+                            <span className="text-[10px] text-slate-400 block">
+                              اشتراك {commutePlan === 'monthly' ? 'شهري (٤ أسابيع)' : 'أسبوعي'} • {commuteDays.length} أيام
+                            </span>
+                            <span className="text-base font-black text-emerald-400">{previewEgp} ج.م</span>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const res = createCommuteSubscription({
+                                fromLandmark: commuteFrom,
+                                toLandmark: commuteTo,
+                                scheduleDays: commuteDays,
+                                morningTime: commuteMorning,
+                                returnTime: commuteHasReturn ? commuteReturn : undefined,
+                                vehicleTier: commuteVehicle,
+                                planType: commutePlan,
+                              });
+                              if (res.success) {
+                                setCommuteFeedback({
+                                  type: 'success',
+                                  text: `تم تفعيل اشتراك المشوار اليومي (${res.subscription?.priceEgp} ج.م) ومزامنته مع الكابتن!`,
+                                });
+                              } else {
+                                setCommuteFeedback({
+                                  type: 'error',
+                                  text: res.errorAr || 'تعذر تفعيل الاشتراك.',
+                                });
+                              }
+                            }}
+                            className="px-3.5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-black text-xs cursor-pointer"
+                          >
+                            تفعيل الاشتراك الآن
+                          </button>
+                        </div>
+                      );
+                    })()}
+
+                    {commuteFeedback && (
+                      <div
+                        className={`p-2.5 rounded-xl text-[11px] font-bold border ${
+                          commuteFeedback.type === 'success'
+                            ? 'bg-emerald-50 text-emerald-900 border-emerald-200'
+                            : 'bg-rose-50 text-rose-800 border-rose-200'
+                        }`}
+                      >
+                        {commuteFeedback.text}
+                      </div>
+                    )}
                   </div>
-                </div>
-              )}
 
-              {/* Validation Error Banner */}
-              {bookingError && (
-                <div className="p-2.5 rounded-xl bg-rose-50 border border-rose-200 text-rose-800 text-[11px] font-bold flex items-center gap-1.5">
-                  <AlertTriangle className="w-4 h-4 text-rose-600 shrink-0" />
-                  <span>{bookingError}</span>
+                  {/* Active Commute Subscriptions List */}
+                  {commuteSubscriptions.length > 0 && (
+                    <div className="bg-white p-3 rounded-2xl border border-slate-200/80 flex flex-col gap-2 text-xs">
+                      <span className="font-extrabold text-slate-900">
+                        اشتراكاتك اليومية النشطة ({commuteSubscriptions.length})
+                      </span>
+                      {commuteSubscriptions.map((sub) => (
+                        <div
+                          key={sub.id}
+                          className="p-2.5 rounded-xl bg-slate-50 border border-slate-200/70 flex items-center justify-between gap-2"
+                        >
+                          <div className="min-w-0">
+                            <div className="font-extrabold text-slate-900 truncate">
+                              {sub.fromLandmark} ← {sub.toLandmark}
+                            </div>
+                            <div className="text-[10px] text-slate-500 mt-0.5">
+                              {sub.planType === 'monthly' ? 'شهري' : 'أسبوعي'} • {sub.morningTime}
+                              {sub.returnTime ? ` / ${sub.returnTime}` : ''} • {sub.priceEgp} ج.م
+                            </div>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => toggleCommuteSubscriptionStatus(sub.id)}
+                            className={`px-2.5 py-1 rounded-lg text-[10px] font-extrabold border shrink-0 cursor-pointer ${
+                              sub.status === 'active'
+                                ? 'bg-emerald-50 text-emerald-800 border-emerald-200'
+                                : 'bg-amber-50 text-amber-800 border-amber-200'
+                            }`}
+                          >
+                            {sub.status === 'active' ? 'نشط • إيقاف مؤقت' : 'موقوف • استئناف'}
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
                 </div>
-              )}
+              ) : (
+                <>
+                  {/* Vehicle & Family Safety Options for TukTuk / Car Passenger Ride */}
+                  {bookingServiceMode === 'tuktuk_car' && (
+                    <div className="bg-white p-3 rounded-2xl border border-emerald-200/90 shadow-2xs flex flex-col gap-2">
+                      <div className="grid grid-cols-2 gap-2">
+                        <button
+                          type="button"
+                          onClick={() => setQuickVehicleTier('tuktuk')}
+                          className={`py-2 px-2.5 rounded-xl border text-xs font-extrabold cursor-pointer ${
+                            quickVehicleTier === 'tuktuk'
+                              ? 'bg-emerald-700 text-white border-emerald-700'
+                              : 'bg-slate-50 text-slate-700 border-slate-200'
+                          }`}
+                        >
+                          🛺 توكتوك معتمد
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setQuickVehicleTier('car')}
+                          className={`py-2 px-2.5 rounded-xl border text-xs font-extrabold cursor-pointer ${
+                            quickVehicleTier === 'car'
+                              ? 'bg-emerald-700 text-white border-emerald-700'
+                              : 'bg-slate-50 text-slate-700 border-slate-200'
+                          }`}
+                        >
+                          🚗 سيارة ملاكي مكيفة
+                        </button>
+                      </div>
 
-              {/* Confirm Booking Button */}
-              <button
-                type="button"
-                disabled={isLoadingQuote || bookingServiceMode === 'passenger_locked' || !quoteData}
-                onClick={handleConfirmRideOrPackage}
-                className={`w-full py-3.5 px-4 rounded-2xl font-extrabold text-xs shadow-lg flex items-center justify-center gap-2 transition-all ${
-                  bookingServiceMode === 'passenger_locked' || !quoteData
-                    ? 'bg-slate-200 text-slate-400 cursor-not-allowed'
-                    : 'bg-emerald-700 hover:bg-emerald-800 text-white shadow-emerald-700/25 active:scale-95 cursor-pointer'
-                }`}
-              >
-                <Navigation className="w-4 h-4" />
-                <span>
-                  {isLoadingQuote
-                    ? 'جاري حساب التسعيرة...'
-                    : `تأكيد وطلب كابتن الآن (${quoteData?.totalEgp || 0} ج.م)`}
-                </span>
-              </button>
+                      <button
+                        type="button"
+                        onClick={() => setQuickFamilyTrusted((prev) => !prev)}
+                        className={`p-2.5 rounded-xl border text-right flex items-center justify-between gap-2 cursor-pointer transition ${
+                          quickFamilyTrusted
+                            ? 'bg-indigo-50 border-indigo-400 text-indigo-950'
+                            : 'bg-slate-50 border-slate-200 text-slate-700'
+                        }`}
+                      >
+                        <div className="flex items-center gap-2">
+                          <Shield className={`w-4 h-4 shrink-0 ${quickFamilyTrusted ? 'text-indigo-700' : 'text-slate-400'}`} />
+                          <div>
+                            <div className="text-[11px] font-extrabold">خيار كباتن العائلات الموثوقين</div>
+                            <div className="text-[9px] text-slate-500">يُولّد كود أمان ٤ أرقام لا تبدأ الرحلة بدونه</div>
+                          </div>
+                        </div>
+                        <span className="text-[10px] font-black">
+                          {quickFamilyTrusted ? 'مفعّل ✓' : 'اختياري'}
+                        </span>
+                      </button>
+                    </div>
+                  )}
+
+                  {/* Pickup & Destination Selection Card */}
+                  <div className="bg-white p-3 rounded-2xl border border-slate-200/90 shadow-2xs flex flex-col gap-2.5">
+                    <div className="flex items-center justify-between">
+                      <span className="text-[11px] font-extrabold text-slate-800">٢. تحديد نقطة الانطلاق والوصول بالباجور:</span>
+                      <button
+                        type="button"
+                        onClick={handleSwapLocations}
+                        className="px-2 py-1 rounded-lg bg-slate-100 hover:bg-emerald-50 text-slate-700 hover:text-emerald-800 text-[10px] font-bold flex items-center gap-1 cursor-pointer"
+                      >
+                        <ArrowUpDown className="w-3 h-3" />
+                        <span>عكس المسار</span>
+                      </button>
+                    </div>
+
+                    {/* Pickup Select */}
+                    <div className="flex flex-col gap-1">
+                      <label className="text-[10px] font-bold text-emerald-800 flex items-center gap-1">
+                        <span className="w-2 h-2 rounded-full bg-emerald-600" />
+                        <span>نقطة الانطلاق (الاستلام):</span>
+                      </label>
+                      <select
+                        value={pickupLandmarkId}
+                        onChange={(e) => setPickupLandmarkId(e.target.value)}
+                        className="w-full px-2.5 py-2 rounded-xl border border-slate-200 bg-slate-50 text-xs font-bold text-slate-900 focus:outline-hidden focus:border-emerald-600"
+                      >
+                        {EL_BAGOUR_LANDMARKS_LIST.map((lm) => (
+                          <option key={lm.id} value={lm.id}>
+                            {lm.nameAr} {lm.isRural ? '(قرية / أطراف)' : '(وسط المدينة)'}
+                          </option>
+                        ))}
+                      </select>
+                      <input
+                        type="text"
+                        value={customPickupNote}
+                        onChange={(e) => setCustomPickupNote(e.target.value)}
+                        placeholder="تفاصيل إضافية للانطلاق (مثال: بجوار صيدلية...)"
+                        className="w-full px-2.5 py-1.5 rounded-lg border border-slate-200 bg-white text-[11px] text-slate-700"
+                      />
+                    </div>
+
+                    {/* Dropoff Select */}
+                    <div className="flex flex-col gap-1 pt-1 border-t border-slate-100">
+                      <label className="text-[10px] font-bold text-rose-700 flex items-center gap-1">
+                        <span className="w-2 h-2 rounded-full bg-rose-600" />
+                        <span>نقطة الوصول (التسليم):</span>
+                      </label>
+                      <select
+                        value={dropoffLandmarkId}
+                        onChange={(e) => setDropoffLandmarkId(e.target.value)}
+                        className="w-full px-2.5 py-2 rounded-xl border border-slate-200 bg-slate-50 text-xs font-bold text-slate-900 focus:outline-hidden focus:border-emerald-600"
+                      >
+                        {EL_BAGOUR_LANDMARKS_LIST.map((lm) => (
+                          <option key={lm.id} value={lm.id}>
+                            {lm.nameAr} {lm.isRural ? '(قرية / أطراف)' : '(وسط المدينة)'}
+                          </option>
+                        ))}
+                      </select>
+                      <input
+                        type="text"
+                        value={customDropoffNote}
+                        onChange={(e) => setCustomDropoffNote(e.target.value)}
+                        placeholder="تفاصيل إضافية للوصول (مثال: الدور الثالث شقة ٥)"
+                        className="w-full px-2.5 py-1.5 rounded-lg border border-slate-200 bg-white text-[11px] text-slate-700"
+                      />
+                    </div>
+                  </div>
+
+                  {/* Trip Description & Recipient Phone */}
+                  <div className="bg-white p-3 rounded-2xl border border-slate-200/90 shadow-2xs grid grid-cols-1 gap-2">
+                    <div>
+                      <label className="text-[10px] font-bold text-slate-700 block mb-1">
+                        وصف المشوار أو ملاحظات للرحلة:
+                      </label>
+                      <input
+                        type="text"
+                        value={tripNotes}
+                        onChange={(e) => setTripNotes(e.target.value)}
+                        placeholder="مثال: توصيل أوراق هامة / مشوار عائلي..."
+                        className="w-full px-2.5 py-1.5 rounded-xl border border-slate-200 bg-slate-50 text-xs text-slate-800"
+                      />
+                    </div>
+                    <div>
+                      <label className="text-[10px] font-bold text-slate-700 block mb-1">
+                        رقم هاتف التواصل:
+                      </label>
+                      <input
+                        type="tel"
+                        value={recipientPhone}
+                        onChange={(e) => setRecipientPhone(e.target.value)}
+                        placeholder="01012345678"
+                        className="w-full px-2.5 py-1.5 rounded-xl border border-slate-200 bg-slate-50 text-xs font-mono text-slate-800"
+                      />
+                    </div>
+                  </div>
+
+                  {/* Payment Method Selection */}
+                  <div className="bg-white p-3 rounded-2xl border border-slate-200/90 shadow-2xs">
+                    <label className="text-[10px] font-bold text-slate-700 block mb-1.5">
+                      ٣. وسيلة الدفع المفضلة:
+                    </label>
+                    <div className="grid grid-cols-3 gap-1.5 text-[10px]">
+                      <button
+                        type="button"
+                        onClick={() => setBookingPaymentMethod('cash')}
+                        className={`p-2 rounded-xl border font-bold text-center cursor-pointer ${
+                          bookingPaymentMethod === 'cash'
+                            ? 'border-emerald-600 bg-emerald-50 text-emerald-950'
+                            : 'border-slate-200 bg-white text-slate-600'
+                        }`}
+                      >
+                        💵 كاش للكابتن
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setBookingPaymentMethod('wallet')}
+                        className={`p-2 rounded-xl border font-bold text-center cursor-pointer ${
+                          bookingPaymentMethod === 'wallet'
+                            ? 'border-emerald-600 bg-emerald-50 text-emerald-950'
+                            : 'border-slate-200 bg-white text-slate-600'
+                        }`}
+                      >
+                        💳 المحفظة ({customerWalletBalanceEgp} ج)
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setBookingPaymentMethod('instapay')}
+                        className={`p-2 rounded-xl border font-bold text-center cursor-pointer ${
+                          bookingPaymentMethod === 'instapay'
+                            ? 'border-emerald-600 bg-emerald-50 text-emerald-950'
+                            : 'border-slate-200 bg-white text-slate-600'
+                        }`}
+                      >
+                        ⚡ إنستاباي
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Authoritative Quote Breakdown Card */}
+                  {quoteData && (
+                    <div className="p-3 rounded-2xl bg-slate-900 text-white flex flex-col gap-1.5 text-xs shadow-md">
+                      <div className="flex items-center justify-between border-b border-slate-800 pb-1.5">
+                        <span className="font-extrabold text-emerald-400 flex items-center gap-1">
+                          <ShieldCheck className="w-3.5 h-3.5" />
+                          <span>تسعيرة الخادم الموقعة (Piasters Engine)</span>
+                        </span>
+                        <span className="text-[9px] font-mono text-emerald-300 bg-emerald-950/80 px-1.5 py-0.5 rounded border border-emerald-800">
+                          {quoteData.isLiveBackendQuote ? `LIVE API • #${quoteData.signaturePreview}` : `#${quoteData.signaturePreview}`}
+                        </span>
+                      </div>
+                      <div className="grid grid-cols-2 gap-1 text-[11px] text-slate-300">
+                        <div>فتحة العداد الأساسية: <strong className="text-white">{quoteData.baseFareEgp} ج.م</strong></div>
+                        <div>حساب المسافة ({quoteData.distanceKm} كم): <strong className="text-white">{quoteData.distanceFareEgp} ج.م</strong></div>
+                        {quoteData.ruralSurchargeEgp > 0 && (
+                          <div>بدل قرى: <strong className="text-amber-300">{quoteData.ruralSurchargeEgp} ج.م</strong></div>
+                        )}
+                        <div>رسوم تشغيل المنصة: <strong className="text-white">{quoteData.platformFeeEgp} ج.م</strong></div>
+                      </div>
+                      <div className="flex items-center justify-between pt-1.5 border-t border-slate-800">
+                        <div>
+                          <span className="text-[10px] text-slate-400 block">الإجمالي النهائي المستحق</span>
+                          <span className="text-base font-black text-emerald-400">
+                            {quoteData.totalEgp}.00 ج.م{' '}
+                            <span className="text-[10px] text-slate-400 font-mono">({quoteData.totalPiasters} قرش)</span>
+                          </span>
+                        </div>
+                        <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-950 text-emerald-300 border border-emerald-800">
+                          ١٠٠٪ من التوصيل للكابتن
+                        </span>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Validation Error Banner */}
+                  {bookingError && (
+                    <div className="p-2.5 rounded-xl bg-rose-50 border border-rose-200 text-rose-800 text-[11px] font-bold flex items-center gap-1.5">
+                      <AlertTriangle className="w-4 h-4 text-rose-600 shrink-0" />
+                      <span>{bookingError}</span>
+                    </div>
+                  )}
+
+                  {/* Confirm Booking Button */}
+                  <button
+                    type="button"
+                    disabled={isLoadingQuote || !quoteData}
+                    onClick={handleConfirmRideOrPackage}
+                    className={`w-full py-3.5 px-4 rounded-2xl font-extrabold text-xs shadow-lg flex items-center justify-center gap-2 transition-all ${
+                      !quoteData
+                        ? 'bg-slate-200 text-slate-400 cursor-not-allowed'
+                        : 'bg-emerald-700 hover:bg-emerald-800 text-white shadow-emerald-700/25 active:scale-95 cursor-pointer'
+                    }`}
+                  >
+                    <Navigation className="w-4 h-4" />
+                    <span>
+                      {isLoadingQuote
+                        ? 'جاري حساب التسعيرة...'
+                        : `تأكيد وطلب كابتن الآن (${quoteData?.totalEgp || 0} ج.م)`}
+                    </span>
+                  </button>
+                </>
+              )}
             </div>
             )}
           </div>
@@ -2557,10 +3081,12 @@ export const CustomerMobileExperience: React.FC<CustomerMobileExperienceProps> =
                   </div>
                 </div>
 
-                {/* Single Store Policy Banner */}
+                {/* Multi-Stop Combined Basket Policy Banner */}
                 <div className="bg-emerald-50 px-4 py-2 border-b border-emerald-200/60 flex items-center justify-between text-[11px] text-emerald-900">
-                  <span className="font-semibold">سلة الطلب مخصصة لهذا المتجر فقط</span>
-                  <span className="font-bold text-emerald-800">توصيل الباجور ١٥ ج.م</span>
+                  <span className="font-semibold">
+                    🛒 سلة الباجور المجمعة: أضف من حتى ٤ محلات بتوصيلة واحدة ({cartStoreIds.length}/4)
+                  </span>
+                  <span className="font-bold text-emerald-800">توصيل موفر ١٥ ج.م</span>
                 </div>
 
                 {/* Product Catalog */}
@@ -2570,11 +3096,29 @@ export const CustomerMobileExperience: React.FC<CustomerMobileExperienceProps> =
                   <div className="flex flex-col gap-2.5">
                     {storeProducts.map((prod) => {
                       const inCart = cartItems.find((ci) => ci.product.id === prod.id);
+                      const isFav = isFavoriteProduct(prod.id);
                       return (
                         <div
                           key={prod.id}
-                          className="bg-white p-3 rounded-2xl border border-slate-200/80 shadow-2xs flex items-center justify-between gap-3"
+                          className="bg-white p-3 rounded-2xl border border-slate-200/80 shadow-2xs flex items-center justify-between gap-2.5"
                         >
+                          <button
+                            type="button"
+                            aria-label={`تفضيل ${prod.nameAr}`}
+                            data-testid={`favorite-product-btn-${prod.id}`}
+                            onClick={() => {
+                              triggerMobileHapticFeedback();
+                              toggleFavoriteProduct(prod.id);
+                            }}
+                            className="p-1.5 rounded-xl bg-slate-50 hover:bg-rose-50 border border-slate-200/80 shrink-0 transition cursor-pointer active:scale-90"
+                          >
+                            <Heart
+                              className={`w-4 h-4 transition ${
+                                isFav ? 'fill-rose-500 text-rose-500 scale-110' : 'text-slate-400'
+                              }`}
+                            />
+                          </button>
+
                           <div className="flex-1 min-w-0">
                             <div className="flex items-center gap-2">
                               <span className="font-extrabold text-xs text-slate-900">{prod.nameAr}</span>
@@ -2635,12 +3179,14 @@ export const CustomerMobileExperience: React.FC<CustomerMobileExperienceProps> =
                   </div>
                 </div>
 
-                {/* Sticky Bottom Cart Bar for this store */}
+                {/* Sticky Bottom Multi-Stop Cart Bar */}
                 {cartItems.length > 0 && (
                   <div className="fixed bottom-12 left-0 right-0 p-3 bg-white/95 backdrop-blur-md border-t border-slate-200 shadow-xl flex items-center justify-between z-30 max-w-[400px] mx-auto">
                     <div>
                       <div className="text-[10px] text-slate-500 font-semibold">
-                        السلة ({currentCartStore?.nameAr})
+                        {cartStoreIds.length > 1
+                          ? `سلة مجمعة (${cartStoreIds.length} متاجر)`
+                          : `السلة (${currentCartStore?.nameAr})`}
                       </div>
                       <div className="text-sm font-black text-slate-900">
                         {cartTotalEgp}.00 ج.م
@@ -2693,6 +3239,18 @@ export const CustomerMobileExperience: React.FC<CustomerMobileExperienceProps> =
                     الكل
                   </button>
                   <button
+                    data-testid="stores-favorites-filter-btn"
+                    onClick={() => setStoreCategoryFilter('favorites')}
+                    className={`px-3 py-1.5 rounded-xl font-bold whitespace-nowrap transition-all cursor-pointer flex items-center gap-1 ${
+                      storeCategoryFilter === 'favorites'
+                        ? 'bg-rose-600 text-white shadow-2xs'
+                        : 'bg-white border border-slate-200 text-slate-600 hover:bg-rose-50'
+                    }`}
+                  >
+                    <Heart className={`w-3.5 h-3.5 ${storeCategoryFilter === 'favorites' ? 'fill-white text-white' : 'text-rose-500'}`} />
+                    <span>المفضلة ({favoriteStoreIds.length})</span>
+                  </button>
+                  <button
                     onClick={() => setStoreCategoryFilter('restaurant')}
                     className={`px-3 py-1.5 rounded-xl font-bold whitespace-nowrap transition-all cursor-pointer ${
                       storeCategoryFilter === 'restaurant'
@@ -2724,9 +3282,65 @@ export const CustomerMobileExperience: React.FC<CustomerMobileExperienceProps> =
                   </button>
                 </div>
 
+                {/* Favorites Quick Strip (Products) */}
+                {favoriteProductIds.length > 0 && (
+                  <div
+                    data-testid="customer-favorites-strip"
+                    className="bg-rose-50/70 border border-rose-200/80 rounded-2xl p-2.5 flex flex-col gap-1.5"
+                  >
+                    <div className="flex items-center justify-between text-[11px] font-black text-rose-900">
+                      <span className="flex items-center gap-1">
+                        <Heart className="w-3.5 h-3.5 fill-rose-500 text-rose-500" />
+                        <span>أصنافك المفضلة للطلب السريع ({favoriteProductIds.length})</span>
+                      </span>
+                    </div>
+                    <div className="flex items-center gap-2 overflow-x-auto pb-0.5 no-scrollbar">
+                      {products
+                        .filter((p) => favoriteProductIds.includes(p.id))
+                        .map((favProd) => {
+                          const parentStore = stores.find((st) => st.id === favProd.storeId);
+                          return (
+                            <div
+                              key={favProd.id}
+                              className="shrink-0 bg-white rounded-xl border border-rose-200/70 px-2.5 py-1.5 flex items-center gap-2 shadow-2xs"
+                            >
+                              <div className="min-w-0">
+                                <div className="text-[10px] font-extrabold text-slate-900 truncate max-w-[110px]">
+                                  {favProd.nameAr}
+                                </div>
+                                <div className="text-[9px] text-emerald-800 font-bold">
+                                  {favProd.priceEgp} ج.م
+                                </div>
+                              </div>
+                              {parentStore && (
+                                <button
+                                  type="button"
+                                  onClick={() => handleAddProduct(favProd, parentStore)}
+                                  className="px-2 py-1 rounded-lg bg-emerald-700 text-white text-[9px] font-extrabold cursor-pointer"
+                                >
+                                  + أضف
+                                </button>
+                              )}
+                              <button
+                                type="button"
+                                aria-label={`إزالة ${favProd.nameAr} من المفضلة`}
+                                onClick={() => toggleFavoriteProduct(favProd.id)}
+                                className="p-0.5 text-rose-500 cursor-pointer"
+                              >
+                                <Heart className="w-3.5 h-3.5 fill-rose-500 text-rose-500" />
+                              </button>
+                            </div>
+                          );
+                        })}
+                    </div>
+                  </div>
+                )}
+
                 {/* Stores List */}
                 <div className="flex flex-col gap-3">
-                  {filteredStores.map((store) => (
+                  {filteredStores.map((store) => {
+                    const isStoreFav = isFavoriteStore(store.id);
+                    return (
                     <div
                       key={store.id}
                       onClick={() => setSelectedStore(store)}
@@ -2739,6 +3353,22 @@ export const CustomerMobileExperience: React.FC<CustomerMobileExperienceProps> =
                           className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
                           referrerPolicy="no-referrer"
                         />
+                        <button
+                          type="button"
+                          aria-label={`تفضيل ${store.nameAr}`}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            triggerMobileHapticFeedback();
+                            toggleFavoriteStore(store.id);
+                          }}
+                          className="absolute top-1 right-1 w-6 h-6 rounded-lg bg-white/90 backdrop-blur-xs flex items-center justify-center shadow-xs cursor-pointer"
+                        >
+                          <Heart
+                            className={`w-3.5 h-3.5 ${
+                              isStoreFav ? 'fill-rose-500 text-rose-500' : 'text-slate-500'
+                            }`}
+                          />
+                        </button>
                       </div>
 
                       <div className="flex-1 min-w-0">
@@ -2768,7 +3398,8 @@ export const CustomerMobileExperience: React.FC<CustomerMobileExperienceProps> =
 
                       <ChevronLeft className="w-4 h-4 text-slate-400 group-hover:text-emerald-700 shrink-0" />
                     </div>
-                  ))}
+                    );
+                  })}
                 </div>
               </div>
             )}
@@ -2894,6 +3525,29 @@ export const CustomerMobileExperience: React.FC<CustomerMobileExperienceProps> =
                         <div className="text-[10px] font-bold text-emerald-800 bg-emerald-50/70 px-2.5 py-1 rounded-lg border border-emerald-200/60 flex items-center justify-between">
                           <span>وقت قبول الطلب:</span>
                           <span>{acceptedText}</span>
+                        </div>
+                      )}
+
+                      {ord.scheduled_for && ord.scheduled_for !== 'now' && (
+                        <div className="text-[10px] font-bold text-indigo-900 bg-indigo-50 px-2.5 py-1 rounded-lg border border-indigo-200/70 flex items-center gap-1.5">
+                          <Calendar className="w-3.5 h-3.5 text-indigo-600 shrink-0" />
+                          <span>مجدول للتنفيذ: {ord.scheduled_for.replace('T', ' • ')}</span>
+                        </div>
+                      )}
+
+                      {ord.voiceNoteTranscript && (
+                        <div className="text-[10px] font-bold text-amber-950 bg-amber-50 px-2.5 py-1.5 rounded-lg border border-amber-200/70 flex items-start gap-1.5">
+                          <Mic className="w-3.5 h-3.5 text-amber-700 shrink-0 mt-0.5" />
+                          <span className="break-words">
+                            ملاحظة صوتية: “{ord.voiceNoteTranscript}”
+                          </span>
+                        </div>
+                      )}
+
+                      {(ord.driverTipEgp || 0) > 0 && (
+                        <div className="text-[10px] font-bold text-emerald-900 bg-emerald-50 px-2.5 py-1 rounded-lg border border-emerald-200/70 flex items-center justify-between">
+                          <span>إكرامية الكابتن المضافة:</span>
+                          <span className="font-black">+{ord.driverTipEgp}.00 ج.م</span>
                         </div>
                       )}
 
@@ -3030,7 +3684,7 @@ export const CustomerMobileExperience: React.FC<CustomerMobileExperienceProps> =
               </button>
             </div>
 
-            {/* PROMINENT CUSTOMER WALLET SECTION (AVAILABLE CREDIT + ADD FUNDS + PROTOTYPE NOTICE) */}
+            {/* PROMINENT CUSTOMER WALLET SECTION (AVAILABLE CREDIT + VERIFIED TOP-UP) */}
             <div
               data-testid="customer-wallet-section"
               className="rounded-2xl bg-gradient-to-br from-emerald-800 via-emerald-900 to-slate-900 text-white p-4 shadow-lg flex flex-col gap-3"
@@ -3043,14 +3697,14 @@ export const CustomerMobileExperience: React.FC<CustomerMobileExperienceProps> =
                   <div>
                     <div className="flex items-center gap-1.5">
                       <span className="text-[11px] text-emerald-200 font-bold">
-                        محفظة مشوار الرقمية (Available Credit)
+                        محفظة مشوار الرقمية
                       </span>
-                      <span className="text-[9px] font-extrabold px-1.5 py-0.2 rounded bg-amber-400/20 text-amber-300 border border-amber-400/30">
-                        محاكاة تجريبية (Prototype)
+                      <span className="text-[9px] font-extrabold px-1.5 py-0.2 rounded bg-emerald-400/20 text-emerald-200 border border-emerald-400/30">
+                        شحن موثق بالمرجع ✓
                       </span>
                     </div>
                     <span className="text-[10px] text-slate-300 block">
-                      الرصيد المتاح للمشاوير والطلبات (في الإنتاج يتطلب Webhook موثق)
+                      الرصيد المتاح للمشاوير والطلبات واشتراكات القرى
                     </span>
                   </div>
                 </div>
@@ -3060,7 +3714,7 @@ export const CustomerMobileExperience: React.FC<CustomerMobileExperienceProps> =
                   className="px-3 py-1.5 rounded-xl bg-amber-400 hover:bg-amber-300 text-slate-950 font-black text-xs shadow-sm flex items-center gap-1 transition-all active:scale-95 cursor-pointer"
                 >
                   <Plus className="w-3.5 h-3.5" />
-                  <span>إضافة رصيد (Add Funds)</span>
+                  <span>شحن الرصيد</span>
                 </button>
               </div>
 
@@ -3201,6 +3855,85 @@ export const CustomerMobileExperience: React.FC<CustomerMobileExperienceProps> =
               )}
             </div>
 
+            {/* FRIEND REFERRAL & INVITE BONUS CARD */}
+            <div className="bg-white rounded-2xl border border-indigo-200 p-3.5 shadow-2xs flex flex-col gap-2.5 text-xs">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <div className="w-8 h-8 rounded-xl bg-indigo-100 text-indigo-700 flex items-center justify-center">
+                    <Gift className="w-4 h-4" />
+                  </div>
+                  <div>
+                    <h4 className="font-extrabold text-slate-900">ادعُ أصدقاءك بالباجور واكسب ١٥ ج.م</h4>
+                    <span className="text-[10px] text-slate-500">شارك كودك الشخصي أو أدخل كود دعوة من صديق</span>
+                  </div>
+                </div>
+              </div>
+
+              <div className="p-2.5 rounded-xl bg-indigo-50/70 border border-indigo-200 flex items-center justify-between gap-2">
+                <div>
+                  <span className="text-[9px] text-indigo-700 font-bold block">كود دعوتك الشخصي:</span>
+                  <span className="font-mono font-black text-sm text-indigo-950" dir="ltr">
+                    {referralCode}
+                  </span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (typeof navigator !== 'undefined' && navigator.clipboard?.writeText) {
+                      navigator.clipboard.writeText(referralCode).catch(() => {});
+                    }
+                    setCopiedReferralCode(true);
+                    window.setTimeout(() => setCopiedReferralCode(false), 2000);
+                  }}
+                  className="px-3 py-1.5 rounded-xl bg-indigo-700 hover:bg-indigo-800 text-white text-[10px] font-extrabold flex items-center gap-1 cursor-pointer"
+                >
+                  <Copy className="w-3 h-3" />
+                  <span>{copiedReferralCode ? 'تم النسخ ✓' : 'نسخ الكود'}</span>
+                </button>
+              </div>
+
+              {!referredByCode ? (
+                <div className="flex items-center gap-1.5">
+                  <input
+                    type="text"
+                    value={referralInput}
+                    onChange={(e) => setReferralInput(e.target.value)}
+                    placeholder="أدخل كود صديق (مثال: MSH-BAGOUR25)"
+                    className="flex-1 px-2.5 py-1.5 rounded-xl border border-slate-200 bg-slate-50 text-xs font-mono"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const res = redeemReferralCode(referralInput);
+                      setReferralMsg({
+                        type: res.success ? 'success' : 'error',
+                        text: res.messageAr,
+                      });
+                    }}
+                    className="px-3 py-1.5 rounded-xl bg-slate-900 text-white text-[11px] font-extrabold shrink-0 cursor-pointer"
+                  >
+                    تفعيل (+١٥ ج)
+                  </button>
+                </div>
+              ) : (
+                <div className="text-[10px] font-bold text-emerald-800 bg-emerald-50 border border-emerald-200 rounded-xl px-2.5 py-1.5">
+                  ✓ تم تفعيل كود الدعوة ({referredByCode}) وإضافة ١٥ ج.م لمحفظتك
+                </div>
+              )}
+
+              {referralMsg && (
+                <div
+                  className={`text-[10px] font-bold px-2.5 py-1.5 rounded-xl border ${
+                    referralMsg.type === 'success'
+                      ? 'bg-emerald-50 text-emerald-800 border-emerald-200'
+                      : 'bg-rose-50 text-rose-800 border-rose-200'
+                  }`}
+                >
+                  {referralMsg.text}
+                </div>
+              )}
+            </div>
+
             {/* Wallet Transaction History */}
             <div className="bg-white rounded-2xl border border-slate-200/80 p-3.5 shadow-2xs flex flex-col gap-2.5">
               <div className="flex items-center justify-between">
@@ -3264,7 +3997,7 @@ export const CustomerMobileExperience: React.FC<CustomerMobileExperienceProps> =
         )}
       </div>
 
-      {/* Add Funds Modal (Clearly Labeled Prototype Simulation) */}
+      {/* Verified Wallet Top-Up Modal */}
       {showAddFundsModal && (
         <div className="absolute inset-0 z-50 bg-black/60 backdrop-blur-2xs flex items-center justify-center p-4">
           <form
@@ -3274,21 +4007,25 @@ export const CustomerMobileExperience: React.FC<CustomerMobileExperienceProps> =
             <div className="flex items-center justify-between border-b border-slate-100 pb-2">
               <div>
                 <h3 className="font-extrabold text-sm text-slate-900">شحن رصيد محفظة مشوار</h3>
-                <span className="text-[10px] font-bold text-amber-700">
-                  محاكاة تجريبية (Prototype Simulation)
+                <span className="text-[10px] font-bold text-emerald-700">
+                  التحقق المباشر برقم مرجع التحويل
                 </span>
               </div>
               <button
                 type="button"
-                onClick={() => setShowAddFundsModal(false)}
+                onClick={() => {
+                  setShowAddFundsModal(false);
+                  setTopUpErrorMsg(null);
+                  setTopUpSuccessMsg(null);
+                }}
                 className="w-7 h-7 rounded-full bg-slate-100 text-slate-500 flex items-center justify-center cursor-pointer"
               >
                 <X className="w-4 h-4" />
               </button>
             </div>
 
-            <div className="p-2.5 rounded-xl bg-amber-50 border border-amber-200 text-[10px] text-amber-900 leading-relaxed">
-              <strong>تنبيه الأمان المالي:</strong> هذا الشحن محاكاة لتجربة المستخدم فقط. في بيئة الإنتاج الفعلية لا يُضاف الرصيد إلا عبر إشعار دفع موقع رقمياً (`POST /api/v1/webhooks/payments/paymob`).
+            <div className="p-2.5 rounded-xl bg-emerald-50 border border-emerald-200 text-[10px] text-emerald-950 leading-relaxed">
+              حول المبلغ عبر <strong>إنستاباي / فودافون كاش</strong> إلى رقم التاجر بالباجور ثم أدخل رقم مرجع العملية للتحقق الفوري وإضافة الرصيد.
             </div>
 
             <div>
@@ -3312,7 +4049,7 @@ export const CustomerMobileExperience: React.FC<CustomerMobileExperienceProps> =
             </div>
 
             <div>
-              <label className="text-xs font-bold text-slate-700 block mb-1">وسيلة الإيداع التجريبية:</label>
+              <label className="text-xs font-bold text-slate-700 block mb-1">وسيلة التحويل:</label>
               <select
                 value={topUpMethodLabel}
                 onChange={(e) => setTopUpMethodLabel(e.target.value)}
@@ -3320,15 +4057,41 @@ export const CustomerMobileExperience: React.FC<CustomerMobileExperienceProps> =
               >
                 <option value="إنستاباي (InstaPay)">إنستاباي (InstaPay)</option>
                 <option value="فودافون كاش (Vodafone Cash)">فودافون كاش (Vodafone Cash)</option>
-                <option value="بطاقة بنكية (ميزة / فيزا)">بطاقة بنكية (ميزة / فيزا)</option>
+                <option value="فوري (Fawry)">فوري (Fawry)</option>
               </select>
             </div>
 
+            <div>
+              <label className="text-xs font-bold text-slate-700 block mb-1">
+                رقم مرجع التحويل (إلزامي ٦ أحرف/أرقام على الأقل):
+              </label>
+              <input
+                type="text"
+                value={topUpProofRef}
+                onChange={(e) => setTopUpProofRef(e.target.value)}
+                placeholder="مثال: IPN-849201 أو VFC-552190"
+                className="w-full px-3 py-2 rounded-xl border border-slate-200 bg-slate-50 text-xs font-mono text-slate-900"
+                required
+              />
+            </div>
+
+            {topUpErrorMsg && (
+              <div className="p-2 rounded-xl bg-rose-50 border border-rose-200 text-rose-800 text-[11px] font-bold">
+                {topUpErrorMsg}
+              </div>
+            )}
+            {topUpSuccessMsg && (
+              <div className="p-2 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-800 text-[11px] font-bold">
+                {topUpSuccessMsg}
+              </div>
+            )}
+
             <button
               type="submit"
-              className="w-full py-2.5 rounded-xl bg-emerald-700 hover:bg-emerald-800 text-white font-extrabold text-xs shadow-md cursor-pointer"
+              disabled={isSubmittingTopUp}
+              className="w-full py-2.5 rounded-xl bg-emerald-700 hover:bg-emerald-800 disabled:opacity-50 text-white font-extrabold text-xs shadow-md cursor-pointer"
             >
-              تأكيد شحن تجريبي +{topUpAmountEgp} ج.م الآن
+              {isSubmittingTopUp ? 'جاري التحقق من المرجع...' : `تحقق وإضافة +${topUpAmountEgp} ج.م للمحفظة`}
             </button>
           </form>
         </div>
@@ -3418,16 +4181,22 @@ export const CustomerMobileExperience: React.FC<CustomerMobileExperienceProps> =
         </div>
       )}
 
-      {/* Single-Store Cart Drawer / Checkout Sheet */}
+      {/* Multi-Stop Combined Cart Drawer / Checkout Sheet */}
       {isCartOpen && (
         <div className="absolute inset-0 z-50 bg-black/60 backdrop-blur-2xs flex flex-col justify-end">
-          <div className="bg-white rounded-t-3xl p-5 shadow-2xl flex flex-col gap-3.5 max-h-[85%] overflow-y-auto">
+          <div className="bg-white rounded-t-3xl p-5 shadow-2xl flex flex-col gap-3.5 max-h-[88%] overflow-y-auto">
             {/* Header */}
             <div className="flex items-center justify-between border-b border-slate-100 pb-2">
               <div>
-                <h3 className="font-extrabold text-sm text-slate-900">سلة المشتريات وإتمام الطلب</h3>
+                <h3 className="font-extrabold text-sm text-slate-900">
+                  {cartStoreIds.length > 1
+                    ? `سلة الباجور المجمعة (${cartStoreIds.length} متاجر)`
+                    : 'سلة المشتريات وإتمام الطلب'}
+                </h3>
                 <p className="text-[11px] text-emerald-800 font-bold">
-                  متجر: {currentCartStore?.nameAr || 'غير محدد'}
+                  {cartStoreIds.length > 1
+                    ? cartStoreGroups.map((g) => g.store.nameAr).join(' + ')
+                    : `متجر: ${currentCartStore?.nameAr || 'غير محدد'}`}
                 </p>
               </div>
               <button
@@ -3440,47 +4209,66 @@ export const CustomerMobileExperience: React.FC<CustomerMobileExperienceProps> =
 
             {cartItems.length === 0 ? (
               <div className="py-8 text-center text-xs text-slate-500">
-                السلة فارغة حالياً. أضف منتجات من المتجر لمتابعة الشراء.
+                السلة فارغة حالياً. أضف منتجات من متاجر الباجور (حتى ٤ محلات بتوصيلة واحدة).
               </div>
             ) : (
               <>
-                {/* Items in Cart */}
-                <div className="space-y-2">
-                  {cartItems.map((item) => (
-                    <div
-                      key={item.product.id}
-                      className="p-2.5 rounded-xl bg-slate-50 border border-slate-200/80 flex items-center justify-between gap-2 text-xs"
-                    >
-                      <div className="flex-1 min-w-0">
-                        <div className="font-extrabold text-slate-900 truncate">{item.product.nameAr}</div>
-                        <div className="text-[11px] text-slate-500">
-                          {item.product.priceEgp} ج.م × {item.quantity} = {item.product.priceEgp * item.quantity} ج.م
+                {cartStoreIds.length > 1 && (
+                  <div className="p-2.5 rounded-xl bg-emerald-50 border border-emerald-200 text-[11px] font-bold text-emerald-900 flex items-center justify-between">
+                    <span>🚚 توصيلة واحدة مجمعة لـ {cartStoreIds.length} محلات</span>
+                    <span className="text-emerald-700 font-black">وفّرت {cartMultiStopSavingsEgp} ج.م!</span>
+                  </div>
+                )}
+
+                {/* Items Grouped by Store */}
+                <div className="space-y-2.5">
+                  {cartStoreGroups.map((group) => (
+                    <div key={group.store.id} className="rounded-2xl border border-slate-200/80 bg-slate-50/70 p-2.5 space-y-2">
+                      <div className="flex items-center justify-between text-[11px] font-extrabold text-emerald-900 border-b border-slate-200/70 pb-1">
+                        <span className="flex items-center gap-1">
+                          <Store className="w-3.5 h-3.5 text-emerald-700" />
+                          <span>{group.store.nameAr}</span>
+                        </span>
+                        <span>{group.subtotalEgp} ج.م</span>
+                      </div>
+
+                      {group.items.map((item) => (
+                        <div
+                          key={item.product.id}
+                          className="p-2 rounded-xl bg-white border border-slate-200/70 flex items-center justify-between gap-2 text-xs"
+                        >
+                          <div className="flex-1 min-w-0">
+                            <div className="font-extrabold text-slate-900 truncate">{item.product.nameAr}</div>
+                            <div className="text-[11px] text-slate-500">
+                              {item.product.priceEgp} ج.م × {item.quantity} = {item.product.priceEgp * item.quantity} ج.م
+                            </div>
+                          </div>
+
+                          <div className="flex items-center gap-1.5 bg-slate-50 rounded-lg p-1 border border-slate-200">
+                            <button
+                              onClick={() => updateCartItemQty(item.product.id, item.quantity - 1)}
+                              className="w-5 h-5 rounded text-slate-700 flex items-center justify-center font-bold cursor-pointer"
+                            >
+                              <Minus className="w-3 h-3" />
+                            </button>
+                            <span className="text-xs font-black px-1 text-slate-900">{item.quantity}</span>
+                            <button
+                              onClick={() => updateCartItemQty(item.product.id, item.quantity + 1)}
+                              className="w-5 h-5 rounded text-emerald-700 flex items-center justify-center font-bold cursor-pointer"
+                            >
+                              <Plus className="w-3 h-3" />
+                            </button>
+                          </div>
+
+                          <button
+                            onClick={() => removeFromCart(item.product.id)}
+                            className="text-slate-400 hover:text-rose-600 p-1 cursor-pointer"
+                            title="حذف من السلة"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
                         </div>
-                      </div>
-
-                      <div className="flex items-center gap-1.5 bg-white rounded-lg p-1 border border-slate-200">
-                        <button
-                          onClick={() => updateCartItemQty(item.product.id, item.quantity - 1)}
-                          className="w-5 h-5 rounded text-slate-700 flex items-center justify-center font-bold cursor-pointer"
-                        >
-                          <Minus className="w-3 h-3" />
-                        </button>
-                        <span className="text-xs font-black px-1 text-slate-900">{item.quantity}</span>
-                        <button
-                          onClick={() => updateCartItemQty(item.product.id, item.quantity + 1)}
-                          className="w-5 h-5 rounded text-emerald-700 flex items-center justify-center font-bold cursor-pointer"
-                        >
-                          <Plus className="w-3 h-3" />
-                        </button>
-                      </div>
-
-                      <button
-                        onClick={() => removeFromCart(item.product.id)}
-                        className="text-slate-400 hover:text-rose-600 p-1 cursor-pointer"
-                        title="حذف من السلة"
-                      >
-                        <Trash2 className="w-3.5 h-3.5" />
-                      </button>
+                      ))}
                     </div>
                   ))}
                 </div>
@@ -3501,7 +4289,7 @@ export const CustomerMobileExperience: React.FC<CustomerMobileExperienceProps> =
                 {/* Order Notes */}
                 <div>
                   <label className="text-xs font-bold text-slate-700 block mb-1">
-                    ملاحظات المتجر والكابتن (اختياري):
+                    ملاحظات المتاجر والكابتن (اختياري):
                   </label>
                   <input
                     type="text"
@@ -3510,6 +4298,36 @@ export const CustomerMobileExperience: React.FC<CustomerMobileExperienceProps> =
                     placeholder="مثال: الخبز ساخن، التوصيل للطابق الثالث..."
                     className="w-full px-3 py-2 rounded-xl border border-slate-200 bg-white text-xs text-slate-800"
                   />
+                </div>
+
+                {/* Promo Coupon Input */}
+                <div className="p-2.5 rounded-xl bg-amber-50/60 border border-amber-200/80 space-y-1.5">
+                  <label className="text-[11px] font-extrabold text-amber-950 flex items-center gap-1">
+                    <Tag className="w-3.5 h-3.5 text-amber-700" />
+                    <span>كود خصم مشوار (BAGOUR10 • FIRST15):</span>
+                  </label>
+                  <div className="flex items-center gap-1.5">
+                    <input
+                      type="text"
+                      value={cartPromoInput}
+                      onChange={(e) => setCartPromoInput(e.target.value)}
+                      placeholder="أدخل كوبون الخصم..."
+                      className="flex-1 px-2.5 py-1.5 rounded-xl border border-amber-200 bg-white text-xs font-mono text-slate-900"
+                    />
+                    <button
+                      type="button"
+                      disabled={isApplyingPromo}
+                      onClick={handleApplyCartPromo}
+                      className="px-3 py-1.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-black text-xs cursor-pointer"
+                    >
+                      {isApplyingPromo ? '...' : 'تطبيق'}
+                    </button>
+                  </div>
+                  {cartPromoFeedback && (
+                    <div className={`text-[10px] font-bold ${cartAppliedPromo ? 'text-emerald-700' : 'text-rose-700'}`}>
+                      {cartPromoFeedback}
+                    </div>
+                  )}
                 </div>
 
                 {/* Payment Method Selector */}
@@ -3554,6 +4372,82 @@ export const CustomerMobileExperience: React.FC<CustomerMobileExperienceProps> =
                   </div>
                 </div>
 
+                {/* Exact Change Helper when Cash is selected */}
+                {paymentMethod === 'cash' && (
+                  <div className="p-2.5 rounded-xl bg-slate-50 border border-slate-200 space-y-1.5">
+                    <span className="text-[11px] font-extrabold text-slate-800 block">
+                      معاك فكة كام؟ (لتجهيز الفكة مع الكابتن)
+                    </span>
+                    <div className="grid grid-cols-4 gap-1.5 text-[10px]">
+                      {([0, 50, 100, 200] as CashChangeOptionEgp[]).map((note) => (
+                        <button
+                          key={note}
+                          type="button"
+                          onClick={() => setCartCashChangeForEgp(note)}
+                          className={`py-1.5 rounded-xl border font-extrabold cursor-pointer ${
+                            cartCashChangeForEgp === note
+                              ? 'bg-slate-900 text-amber-300 border-slate-900'
+                              : 'bg-white text-slate-700 border-slate-200'
+                          }`}
+                        >
+                          {note === 0 ? 'فكة مظبوطة' : `ورقة ${note} ج`}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* Driver Tip Selection inside Cart Checkout */}
+                <div
+                  data-testid="cart-driver-tip-section"
+                  className="p-3 rounded-xl bg-emerald-50/60 border border-emerald-200/80 flex flex-col gap-2"
+                >
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-extrabold text-emerald-950 flex items-center gap-1">
+                      <DollarSign className="w-3.5 h-3.5 text-emerald-700" />
+                      <span>إكرامية الكابتن (اختياري):</span>
+                    </span>
+                    <span className="text-[10px] font-black text-emerald-800 bg-white px-2 py-0.5 rounded-full border border-emerald-200">
+                      {cartDriverTipEgp > 0 ? `+${cartDriverTipEgp} ج.م` : 'بدون إكرامية'}
+                    </span>
+                  </div>
+                  <div className="grid grid-cols-4 gap-1.5 text-[11px]">
+                    {[0, 5, 10, 20].map((amt) => (
+                      <button
+                        key={amt}
+                        type="button"
+                        data-testid={`cart-tip-preset-${amt}`}
+                        onClick={() => {
+                          setCartDriverTipEgp(amt);
+                          setCartCustomTipInput(amt > 0 ? String(amt) : '');
+                        }}
+                        className={`py-1.5 rounded-xl border font-extrabold cursor-pointer transition ${
+                          cartDriverTipEgp === amt
+                            ? 'bg-emerald-700 text-white border-emerald-700'
+                            : 'bg-white text-slate-700 border-slate-200 hover:bg-emerald-50'
+                        }`}
+                      >
+                        {amt === 0 ? 'بدون' : `${amt} ج`}
+                      </button>
+                    ))}
+                  </div>
+                  <input
+                    type="number"
+                    min={0}
+                    max={500}
+                    step={1}
+                    data-testid="cart-custom-tip-input"
+                    value={cartCustomTipInput}
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      setCartCustomTipInput(val);
+                      setCartDriverTipEgp(Math.max(0, Math.min(500, Math.round(Number(val) || 0))));
+                    }}
+                    placeholder="أو أدخل إكرامية مخصصة بالجنيه..."
+                    className="w-full px-2.5 py-1.5 rounded-xl border border-emerald-200 bg-white text-xs font-mono text-slate-900"
+                  />
+                </div>
+
                 {/* Order Total Breakdown */}
                 <div className="p-3 rounded-xl bg-slate-50 border border-slate-200/80 text-xs flex flex-col gap-1.5 text-slate-600 font-medium">
                   <div className="flex justify-between">
@@ -3561,17 +4455,31 @@ export const CustomerMobileExperience: React.FC<CustomerMobileExperienceProps> =
                     <span className="font-bold text-slate-800">{cartSubtotalEgp}.00 ج.م</span>
                   </div>
                   <div className="flex justify-between">
-                    <span>توصيل مشوار (نطاق الباجور):</span>
+                    <span>توصيل مشوار ({cartStoreIds.length > 1 ? `${cartStoreIds.length} محلات` : 'الباجور'}):</span>
                     <span className="font-bold text-slate-800">{cartDeliveryFeeEgp}.00 ج.م</span>
                   </div>
                   <div className="flex justify-between">
                     <span>رسوم دعم المنصة:</span>
                     <span className="font-bold text-slate-800">{cartPlatformFeeEgp}.00 ج.م</span>
                   </div>
+                  {cartAppliedPromo && cartAppliedPromo.discountEgp > 0 && (
+                    <div className="flex justify-between text-amber-700 font-bold">
+                      <span>خصم كوبون ({cartAppliedPromo.code}):</span>
+                      <span>-{cartAppliedPromo.discountEgp}.00 ج.م</span>
+                    </div>
+                  )}
+                  {cartDriverTipEgp > 0 && (
+                    <div className="flex justify-between text-emerald-700 font-bold">
+                      <span>إكرامية الكابتن:</span>
+                      <span>+{cartDriverTipEgp}.00 ج.م</span>
+                    </div>
+                  )}
                   <div className="h-px bg-slate-200 my-1" />
                   <div className="flex justify-between text-sm font-extrabold text-slate-900">
                     <span>الإجمالي المستحق:</span>
-                    <span className="text-emerald-800 font-black">{cartTotalEgp}.00 ج.م</span>
+                    <span className="text-emerald-800 font-black">
+                      {Math.max(0, cartTotalEgp + cartDriverTipEgp - (cartAppliedPromo?.discountEgp || 0))}.00 ج.م
+                    </span>
                   </div>
                 </div>
 
@@ -3587,7 +4495,9 @@ export const CustomerMobileExperience: React.FC<CustomerMobileExperienceProps> =
                     onClick={handlePlaceOrder}
                     className="flex-1 py-3 px-4 rounded-xl bg-emerald-700 hover:bg-emerald-800 text-white font-extrabold text-xs shadow-lg shadow-emerald-700/25 flex items-center justify-center gap-1.5 transition-all active:scale-95 cursor-pointer"
                   >
-                    <span>تأكيد وإرسال الطلب الآن ({cartTotalEgp} ج.م)</span>
+                    <span>
+                      تأكيد وإرسال الطلب ({Math.max(0, cartTotalEgp + cartDriverTipEgp - (cartAppliedPromo?.discountEgp || 0))} ج.م)
+                    </span>
                     <ArrowRight className="w-3.5 h-3.5 rotate-180" />
                   </button>
                 </div>
@@ -3597,7 +4507,7 @@ export const CustomerMobileExperience: React.FC<CustomerMobileExperienceProps> =
         </div>
       )}
 
-      {/* Conflict Modal: Single Store Rule */}
+      {/* Conflict Modal: 4-Store Multi-Stop Limit */}
       {conflictModal.show && (
         <div className="absolute inset-0 z-50 bg-black/60 backdrop-blur-2xs flex items-center justify-center p-4">
           <div className="bg-white rounded-3xl p-5 shadow-2xl max-w-sm w-full text-center flex flex-col gap-3">
@@ -3605,11 +4515,10 @@ export const CustomerMobileExperience: React.FC<CustomerMobileExperienceProps> =
               <AlertTriangle className="w-6 h-6" />
             </div>
             <h3 className="font-extrabold text-sm text-slate-900">
-              تغيير متجر السلة
+              الحد الأقصى للسلة المجمعة (٤ محلات)
             </h3>
             <p className="text-xs text-slate-600 leading-relaxed">
-              سلتك الحالية تحتوي على منتجات من <strong className="text-slate-900">{conflictModal.currentStoreName}</strong>.
-              نظام مشوار يتيح الطلب من متجر واحد في كل مشوار لضمان سرعة التوصيل. هل تود تفريغ السلة والبدء بالتسوق من <strong className="text-emerald-800">{conflictModal.pendingStore?.nameAr}</strong>؟
+              سلتك المجمعة تحتوي حالياً على الحد الأقصى (٤ متاجر: <strong className="text-slate-900">{conflictModal.currentStoreName}</strong>) لضمان سرعة التوصيل. هل تود تفريغ السلة الحالية والبدء بالتسوق من <strong className="text-emerald-800">{conflictModal.pendingStore?.nameAr}</strong>؟
             </p>
             <div className="grid grid-cols-2 gap-2 pt-2">
               <button
@@ -3979,9 +4888,16 @@ export const CustomerMobileExperience: React.FC<CustomerMobileExperienceProps> =
 
             {/* Total Row */}
             <div className="p-3 rounded-2xl bg-slate-900 text-white flex items-center justify-between">
-              <span className="text-xs font-bold">إجمالي الطلب شامل التوصيل</span>
+              <div>
+                <span className="text-xs font-bold block">إجمالي الطلب شامل التوصيل</span>
+                {(summarySheetOrder.driverTipEgp || 0) > 0 && (
+                  <span className="text-[10px] text-amber-300 font-bold">
+                    يشمل إكرامية الكابتن +{summarySheetOrder.driverTipEgp} ج.م
+                  </span>
+                )}
+              </div>
               <span className="text-sm font-black text-emerald-400">
-                {summarySheetOrder.totalEgp + (summarySheetOrder.id === activeCustomerOrder?.id ? mobileTipEgp : 0)}.00 ج.م
+                {summarySheetOrder.totalEgp}.00 ج.م
               </span>
             </div>
           </div>
@@ -4031,97 +4947,13 @@ export const CustomerMobileExperience: React.FC<CustomerMobileExperienceProps> =
         </div>
       )}
 
-      {/* SOS Emergency Assistance Bottom Sheet Modal (El Bagour) */}
-      {showSosEmergencyModal && (
-        <div className="absolute inset-0 z-50 bg-black/60 backdrop-blur-2xs flex flex-col justify-end">
-          <div className="bg-white rounded-t-3xl p-4 shadow-2xl flex flex-col gap-3 max-h-[84%] overflow-y-auto">
-            <div className="flex items-center justify-between border-b border-rose-100 pb-2.5">
-              <div className="flex items-center gap-2">
-                <div className="w-9 h-9 rounded-2xl bg-rose-600 text-white flex items-center justify-center shadow-xs">
-                  <ShieldCheck className="w-5 h-5" />
-                </div>
-                <div>
-                  <h4 className="font-black text-sm text-rose-950">طوارئ وأمان مشوار الباجور (SOS)</h4>
-                  <p className="text-[10px] text-rose-600 font-bold">
-                    مشاركة الموقع الفوري والاتصال السريع بالطوارئ
-                  </p>
-                </div>
-              </div>
-              <button
-                type="button"
-                onClick={() => setShowSosEmergencyModal(false)}
-                className="w-7 h-7 rounded-full bg-slate-100 text-slate-500 flex items-center justify-center cursor-pointer"
-              >
-                <X className="w-4 h-4" />
-              </button>
-            </div>
-
-            {/* Live GPS Location & Emergency Contact in El Bagour */}
-            <div className="p-3 rounded-2xl bg-rose-50/70 border border-rose-200 space-y-2 text-xs">
-              <div className="flex items-center justify-between">
-                <span className="font-extrabold text-rose-900">جهة اتصال الطوارئ المسجلة بالباجور:</span>
-                <span className="px-2 py-0.5 rounded-full bg-white text-rose-700 font-black text-[10px] border border-rose-200">
-                  الباجور • المنوفية
-                </span>
-              </div>
-              <div className="bg-white p-2.5 rounded-xl border border-rose-100 flex items-center justify-between">
-                <div>
-                  <span className="font-black text-slate-900 block">د. سامح المنوفي (أقارب - الباجور)</span>
-                  <span className="font-mono text-[11px] text-slate-600" dir="ltr">
-                    01099881122
-                  </span>
-                </div>
-                <span className="text-[10px] font-mono text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-md border border-emerald-200">
-                  30.4312° N, 31.0365° E
-                </span>
-              </div>
-
-              <button
-                type="button"
-                onClick={() => setMobileSosLocationShared(true)}
-                className="w-full py-2.5 rounded-xl bg-rose-600 hover:bg-rose-700 text-white font-black text-xs flex items-center justify-center gap-1.5 shadow-sm cursor-pointer"
-              >
-                <Share2 className="w-3.5 h-3.5" />
-                <span>
-                  {mobileSosLocationShared
-                    ? 'تم إرسال الموقع الحي لجهة الطوارئ بنجاح ✓'
-                    : 'مشاركة موقعي الحي الآن مع جهة الطوارئ'}
-                </span>
-              </button>
-            </div>
-
-            {/* Emergency Services in El Bagour */}
-            <div className="space-y-1.5">
-              <span className="text-[10px] font-extrabold text-slate-500 block">
-                أرقام طوارئ مركز ومدينة الباجور المباشرة:
-              </span>
-              <div className="grid grid-cols-2 gap-2">
-                <button
-                  type="button"
-                  onClick={() => setMobileSosCalledService('شرطة النجدة بالباجور (122)')}
-                  className="p-2.5 rounded-xl bg-slate-900 hover:bg-slate-800 text-white text-xs font-extrabold flex flex-col items-center gap-1 cursor-pointer"
-                >
-                  <Phone className="w-4 h-4 text-rose-400" />
-                  <span>شرطة النجدة (122)</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setMobileSosCalledService('إسعاف الباجور المركزي (123)')}
-                  className="p-2.5 rounded-xl bg-slate-900 hover:bg-slate-800 text-white text-xs font-extrabold flex flex-col items-center gap-1 cursor-pointer"
-                >
-                  <Phone className="w-4 h-4 text-emerald-400" />
-                  <span>إسعاف الباجور (123)</span>
-                </button>
-              </div>
-              {mobileSosCalledService && (
-                <div className="p-2 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-900 text-[11px] font-bold text-center">
-                  جاري الاتصال الفوري بـ: {mobileSosCalledService} — تم إرفاق إحداثيات المشوار
-                </div>
-              )}
-            </div>
-          </div>
-        </div>
-      )}
+      {/* SOS Emergency Assistance Bottom Sheet Modal (Live GPS + One-Tap Call) */}
+      <SosEmergencySheet
+        isOpen={showSosEmergencyModal}
+        onClose={() => setShowSosEmergencyModal(false)}
+        orderId={activeCustomerOrder?.id}
+        orderNumber={activeCustomerOrder?.orderNumber}
+      />
 
 
       {/* Customer Mobile Bottom Navigation Bar (5 Unified Destinations, Touch Targets >= 44px) */}

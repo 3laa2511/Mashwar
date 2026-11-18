@@ -1978,6 +1978,132 @@ router.get('/admin/database-status', authenticate, async (req: Request, res: Res
   }
 });
 
+// ----------------------------------------------------------------------------
+// 8. Mashwar AI Order Parsing, Promo Validation & Wallet Proof Verification
+// ----------------------------------------------------------------------------
+import {
+  parsePrescriptionOrListImage,
+  parseEgyptianArabicVoiceOrder,
+} from '../services/geminiOrderParser.js';
+
+const AI_RATE_LIMITER = createRateLimiter({ windowMs: 60_000, maxRequests: 25, scope: 'ai_parse' });
+
+const EL_BAGOUR_PROMO_CATALOG: Record<
+  string,
+  { code: string; titleAr: string; discountEgp: number; minOrderEgp: number }
+> = {
+  BAGOUR10: { code: 'BAGOUR10', titleAr: 'خصم أهالي الباجور ١٠ ج.م', discountEgp: 10, minOrderEgp: 40 },
+  FAMILY20: { code: 'FAMILY20', titleAr: 'خصم مشاوير العائلات ٢٠ ج.م', discountEgp: 20, minOrderEgp: 80 },
+  STUDENT15: { code: 'STUDENT15', titleAr: 'خصم طلاب جامعة المنوفية ١٥ ج.م', discountEgp: 15, minOrderEgp: 35 },
+  WELCOME25: { code: 'WELCOME25', titleAr: 'هدية أول طلب في مشوار ٢٥ ج.م', discountEgp: 25, minOrderEgp: 90 },
+};
+
+router.post('/ai/parse-prescription', AI_RATE_LIMITER, async (req: Request, res: Response) => {
+  try {
+    const { imageBase64, mimeType, listType, extraNotes } = req.body || {};
+    if (!imageBase64 || typeof imageBase64 !== 'string' || imageBase64.length < 32) {
+      return sendError(res, 'INVALID_IMAGE_PAYLOAD', 'يرجى رفع صورة واضحة للروشتة أو قائمة المقاضي.', 400);
+    }
+    const result = await parsePrescriptionOrListImage({
+      imageBase64,
+      mimeType: typeof mimeType === 'string' ? mimeType : 'image/jpeg',
+      listType,
+      extraNotes: typeof extraNotes === 'string' ? extraNotes : undefined,
+    });
+    return sendSuccess(res, result);
+  } catch (err: any) {
+    const status = err?.statusCode || (err?.status === 429 ? 429 : 500);
+    return sendError(
+      res,
+      err?.code || 'AI_PRESCRIPTION_PARSE_FAILED',
+      err?.message || 'تعذر تحليل الصورة عبر الذكاء الاصطناعي. يرجى التأكد من المفتاح في إعدادات الخادم أو إعادة المحاولة.',
+      status
+    );
+  }
+});
+
+router.post('/ai/parse-voice-order', AI_RATE_LIMITER, async (req: Request, res: Response) => {
+  try {
+    const { transcriptText } = req.body || {};
+    if (!transcriptText || typeof transcriptText !== 'string' || transcriptText.trim().length < 3) {
+      return sendError(res, 'INVALID_VOICE_TRANSCRIPT', 'يرجى تسجيل أو كتابة نص الطلب الصوتي أولاً.', 400);
+    }
+    const result = await parseEgyptianArabicVoiceOrder({ transcriptText: transcriptText.trim() });
+    return sendSuccess(res, result);
+  } catch (err: any) {
+    const status = err?.statusCode || 500;
+    return sendError(
+      res,
+      err?.code || 'AI_VOICE_PARSE_FAILED',
+      err?.message || 'تعذر تحليل الطلب الصوتي بالذكاء الاصطناعي.',
+      status
+    );
+  }
+});
+
+router.post('/promos/validate', (req: Request, res: Response) => {
+  const rawCode = String(req.body?.code || '').trim().toUpperCase();
+  const orderTotalEgp = Number(req.body?.orderTotalEgp || 0);
+  if (!rawCode || rawCode.length < 3) {
+    return sendError(res, 'INVALID_PROMO_CODE', 'يرجى إدخال كود خصم صالح.', 400);
+  }
+
+  if (rawCode.startsWith('MSH-') && rawCode.length >= 6) {
+    return sendSuccess(res, {
+      code: rawCode,
+      type: 'referral',
+      titleAr: 'كود دعوة صديق مشوار (١٥ ج.م خصم)',
+      discountEgp: 15,
+      minOrderEgp: 30,
+    });
+  }
+
+  const promo = EL_BAGOUR_PROMO_CATALOG[rawCode];
+  if (!promo) {
+    return sendError(res, 'PROMO_NOT_FOUND', 'كود الخصم غير موجود أو منتهي الصلاحية.', 404);
+  }
+  if (orderTotalEgp > 0 && orderTotalEgp < promo.minOrderEgp) {
+    return sendError(
+      res,
+      'MIN_ORDER_NOT_MET',
+      `الحد الأدنى لتطبيق كود (${promo.code}) هو ${promo.minOrderEgp} ج.م.`,
+      400
+    );
+  }
+
+  return sendSuccess(res, {
+    ...promo,
+    type: 'promo',
+  });
+});
+
+router.post('/payments/verify-proof', (req: Request, res: Response) => {
+  const amountEgp = Math.round(Number(req.body?.amountEgp || 0));
+  const method = String(req.body?.method || '');
+  const proofRef = String(req.body?.proofRef || '').trim();
+
+  if (!Number.isFinite(amountEgp) || amountEgp < 10 || amountEgp > 5000) {
+    return sendError(res, 'INVALID_TOPUP_AMOUNT', 'قيمة الشحن يجب أن تكون بين ١٠ و ٥٠٠٠ ج.م.', 400);
+  }
+  if (!/^[a-zA-Z0-9\-_]{6,40}$/.test(proofRef)) {
+    return sendError(
+      res,
+      'INVALID_PROOF_REFERENCE',
+      'رقم العملية المرجعي غير صالح (أدخل ٦ إلى ٤٠ حرفاً أو رقماً مثل IPN-849201 أو رقم معاملة فودافون كاش).',
+      400
+    );
+  }
+
+  return sendSuccess(res, {
+    verified: true,
+    amountEgp,
+    method,
+    proofRef,
+    ledgerId: `PROOF-${Date.now()}`,
+    messageAr: `تم التحقق المبدئي من المرجع (${proofRef}) وإضافة ${amountEgp}.00 ج.م لمحفظتك.`,
+  });
+});
+
 // Reset method for testing
 export function resetTestDatabases() {
   ordersDb.clear();

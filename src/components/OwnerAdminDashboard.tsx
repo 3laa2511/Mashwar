@@ -9,7 +9,6 @@
 import React, { useState } from 'react';
 import {
   ShieldCheck,
-  ShieldAlert,
   AlertTriangle,
   CheckCircle2,
   Clock,
@@ -77,9 +76,11 @@ interface OrderItem {
   orderNumber: string;
   customerName: string;
   customerPhone: string;
-  serviceType: 'package' | 'restaurant_store' | 'errand' | 'ride';
+  serviceType: 'package' | 'restaurant_store' | 'errand' | 'ride' | 'prescription_list';
   serviceTypeAr: string;
   status:
+    | 'awaiting_quote'
+    | 'quote_ready'
     | 'created'
     | 'accepted_by_store'
     | 'merchant_accepted'
@@ -101,6 +102,9 @@ interface OrderItem {
   assignedCaptainName?: string;
   createdAt: string;
   specialInstructions?: string;
+  ridePin?: string;
+  requiresFamilyTrustedDriver?: boolean;
+  storeNames?: string[];
 }
 
 interface CaptainItem {
@@ -116,6 +120,7 @@ interface CaptainItem {
   cashCeilingPiasters: number;
   rating: number;
   isOnline: boolean;
+  isFamilyTrusted?: boolean;
   completedToday: number;
 }
 
@@ -135,12 +140,14 @@ export function OwnerAdminDashboard() {
   const {
     orders: marketplaceOrders,
     captains,
+    commuteSubscriptions,
     systemSettings: settings,
     auditLogs,
     adminAssignCaptain,
     adminEmergencyCancelOrder,
     adminSettleCaptainCash,
     adminRenewCaptainSubscription,
+    adminToggleCaptainFamilyTrusted,
     adminUpdateSettings,
   } = useMarketplace();
 
@@ -170,10 +177,14 @@ export function OwnerAdminDashboard() {
       serviceTypeAr:
         o.serviceType === 'ride'
           ? o.serviceTypeAr || 'مشوار ركاب (توكتوك / سيارة)'
+          : o.serviceType === 'prescription_list'
+          ? `روشتة / قائمة مقاضي (${o.storeName})`
           : o.serviceType === 'errand'
           ? 'مشوار خاص سريع'
           : o.serviceType === 'package'
           ? 'توصيل مستندات وطرود'
+          : o.storeNames && o.storeNames.length > 1
+          ? `سلة مجمعة (${o.storeNames.length} متاجر)`
           : `طلب متجر (${o.storeName})`,
       status: o.status,
       pickup: o.storeAddress,
@@ -185,6 +196,9 @@ export function OwnerAdminDashboard() {
       assignedCaptainName: o.assignedCaptainName,
       createdAt: o.acceptedAt ? `${o.createdAt} • قُبل ${o.acceptedAt}` : o.createdAt,
       specialInstructions: o.notes || o.itemDescription,
+      ridePin: o.ridePin,
+      requiresFamilyTrustedDriver: o.requiresFamilyTrustedDriver,
+      storeNames: o.storeNames,
     };
   });
 
@@ -359,6 +373,9 @@ export function OwnerAdminDashboard() {
     if (statusFilter === 'all') return true;
     if (statusFilter === 'in_transit') {
       return o.status === 'in_transit' || o.status === 'picked_up' || o.status === 'at_pickup';
+    }
+    if (statusFilter === 'quote_pending') {
+      return o.status === 'awaiting_quote' || o.status === 'quote_ready';
     }
     return o.status === statusFilter;
   });
@@ -573,18 +590,20 @@ export function OwnerAdminDashboard() {
               <p className="text-[10px] text-slate-500 mt-2">سقف التحصيل الأقصى ١,٠٠٠ ج.م/كابتن</p>
             </div>
 
-            <div className="bg-slate-900 border border-red-500/30 rounded-2xl p-4 flex flex-col justify-between relative overflow-hidden">
+            <div className="bg-slate-900 border border-emerald-500/30 rounded-2xl p-4 flex flex-col justify-between relative overflow-hidden">
               <div className="flex items-center justify-between text-slate-400 text-xs">
-                <span>نقل الركاب المحظور</span>
-                <span className="p-1.5 rounded-lg bg-red-500/20 text-red-400">
-                  <ShieldAlert className="w-4 h-4" />
+                <span>اشتراكات المشوار اليومي</span>
+                <span className="p-1.5 rounded-lg bg-emerald-500/20 text-emerald-400">
+                  <ShieldCheck className="w-4 h-4" />
                 </span>
               </div>
               <div className="mt-3">
-                <span className="text-2xl font-black text-red-400">٠</span>
-                <span className="text-[11px] text-red-300 font-bold mr-2">محظور ١٠٠٪</span>
+                <span className="text-2xl font-black text-emerald-400">{commuteSubscriptions.length}</span>
+                <span className="text-[11px] text-emerald-300 font-bold mr-2">اشتراك نشط بالقرى</span>
               </div>
-              <p className="text-[10px] text-red-300/80 mt-2">امتثالاً للقانون رقم ٧٣ لسنة ٢٠١٨</p>
+              <p className="text-[10px] text-slate-400 mt-2">
+                تغطي خطوط قرى الباجور والجامعة • كباتن العائلات: {captains.filter((c) => c.isFamilyTrusted).length}
+              </p>
             </div>
           </div>
 
@@ -747,6 +766,14 @@ export function OwnerAdminDashboard() {
                 الكل ({orders.length})
               </button>
               <button
+                onClick={() => setStatusFilter('quote_pending')}
+                className={`px-3 py-1 rounded-lg text-xs font-bold transition ${
+                  statusFilter === 'quote_pending' ? 'bg-amber-500 text-slate-950' : 'bg-slate-800 text-slate-300 hover:bg-slate-700'
+                }`}
+              >
+                تسعير روشتة ({orders.filter((o) => o.status === 'awaiting_quote' || o.status === 'quote_ready').length})
+              </button>
+              <button
                 onClick={() => setStatusFilter('searching_captain')}
                 className={`px-3 py-1 rounded-lg text-xs font-bold transition ${
                   statusFilter === 'searching_captain' ? 'bg-amber-500 text-slate-950' : 'bg-slate-800 text-slate-300 hover:bg-slate-700'
@@ -805,6 +832,16 @@ export function OwnerAdminDashboard() {
                           بدل قرى +٥٠٠ قرش
                         </span>
                       )}
+                      {order.requiresFamilyTrustedDriver && (
+                        <span className="text-[10px] px-1.5 py-0.5 rounded bg-indigo-500/20 text-indigo-300 border border-indigo-500/30 font-bold">
+                          🛡️ كابتن عائلات موثوق
+                        </span>
+                      )}
+                      {order.ridePin && (
+                        <span className="text-[10px] px-1.5 py-0.5 rounded bg-amber-500/15 text-amber-300 border border-amber-500/30 font-mono">
+                          PIN: {order.ridePin}
+                        </span>
+                      )}
                     </div>
 
                     <div className="text-xs text-slate-300 flex flex-wrap items-center gap-3">
@@ -837,6 +874,11 @@ export function OwnerAdminDashboard() {
                     </div>
 
                     <div>
+                      {(order.status === 'awaiting_quote' || order.status === 'quote_ready') && (
+                        <span className="px-2.5 py-1 rounded-xl text-xs font-bold bg-indigo-500/20 text-indigo-300 border border-indigo-500/40 block text-center">
+                          {order.status === 'awaiting_quote' ? 'بانتظار تسعيرة الصيدلية/المتجر' : 'عرض السعر بانتظار العميل'}
+                        </span>
+                      )}
                       {(order.status === 'searching_captain' || order.status === 'ready_for_pickup') && (
                         <span className="px-2.5 py-1 rounded-xl text-xs font-bold bg-amber-500/20 text-amber-300 border border-amber-500/40 animate-pulse block text-center">
                           {order.status === 'ready_for_pickup' ? 'جاهز للاستلام (بانتظار كابتن)' : 'بانتظار كابتن'}
@@ -930,7 +972,7 @@ export function OwnerAdminDashboard() {
                         {captain.vehicleType.includes('موتوسيكل') ? '🏍️' : captain.vehicleType.includes('فان') ? '🚐' : '🛵'}
                       </div>
                       <div>
-                        <div className="flex items-center gap-2">
+                        <div className="flex items-center flex-wrap gap-2">
                           <h4 className="font-bold text-white text-sm">{captain.name}</h4>
                           {captain.isOnline ? (
                             <span className="text-[10px] px-1.5 py-0.2 rounded bg-emerald-500/20 text-emerald-400 font-bold">
@@ -939,6 +981,11 @@ export function OwnerAdminDashboard() {
                           ) : (
                             <span className="text-[10px] px-1.5 py-0.2 rounded bg-slate-800 text-slate-400">
                               غير متصل
+                            </span>
+                          )}
+                          {captain.isFamilyTrusted && (
+                            <span className="text-[10px] px-2 py-0.2 rounded bg-indigo-500/20 text-indigo-300 border border-indigo-500/30 font-bold">
+                              🛡️ كابتن عائلات موثوق
                             </span>
                           )}
                         </div>
@@ -1015,22 +1062,45 @@ export function OwnerAdminDashboard() {
                   </div>
 
                   {/* Captain Operations Actions */}
-                  <div className="flex items-center gap-2 pt-2 border-t border-slate-800">
+                  <div className="flex flex-wrap items-center gap-2 pt-2 border-t border-slate-800">
                     <button
                       onClick={() => {
                         setSelectedCaptainForSettle(captain);
                         setRemitAmountInput((captain.cashHoldingPiasters / 100).toString());
                       }}
-                      className="flex-1 py-2 rounded-xl bg-purple-600 hover:bg-purple-500 text-white font-bold text-xs transition shadow"
+                      className="flex-1 py-2 px-2 rounded-xl bg-purple-600 hover:bg-purple-500 text-white font-bold text-xs transition shadow"
                     >
-                      توريد النقدية (خزينة المركز)
+                      توريد النقدية
                     </button>
 
                     <button
                       onClick={() => handleRenewSubscription(captain.id)}
-                      className="flex-1 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs transition shadow"
+                      className="flex-1 py-2 px-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs transition shadow"
                     >
-                      تجديد الاشتراك (٣٠ يوم)
+                      تجديد الاشتراك
+                    </button>
+
+                    <button
+                      onClick={() => {
+                        if (currentAdmin.role === 'support_agent') {
+                          showInlineMessage('error', 'تعديل شارة كابتن العائلات متاح للمالك أو مسؤول العمليات فقط.');
+                          return;
+                        }
+                        adminToggleCaptainFamilyTrusted(captain.id, currentAdmin.name, currentAdmin.role);
+                        showInlineMessage(
+                          'success',
+                          captain.isFamilyTrusted
+                            ? `تم إزالة شارة كابتن العائلات عن ${captain.name}`
+                            : `تم اعتماد ${captain.name} ككابتن عائلات موثوق`
+                        );
+                      }}
+                      className={`py-2 px-3 rounded-xl font-bold text-xs transition border ${
+                        captain.isFamilyTrusted
+                          ? 'bg-indigo-600/20 border-indigo-400/40 text-indigo-300 hover:bg-indigo-600/30'
+                          : 'bg-slate-800 border-slate-700 text-slate-300 hover:bg-slate-700'
+                      }`}
+                    >
+                      {captain.isFamilyTrusted ? '✓ كابتن عائلات' : '+ توثيق للعائلات'}
                     </button>
                   </div>
                 </div>
@@ -1186,15 +1256,30 @@ export function OwnerAdminDashboard() {
                 </div>
               </div>
 
-              {/* Regulatory Law Lock Notice */}
-              <div className="p-4 rounded-xl bg-red-500/10 border border-red-500/30 flex items-start gap-3">
-                <ShieldAlert className="w-5 h-5 text-red-400 shrink-0 mt-0.5" />
-                <div className="text-xs text-red-200 leading-relaxed">
-                  <strong className="text-red-300 font-bold block mb-1">
-                    القفل التنظيمي لخدمة نقل الركاب (محظور التعديل برمجياً):
-                  </strong>
-                  خدمة نقل الأفراد والركاب معطلة نظامياً ومغلقة برمجياً بموجب القانون رقم ٧٣ لسنة ٢٠١٨ المنظم للنقل البري للركاب. لا يمكن رفع هذا الحظر إلا بقرار تنفيذي بعد استيفاء التراخيص المرورية من إدارة مرور المنوفية واعتماد وثائق التأمين التجاري.
+              {/* Passenger Rides & Family Safety Policy Card */}
+              <div className="p-4 rounded-xl bg-emerald-500/10 border border-emerald-500/30 flex items-start justify-between gap-3">
+                <div className="flex items-start gap-3">
+                  <ShieldCheck className="w-5 h-5 text-emerald-400 shrink-0 mt-0.5" />
+                  <div className="text-xs text-slate-200 leading-relaxed">
+                    <strong className="text-emerald-300 font-bold block mb-1">
+                      سياسة مشاوير الركاب (توكتوك / سيارة) وأمان العائلات:
+                    </strong>
+                    تُفعّل رحلات الركاب داخل مركز الباجور والقرى مع إلزامية كود الأمان الرباعي (OTP PIN) عند الركوب، وخيار حصر الطلب على الكباتن الموثقين للعائلات، بالإضافة إلى باقات الاشتراك اليومي بين القرى والجامعة.
+                  </div>
                 </div>
+                <button
+                  type="button"
+                  onClick={() =>
+                    setSettings({ ...settings, passengerLockEnabled: !settings.passengerLockEnabled })
+                  }
+                  className={`shrink-0 px-3 py-1.5 rounded-lg text-[11px] font-bold border transition ${
+                    settings.passengerLockEnabled
+                      ? 'bg-amber-500/20 text-amber-300 border-amber-500/40'
+                      : 'bg-emerald-600 text-white border-emerald-500'
+                  }`}
+                >
+                  {settings.passengerLockEnabled ? 'مشاوير الركاب موقفة مؤقتاً' : 'مشاوير الركاب مفعّلة ✓'}
+                </button>
               </div>
 
               <div className="flex justify-end pt-4 border-t border-slate-800">
