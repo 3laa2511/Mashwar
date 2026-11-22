@@ -155,7 +155,7 @@ export async function runAllTests(): Promise<{
   await runTest('PostgresTLS', 'Omits an empty or whitespace-only custom CA', () => {
     const ssl = buildPgSslConfig('postgresql://db.example.supabase.co:5432/app', 'development', '  \n  ');
     assert(ssl !== false && ssl.rejectUnauthorized === true, 'TLS must remain enabled');
-    assert(!('ca' in ssl), 'Whitespace-only PG_SSL_CA must be omitted');
+    assert(ssl !== false && !('ca' in ssl), 'Whitespace-only PG_SSL_CA must be omitted');
   });
 
   await runTest('PostgresTLS', 'Normalizes escaped newlines in a custom PEM CA', () => {
