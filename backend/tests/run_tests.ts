@@ -142,6 +142,11 @@ export async function runAllTests(): Promise<{
     assert(ssl !== false && ssl.rejectUnauthorized === true, 'sslmode=require must not be overridden by ssl:false');
   });
 
+  await runTest('PostgresTLS', 'Honors sslmode=verify-ca outside production', () => {
+    const ssl = buildPgSslConfig('postgresql://db.example.com:5432/app?sslmode=verify-ca', 'development', undefined);
+    assert(ssl !== false && ssl.rejectUnauthorized === true, 'sslmode=verify-ca must require verified TLS');
+  });
+
   await runTest('PostgresTLS', 'Honors sslmode=verify-full outside production', () => {
     const ssl = buildPgSslConfig('postgresql://db.example.com:5432/app?sslmode=verify-full', 'test', undefined);
     assert(ssl !== false && ssl.rejectUnauthorized === true, 'sslmode=verify-full must require verified TLS');
