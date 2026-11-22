@@ -29,6 +29,7 @@ import {
   Shield,
   Wand2,
   Loader2,
+  ShoppingBag,
 } from 'lucide-react';
 import {
   useMarketplace,
@@ -102,16 +103,26 @@ function getDefaultFutureTime(): string {
   return `${hh}:${mm}`;
 }
 
+interface ExtractedStructuredItem {
+  nameAr: string;
+  quantity?: string;
+  unit?: string;
+  notes?: string;
+  estimatedCategory?: string;
+}
+
 interface MultiStepOrderWizardProps {
   initialCategory?: WizardServiceCategory;
   onOrderCreated: () => void;
   onOpenAuthModal?: () => void;
+  onOpenCartAfterAdd?: () => void;
 }
 
 export const MultiStepOrderWizard: React.FC<MultiStepOrderWizardProps> = ({
   initialCategory = 'delivery',
   onOrderCreated,
   onOpenAuthModal,
+  onOpenCartAfterAdd,
 }) => {
   const {
     currentUser,
@@ -123,6 +134,7 @@ export const MultiStepOrderWizard: React.FC<MultiStepOrderWizardProps> = ({
     isFavoriteProduct,
     toggleFavoriteService,
     isFavoriteService,
+    addExtractedItemsToCart,
     submitDirectStoreOrder,
     submitPrescriptionOrder,
     submitRideOrPackageOrder,
@@ -141,8 +153,10 @@ export const MultiStepOrderWizard: React.FC<MultiStepOrderWizardProps> = ({
   // Prescription / Grocery List AI state
   const [rxStoreId, setRxStoreId] = useState<string>('merchant_amana');
   const [rxExtractedItems, setRxExtractedItems] = useState<string[]>([]);
+  const [rxStructuredItems, setRxStructuredItems] = useState<ExtractedStructuredItem[]>([]);
   const [rxSummary, setRxSummary] = useState<string>('');
   const [rxWarningAr, setRxWarningAr] = useState<string | null>(null);
+  const [rxCartAddedFeedback, setRxCartAddedFeedback] = useState<string | null>(null);
   const [rxManualInput, setRxManualInput] = useState<string>('');
   const [rxPreviewUrl, setRxPreviewUrl] = useState<string | null>(null);
   const [isParsingAi, setIsParsingAi] = useState<boolean>(false);
@@ -424,6 +438,7 @@ export const MultiStepOrderWizard: React.FC<MultiStepOrderWizardProps> = ({
     if (!file) return;
     setAiErrorMsg(null);
     setRxWarningAr(null);
+    setRxCartAddedFeedback(null);
 
     if (file.size > 4 * 1024 * 1024) {
       setAiErrorMsg('حجم الصورة كبير جداً (الحد الأقصى ٤ ميجابايت).');
@@ -446,7 +461,7 @@ export const MultiStepOrderWizard: React.FC<MultiStepOrderWizardProps> = ({
           body: JSON.stringify({
             imageBase64: base64Data,
             mimeType,
-            orderHint: rxStore?.category === 'pharmacy' ? 'pharmacy' : 'grocery',
+            listType: rxStore?.category === 'pharmacy' ? 'pharmacy' : 'grocery',
           }),
         });
         const json = await resp.json();
@@ -459,13 +474,29 @@ export const MultiStepOrderWizard: React.FC<MultiStepOrderWizardProps> = ({
         }
         const parsed = json.data;
         if (Array.isArray(parsed.items) && parsed.items.length > 0) {
-          const labels = parsed.items.map((it: { name: string; quantity?: string; notes?: string }) =>
-            [it.name, it.quantity, it.notes].filter(Boolean).join(' — ')
+          const structured: ExtractedStructuredItem[] = parsed.items
+            .map((it: { nameAr?: string; name?: string; quantity?: string; unit?: string; notes?: string; estimatedCategory?: string }) => ({
+              nameAr: String(it.nameAr || it.name || '').trim(),
+              quantity: it.quantity ? String(it.quantity) : '1',
+              unit: it.unit ? String(it.unit) : undefined,
+              notes: it.notes ? String(it.notes) : undefined,
+              estimatedCategory: it.estimatedCategory ? String(it.estimatedCategory) : undefined,
+            }))
+            .filter((it: ExtractedStructuredItem) => it.nameAr.length > 0);
+          const labels = structured.map((it) =>
+            [it.nameAr, it.quantity && it.quantity !== '1' ? `× ${it.quantity}` : '', it.unit, it.notes]
+              .filter(Boolean)
+              .join(' — ')
           );
+          setRxStructuredItems(structured);
           setRxExtractedItems(labels);
         }
         if (parsed.summaryAr) setRxSummary(parsed.summaryAr);
-        if (parsed.pharmacistWarningAr) setRxWarningAr(parsed.pharmacistWarningAr);
+        if (Array.isArray(parsed.warningsAr) && parsed.warningsAr.length > 0) {
+          setRxWarningAr(parsed.warningsAr.join(' • '));
+        } else if (parsed.requiresPharmacistReview) {
+          setRxWarningAr('يُنصح بمراجعة الصيدلي للتأكد من الجرعات والبدائل المتاحة.');
+        }
       } catch {
         setAiErrorMsg('تعذر الاتصال بخدمة التحليل الذكي، أضف الأصناف يدوياً أدناه.');
       } finally {
@@ -484,7 +515,7 @@ export const MultiStepOrderWizard: React.FC<MultiStepOrderWizardProps> = ({
       const resp = await fetch('/api/v1/ai/parse-voice-order', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ transcript }),
+        body: JSON.stringify({ transcriptText: transcript }),
       });
       const json = await resp.json();
       if (!resp.ok || !json?.success) {
@@ -493,13 +524,31 @@ export const MultiStepOrderWizard: React.FC<MultiStepOrderWizardProps> = ({
       }
       const parsed = json.data;
       if (Array.isArray(parsed.items) && parsed.items.length > 0) {
-        const labels = parsed.items.map((it: { name: string; quantity?: string }) =>
-          [it.name, it.quantity].filter(Boolean).join(' × ')
+        const structured: ExtractedStructuredItem[] = parsed.items
+          .map((it: { nameAr?: string; name?: string; quantity?: string; unit?: string; notes?: string }) => ({
+            nameAr: String(it.nameAr || it.name || '').trim(),
+            quantity: it.quantity ? String(it.quantity) : '1',
+            unit: it.unit ? String(it.unit) : undefined,
+            notes: it.notes ? String(it.notes) : undefined,
+          }))
+          .filter((it: ExtractedStructuredItem) => it.nameAr.length > 0);
+        const labels = structured.map((it) =>
+          [it.nameAr, it.quantity ? `× ${it.quantity}` : ''].filter(Boolean).join(' ')
         );
+        setRxStructuredItems((prev) => [...prev, ...structured]);
         setRxExtractedItems((prev) => Array.from(new Set([...prev, ...labels])));
       }
       if (parsed.summaryAr) setRxSummary(parsed.summaryAr);
-      if (parsed.deliveryNotesAr && !notes.trim()) setNotes(parsed.deliveryNotesAr);
+      if (typeof parsed.driverTipEgp === 'number' && parsed.driverTipEgp > 0) {
+        setDriverTipEgp(Math.round(parsed.driverTipEgp));
+        setCustomTipInput(String(Math.round(parsed.driverTipEgp)));
+      }
+      if ([50, 100, 200].includes(Number(parsed.cashChangeForEgp))) {
+        setCashChangeForEgp(Number(parsed.cashChangeForEgp) as CashChangeOptionEgp);
+      }
+      if (parsed.inferredLandmarkNameAr && !notes.trim()) {
+        setNotes(`العلامة المذكورة: ${parsed.inferredLandmarkNameAr}`);
+      }
     } catch {
       setAiErrorMsg('تعذر الاتصال بخدمة التحليل الذكي.');
     } finally {
@@ -1458,9 +1507,10 @@ export const MultiStepOrderWizard: React.FC<MultiStepOrderWizardProps> = ({
                   </span>
                   <button
                     type="button"
-                    onClick={() =>
-                      setRxExtractedItems((prev) => prev.filter((_, i) => i !== idx))
-                    }
+                    onClick={() => {
+                      setRxExtractedItems((prev) => prev.filter((_, i) => i !== idx));
+                      setRxStructuredItems((prev) => prev.filter((_, i) => i !== idx));
+                    }}
                     className="p-1 text-rose-600 hover:bg-rose-50 rounded-lg cursor-pointer"
                   >
                     <Trash2 className="w-3.5 h-3.5" />
@@ -1476,7 +1526,9 @@ export const MultiStepOrderWizard: React.FC<MultiStepOrderWizardProps> = ({
                   onKeyDown={(e) => {
                     if (e.key === 'Enter' && rxManualInput.trim()) {
                       e.preventDefault();
-                      setRxExtractedItems((prev) => [...prev, rxManualInput.trim()]);
+                      const val = rxManualInput.trim();
+                      setRxExtractedItems((prev) => [...prev, val]);
+                      setRxStructuredItems((prev) => [...prev, { nameAr: val, quantity: '1' }]);
                       setRxManualInput('');
                     }
                   }}
@@ -1487,7 +1539,9 @@ export const MultiStepOrderWizard: React.FC<MultiStepOrderWizardProps> = ({
                   type="button"
                   onClick={() => {
                     if (!rxManualInput.trim()) return;
-                    setRxExtractedItems((prev) => [...prev, rxManualInput.trim()]);
+                    const val = rxManualInput.trim();
+                    setRxExtractedItems((prev) => [...prev, val]);
+                    setRxStructuredItems((prev) => [...prev, { nameAr: val, quantity: '1' }]);
                     setRxManualInput('');
                   }}
                   className="px-3 py-1.5 rounded-xl bg-slate-900 text-white text-[11px] font-extrabold cursor-pointer"
@@ -1495,6 +1549,38 @@ export const MultiStepOrderWizard: React.FC<MultiStepOrderWizardProps> = ({
                   + إضافة
                 </button>
               </div>
+
+              {rxExtractedItems.length > 0 && (
+                <div className="mt-1.5 flex flex-col gap-1.5">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const itemsForCart =
+                        rxStructuredItems.length > 0
+                          ? rxStructuredItems
+                          : rxExtractedItems.map((label) => ({ nameAr: label, quantity: '1' }));
+                      const res = addExtractedItemsToCart(rxStore?.id || 'merchant_amana', itemsForCart);
+                      if (res.limitReached) {
+                        setAiErrorMsg('السلة المجمعة وصلت للحد الأقصى (٤ متاجر).');
+                      } else if (res.addedCount > 0) {
+                        setRxCartAddedFeedback(
+                          `تم تحويل ${res.addedCount} أصناف إلى السلة المجمعة من ${rxStore?.nameAr || 'المتجر'}`
+                        );
+                        onOpenCartAfterAdd?.();
+                      }
+                    }}
+                    className="w-full min-h-[40px] py-2 px-3 rounded-xl bg-emerald-700 hover:bg-emerald-800 text-white font-extrabold text-[11px] flex items-center justify-center gap-1.5 cursor-pointer shadow-xs"
+                  >
+                    <ShoppingBag className="w-3.5 h-3.5" />
+                    <span>تحويل وإضافة الأصناف للسلة المجمعة الآن ({rxExtractedItems.length})</span>
+                  </button>
+                  {rxCartAddedFeedback && (
+                    <div className="text-[10px] font-extrabold text-emerald-800 bg-emerald-50 border border-emerald-200 rounded-xl px-2.5 py-1.5 text-center">
+                      {rxCartAddedFeedback}
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
           </div>
 

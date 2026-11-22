@@ -14,7 +14,10 @@ import {
   ShieldCheck,
   KeyRound,
   ShieldAlert,
-  Navigation
+  Navigation,
+  Battery,
+  BatteryLow,
+  BatteryCharging
 } from 'lucide-react';
 import { CustomerMobileExperience } from './CustomerMobileExperience';
 import { CaptainMobileExperience } from './CaptainMobileExperience';
@@ -30,7 +33,17 @@ interface MobileAppFrameProps {
 export const MobileAppFrame: React.FC<MobileAppFrameProps> = ({
   onOpenOperationsDashboard,
 }) => {
-  const { currentUser, switchDemoUser, isAuthModalOpen, setIsAuthModalOpen, activeCustomerOrder } = useMarketplace();
+  const {
+    currentUser,
+    switchDemoUser,
+    isAuthModalOpen,
+    setIsAuthModalOpen,
+    activeCustomerOrder,
+    batteryLevelPercent,
+    isCharging,
+    isBatterySaverActive,
+    gpsUpdateIntervalMs,
+  } = useMarketplace();
   const [deviceModel, setDeviceModel] = useState<'iphone' | 'android' | 'fluid'>('iphone');
   const [mobileCustomerView, setMobileCustomerView] = useState<'experience' | 'tracking_screen'>('experience');
 
@@ -219,10 +232,27 @@ export const MobileAppFrame: React.FC<MobileAppFrameProps> = ({
             {/* Minimal Mobile Status Bar */}
             <div className="bg-slate-900 text-white text-[10px] px-5 py-1.5 flex justify-between items-center shrink-0 font-sans" dir="ltr">
               <span className="font-semibold">10:42 AM</span>
-              <div className="flex items-center gap-1.5">
+              <div className="flex items-center gap-2" data-testid="mobile-status-bar-battery">
                 <span>5G</span>
-                <span>📶</span>
-                <span>100% 🔋</span>
+                {isBatterySaverActive && (
+                  <span className="text-amber-400 font-bold tabular-nums">
+                    ECO · {Math.round(gpsUpdateIntervalMs / 1000)}s GPS
+                  </span>
+                )}
+                <span
+                  className={`flex items-center gap-1 font-bold tabular-nums ${
+                    isBatterySaverActive ? 'text-amber-400' : 'text-emerald-400'
+                  }`}
+                >
+                  {isCharging ? (
+                    <BatteryCharging className="w-3.5 h-3.5" />
+                  ) : isBatterySaverActive ? (
+                    <BatteryLow className="w-3.5 h-3.5" />
+                  ) : (
+                    <Battery className="w-3.5 h-3.5" />
+                  )}
+                  <span>{batteryLevelPercent}%</span>
+                </span>
               </div>
             </div>
 
@@ -296,10 +326,22 @@ export const MobileAppFrame: React.FC<MobileAppFrameProps> = ({
                   <div className="w-24 h-5 bg-black rounded-full flex items-center justify-center">
                     <div className="w-2.5 h-2.5 rounded-full bg-slate-900 ring-1 ring-slate-800" />
                   </div>
-                  <div className="flex items-center gap-1 text-[10px] text-slate-800 font-bold">
+                  <div className="flex items-center gap-1 text-[10px] text-slate-800 font-bold" data-testid="mobile-status-bar-battery">
                     <span>5G</span>
-                    <div className="w-4 h-2 border border-slate-700 rounded-xs p-0.5 flex items-center">
-                      <div className="h-full w-full bg-emerald-600 rounded-2xs" />
+                    <span className={`tabular-nums ${isBatterySaverActive ? 'text-amber-600' : 'text-slate-900'}`}>
+                      {batteryLevelPercent}%
+                    </span>
+                    <div
+                      className={`w-5 h-2.5 border rounded-xs p-0.5 flex items-center ${
+                        isBatterySaverActive ? 'border-amber-600' : 'border-slate-700'
+                      }`}
+                    >
+                      <div
+                        className={`h-full rounded-2xs transition-all ${
+                          isBatterySaverActive ? 'bg-amber-500' : 'bg-emerald-600'
+                        }`}
+                        style={{ width: `${Math.max(12, Math.min(100, batteryLevelPercent))}%` }}
+                      />
                     </div>
                   </div>
                 </div>
@@ -308,9 +350,21 @@ export const MobileAppFrame: React.FC<MobileAppFrameProps> = ({
                 <div className="relative bg-white pt-2 pb-1 px-5 flex items-center justify-between z-40 shrink-0 font-sans" dir="ltr">
                   <span className="text-[11px] font-bold text-slate-900">10:42</span>
                   <div className="w-3.5 h-3.5 bg-black rounded-full mx-auto" />
-                  <div className="flex items-center gap-1.5 text-[10px] text-slate-800 font-bold">
+                  <div
+                    className={`flex items-center gap-1.5 text-[10px] font-bold tabular-nums ${
+                      isBatterySaverActive ? 'text-amber-600' : 'text-slate-800'
+                    }`}
+                    data-testid="mobile-status-bar-battery"
+                  >
                     <span>5G</span>
-                    <span>🔋 98%</span>
+                    {isCharging ? (
+                      <BatteryCharging className="w-3.5 h-3.5 text-emerald-600" />
+                    ) : isBatterySaverActive ? (
+                      <BatteryLow className="w-3.5 h-3.5 text-amber-600" />
+                    ) : (
+                      <Battery className="w-3.5 h-3.5 text-emerald-700" />
+                    )}
+                    <span>{batteryLevelPercent}%</span>
                   </div>
                 </div>
               )}

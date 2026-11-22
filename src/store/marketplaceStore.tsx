@@ -4,18 +4,34 @@ import {
   onAuthStateChanged,
   subscribeToScopedOrdersInFirestore,
   subscribeToCommuteSubscriptionsInFirestore,
+  subscribeToStoresFromFirestore,
+  subscribeToDriverRatingsFromFirestore,
+  submitDriverRatingToFirestore,
+  subscribeToThreadMessagesInFirestore,
+  sendThreadMessageToFirestore,
+  syncCommuteSlotToFirestore,
+  subscribeToCommuteSlotsInFirestore,
   syncDeliveryOrderToFirestore,
   updateDeliveryOrderInFirestore,
   syncRideToFirestore,
   createCommuteSubscriptionInFirestore,
   submitWalletTopUpProofInFirestore,
+  createCaptainNotificationInFirestore,
+  subscribeToCaptainNotificationsInFirestore,
+  markCaptainNotificationReadInFirestore,
   type User,
 } from '../lib/firebase';
+import {
+  type CaptainAlertSoundType,
+  getCaptainCustomSound,
+  setCaptainCustomSound,
+  playDispatchChime,
+} from '../components/mobile/SoundAlertHelper';
 import {
   BLUEPRINT_LIMITS,
   type CashChangeOptionEgp,
   generateFourDigitPin,
-  calculateDeliveryFeePiasters,
+  calculateElBagourProximityDeliveryFeePiasters,
   calculateCommuteSubscriptionPricePiasters,
 } from '../lib/firestoreSchemas';
 
@@ -64,6 +80,9 @@ export interface StoreItem {
   minOrderEgp: number;
   isOpen: boolean;
   distanceKm: number;
+  lat?: number;
+  lng?: number;
+  zoneCluster?: string;
   badgeAr?: string;
   image: string;
 }
@@ -150,6 +169,7 @@ export interface MarketplaceOrder {
   assignedCaptainVehicle?: string;
   assignedCaptainRating?: number;
   customerRating?: number;
+  customerRatingTags?: string[];
   customerFeedback?: string;
   orderFeedback?: string;
   createdAt: string;
@@ -403,6 +423,21 @@ export interface AppNotification {
   isRead: boolean;
 }
 
+export interface CaptainInAppNotification {
+  id: string;
+  orderId: string;
+  orderNumber: string;
+  zoneArea: string;
+  titleAr: string;
+  bodyAr: string;
+  serviceType: OrderServiceType;
+  estimatedEarningsEgp: number;
+  soundProfile: CaptainAlertSoundType;
+  timeAr: string;
+  isRead: boolean;
+  source: 'firestore' | 'local';
+}
+
 export interface SupportComplaint {
   id: string;
   ticketNumber: string;
@@ -437,6 +472,25 @@ export interface FleetCaptainItem {
   completedToday: number;
 }
 
+export type CommuteSlotStatus =
+  | 'scheduled'
+  | 'driver_assigned'
+  | 'en_route'
+  | 'completed'
+  | 'skipped';
+
+export interface CommuteSlotItem {
+  id: string;
+  subscriptionId: string;
+  slotType: 'morning_go' | 'evening_return';
+  slotLabelAr: string;
+  dateIso: string;
+  scheduledTime: string;
+  status: CommuteSlotStatus;
+  captainName?: string;
+  ridePin?: string;
+}
+
 export interface CommuteSubscriptionItem {
   id: string;
   fromLandmark: string;
@@ -448,6 +502,18 @@ export interface CommuteSubscriptionItem {
   planType: 'weekly' | 'monthly';
   priceEgp: number;
   status: 'active' | 'paused';
+  createdAtAr: string;
+  slots?: CommuteSlotItem[];
+}
+
+export interface DriverRatingEntry {
+  id: string;
+  orderId: string;
+  driverId: string;
+  driverName: string;
+  rating: number;
+  tags: string[];
+  feedback: string;
   createdAtAr: string;
 }
 
@@ -565,20 +631,22 @@ export const EL_BAGOUR_LANDMARKS_LIST: {
   areaAr: string;
   isRural: boolean;
   distanceFromCenterKm: number;
+  lat: number;
+  lng: number;
 }[] = [
-  { id: 'lm_station', nameAr: 'ميدان المحطة - وسط الباجور', areaAr: 'وسط المدينة', isRural: false, distanceFromCenterKm: 0.5 },
-  { id: 'lm_shorouk', nameAr: 'شارع الجيش - برج الشروق', areaAr: 'حي وسط التجاري', isRural: false, distanceFromCenterKm: 1.4 },
-  { id: 'lm_hospital', nameAr: 'مستشفى الباجور العام', areaAr: 'شارع المستشفى', isRural: false, distanceFromCenterKm: 2.1 },
-  { id: 'lm_council', nameAr: 'مجلس مدينة الباجور', areaAr: 'شارع الجمهورية', isRural: false, distanceFromCenterKm: 1.2 },
-  { id: 'lm_banque_misr', nameAr: 'شارع الجمهورية - أمام بنك مصر', areaAr: 'وسط البلد', isRural: false, distanceFromCenterKm: 1.6 },
-  { id: 'lm_masaken', nameAr: 'منطقة المساكن الشعبية', areaAr: 'شرق الباجور', isRural: false, distanceFromCenterKm: 2.4 },
-  { id: 'lm_mawqaf', nameAr: 'مجمع مواقف الباجور الجديد', areaAr: 'مدخل المدينة', isRural: false, distanceFromCenterKm: 2.0 },
-  { id: 'lm_kafr_bagour', nameAr: 'قرية كفر الباجور', areaAr: 'القرى الجنوبية', isRural: true, distanceFromCenterKm: 3.2 },
-  { id: 'lm_shantana', nameAr: 'قرية شنتنا الحجر', areaAr: 'القرى الشمالية', isRural: true, distanceFromCenterKm: 5.2 },
-  { id: 'lm_grawan', nameAr: 'قرية جروان', areaAr: 'القرى الجنوبية', isRural: true, distanceFromCenterKm: 4.5 },
-  { id: 'lm_meet_afif', nameAr: 'قرية ميت عفيف', areaAr: 'القرى الشمالية', isRural: true, distanceFromCenterKm: 6.0 },
-  { id: 'lm_subk_eldahhak', nameAr: 'قرية سبك الضحاك', areaAr: 'القرى الشرقية', isRural: true, distanceFromCenterKm: 7.0 },
-  { id: 'lm_shebin_uni', nameAr: 'جامعة المنوفية - شبين الكوم', areaAr: 'ربط المراكز', isRural: false, distanceFromCenterKm: 11.0 },
+  { id: 'lm_station', nameAr: 'ميدان المحطة - وسط الباجور', areaAr: 'وسط المدينة', isRural: false, distanceFromCenterKm: 0.5, lat: 30.4328, lng: 31.0339 },
+  { id: 'lm_shorouk', nameAr: 'شارع الجيش - برج الشروق', areaAr: 'حي وسط التجاري', isRural: false, distanceFromCenterKm: 1.4, lat: 30.4305, lng: 31.0315 },
+  { id: 'lm_hospital', nameAr: 'مستشفى الباجور العام', areaAr: 'شارع المستشفى', isRural: false, distanceFromCenterKm: 2.1, lat: 30.4346, lng: 31.0286 },
+  { id: 'lm_council', nameAr: 'مجلس مدينة الباجور', areaAr: 'شارع الجمهورية', isRural: false, distanceFromCenterKm: 1.2, lat: 30.4314, lng: 31.0322 },
+  { id: 'lm_banque_misr', nameAr: 'شارع الجمهورية - أمام بنك مصر', areaAr: 'وسط البلد', isRural: false, distanceFromCenterKm: 1.6, lat: 30.4319, lng: 31.0332 },
+  { id: 'lm_masaken', nameAr: 'منطقة المساكن الشعبية', areaAr: 'شرق الباجور', isRural: false, distanceFromCenterKm: 2.4, lat: 30.4292, lng: 31.0412 },
+  { id: 'lm_mawqaf', nameAr: 'مجمع مواقف الباجور الجديد', areaAr: 'مدخل المدينة', isRural: false, distanceFromCenterKm: 2.0, lat: 30.4272, lng: 31.0384 },
+  { id: 'lm_kafr_bagour', nameAr: 'قرية كفر الباجور', areaAr: 'القرى الجنوبية', isRural: true, distanceFromCenterKm: 3.2, lat: 30.4152, lng: 31.0241 },
+  { id: 'lm_shantana', nameAr: 'قرية شنتنا الحجر', areaAr: 'القرى الشمالية', isRural: true, distanceFromCenterKm: 5.2, lat: 30.4648, lng: 31.0524 },
+  { id: 'lm_grawan', nameAr: 'قرية جروان', areaAr: 'القرى الجنوبية', isRural: true, distanceFromCenterKm: 4.5, lat: 30.3914, lng: 31.0168 },
+  { id: 'lm_meet_afif', nameAr: 'قرية ميت عفيف', areaAr: 'القرى الشمالية', isRural: true, distanceFromCenterKm: 6.0, lat: 30.4536, lng: 31.0442 },
+  { id: 'lm_subk_eldahhak', nameAr: 'قرية سبك الضحاك', areaAr: 'القرى الشرقية', isRural: true, distanceFromCenterKm: 7.0, lat: 30.4388, lng: 31.0924 },
+  { id: 'lm_shebin_uni', nameAr: 'جامعة المنوفية - شبين الكوم', areaAr: 'ربط المراكز', isRural: false, distanceFromCenterKm: 11.0, lat: 30.5586, lng: 31.0112 },
 ];
 
 export const DEMO_PERSONAS: DemoUser[] = [
@@ -646,6 +714,9 @@ const INITIAL_STORES: StoreItem[] = [
     minOrderEgp: 50,
     isOpen: true,
     distanceKm: 1.4,
+    lat: 30.4319,
+    lng: 31.0332,
+    zoneCluster: 'bagour_republic',
     badgeAr: 'الأكثر طلباً بالباجور',
     image: 'https://images.unsplash.com/photo-1555939594-58d7cb561ad1?auto=format&fit=crop&w=600&q=80',
   },
@@ -665,6 +736,9 @@ const INITIAL_STORES: StoreItem[] = [
     minOrderEgp: 25,
     isOpen: true,
     distanceKm: 1.1,
+    lat: 30.4328,
+    lng: 31.0339,
+    zoneCluster: 'bagour_station',
     badgeAr: 'توصيل فوري ٢٤ ساعة',
     image: 'https://images.unsplash.com/photo-1586015555751-63bb77f4322a?auto=format&fit=crop&w=600&q=80',
   },
@@ -684,6 +758,9 @@ const INITIAL_STORES: StoreItem[] = [
     minOrderEgp: 40,
     isOpen: true,
     distanceKm: 0.9,
+    lat: 30.4305,
+    lng: 31.0315,
+    zoneCluster: 'bagour_gaish',
     badgeAr: 'أسعار الجملة',
     image: 'https://images.unsplash.com/photo-1542838132-92c53300491e?auto=format&fit=crop&w=600&q=80',
   },
@@ -1127,6 +1204,7 @@ interface MarketplaceContextType {
   currentUser: DemoUser;
   firebaseUser: User | null;
   isFirestoreRealtimeActive: boolean;
+  isFirestoreStoresLive: boolean;
   switchDemoUser: (user: DemoUser) => void;
   isAuthModalOpen: boolean;
   setIsAuthModalOpen: (open: boolean) => void;
@@ -1155,7 +1233,14 @@ interface MarketplaceContextType {
   cartStoreIds: string[];
   cartStoreGroups: CartStoreGroup[];
   cartMultiStopSavingsEgp: number;
+  cartProximityKm: number;
+  cartProximitySavedEgp: number;
+  cartDeliveryFeeBreakdownAr: string;
   addToCart: (product: ProductItem, store: StoreItem) => { success: boolean; conflictStore?: string; limitReached?: boolean };
+  addExtractedItemsToCart: (
+    storeId: string,
+    extractedItems: { nameAr: string; quantity?: string; unit?: string; notes?: string; priceEgp?: number }[]
+  ) => { addedCount: number; limitReached?: boolean };
   removeFromCart: (productId: string) => void;
   updateCartItemQty: (productId: string, qty: number) => void;
   clearCart: () => void;
@@ -1215,6 +1300,11 @@ interface MarketplaceContextType {
   updateOrderNotes: (orderId: string, orderNotes: string) => void;
   updateOrderFeedback: (orderId: string, feedback: string) => void;
   updateOrderDriverTip: (orderId: string, tipEgp: number) => void;
+  driverRatings: DriverRatingEntry[];
+  submitDriverReview: (
+    orderId: string,
+    input: { rating: number; tags: string[]; feedback: string }
+  ) => Promise<void>;
 
   // Merchant Actions
   merchantAcceptOrder: (orderId: string) => void;
@@ -1262,6 +1352,8 @@ interface MarketplaceContextType {
     planType: 'weekly' | 'monthly';
   }) => { success: boolean; subscription?: CommuteSubscriptionItem; errorAr?: string };
   toggleCommuteSubscriptionStatus: (subId: string) => void;
+  advanceCommuteSlotStatus: (subId: string, slotId: string) => void;
+  toggleSkipCommuteSlot: (subId: string, slotId: string) => void;
 
   // Loyalty Points & Cashback System
   loyaltyPoints: number;
@@ -1278,6 +1370,14 @@ interface MarketplaceContextType {
   // Notifications & Support Complaints
   notifications: AppNotification[];
   markAllNotificationsRead: () => void;
+  captainNotifications: CaptainInAppNotification[];
+  latestCaptainAlert: CaptainInAppNotification | null;
+  dismissLatestCaptainAlert: () => void;
+  markCaptainNotificationRead: (notifId: string) => void;
+  markAllCaptainNotificationsRead: () => void;
+  captainCustomSound: CaptainAlertSoundType;
+  updateCaptainCustomSound: (sound: CaptainAlertSoundType) => void;
+  simulateElBagourCaptainDispatchAlert: () => CaptainInAppNotification;
   complaints: SupportComplaint[];
   submitComplaint: (input: {
     orderNumber?: string;
@@ -1306,6 +1406,30 @@ interface MarketplaceContextType {
   // Chat Messages
   chatMessages: ChatMessage[];
   sendChatMessage: (orderId: string, text: string) => void;
+  activeChatThreadId: string | null;
+  setActiveChatThreadId: (threadId: string | null) => void;
+
+  // Battery Saver & Adaptive GPS Tracking Rate (< 20% reduces GPS frequency)
+  batteryLevelPercent: number;
+  hardwareBatterySupported: boolean;
+  isCharging: boolean;
+  batterySaverPreference: 'auto' | 'always_on' | 'off';
+  setBatterySaverPreference: (pref: 'auto' | 'always_on' | 'off') => void;
+  simulatedBatteryPercent: number | null;
+  setSimulatedBatteryPercent: (percent: number | null) => void;
+  isBatteryLow: boolean;
+  isBatterySaverActive: boolean;
+  gpsUpdateIntervalMs: number;
+  gpsHighAccuracy: boolean;
+  gpsTrackingLocation: {
+    lat: number;
+    lng: number;
+    accuracyMeters: number | null;
+    source: 'gps' | 'bagour_hub';
+    lastUpdatedAt: string;
+    updatesCount: number;
+  };
+  forceGpsSyncNow: () => void;
 
   // Active Customer Order Shortcut & Real-Time Tracking Card State
   activeCustomerOrder: MarketplaceOrder | null;
@@ -1335,15 +1459,84 @@ const STORAGE_KEYS = {
   LOYALTY_CASHBACK: 'mashwar_bagour_loyalty_cashback_v2',
   LOYALTY_HISTORY: 'mashwar_bagour_loyalty_history_v2',
   FAVORITES: 'mashwar_bagour_favorites_v2',
-  COMMUTE_SUBS: 'mashwar_bagour_commute_subs_v1',
+  COMMUTE_SUBS: 'mashwar_bagour_commute_subs_v2',
   REFERRED_BY: 'mashwar_bagour_referred_by_v1',
+  DRIVER_RATINGS: 'mashwar_bagour_driver_ratings_v1',
+  BATTERY_PREF: 'mashwar_bagour_battery_pref_v1',
 };
+
+function buildTodayCommuteSlots(
+  subId: string,
+  morningTime: string,
+  returnTime?: string
+): CommuteSlotItem[] {
+  const dateIso = new Date().toISOString().slice(0, 10);
+  const slots: CommuteSlotItem[] = [
+    {
+      id: `${subId}_am_${dateIso.replace(/-/g, '')}`,
+      subscriptionId: subId,
+      slotType: 'morning_go',
+      slotLabelAr: 'رحلة الذهاب الصباحية',
+      dateIso,
+      scheduledTime: morningTime,
+      status: 'scheduled',
+      ridePin: generateFourDigitPin(),
+    },
+  ];
+  if (returnTime && returnTime.trim()) {
+    slots.push({
+      id: `${subId}_pm_${dateIso.replace(/-/g, '')}`,
+      subscriptionId: subId,
+      slotType: 'evening_return',
+      slotLabelAr: 'رحلة العودة المسائية',
+      dateIso,
+      scheduledTime: returnTime.trim(),
+      status: 'scheduled',
+      ridePin: generateFourDigitPin(),
+    });
+  }
+  return slots;
+}
 
 export const MarketplaceProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [currentUser, setCurrentUser] = useState<DemoUser>(DEMO_PERSONAS[0]);
   const [firebaseUser, setFirebaseUser] = useState<User | null>(null);
+  const [isFirestoreStoresLive, setIsFirestoreStoresLive] = useState<boolean>(false);
+  const [firestoreOrderIds, setFirestoreOrderIds] = useState<string[]>([]);
+  const [firestoreSubIds, setFirestoreSubIds] = useState<string[]>([]);
+  const [activeChatThreadId, setActiveChatThreadId] = useState<string | null>(null);
   const [isAuthModalOpen, setIsAuthModalOpen] = useState<boolean>(false);
   const [customerNavTab, setCustomerNavTab] = useState<'home' | 'ride_booking' | 'stores' | 'history' | 'profile'>('home');
+
+  // Battery Saver Mode & Adaptive GPS Polling State
+  const [hardwareBatterySupported, setHardwareBatterySupported] = useState<boolean>(false);
+  const [hardwareBatteryPercent, setHardwareBatteryPercent] = useState<number>(85);
+  const [isCharging, setIsCharging] = useState<boolean>(false);
+  const [simulatedBatteryPercent, setSimulatedBatteryPercent] = useState<number | null>(null);
+  const [batterySaverPreference, setBatterySaverPreference] = useState<'auto' | 'always_on' | 'off'>(() => {
+    try {
+      const saved = typeof window !== 'undefined' ? window.localStorage.getItem(STORAGE_KEYS.BATTERY_PREF) : null;
+      if (saved === 'auto' || saved === 'always_on' || saved === 'off') return saved;
+    } catch {
+      // Fallback
+    }
+    return 'auto';
+  });
+  const [gpsTrackingLocation, setGpsTrackingLocation] = useState<{
+    lat: number;
+    lng: number;
+    accuracyMeters: number | null;
+    source: 'gps' | 'bagour_hub';
+    lastUpdatedAt: string;
+    updatesCount: number;
+  }>({
+    lat: 30.4312,
+    lng: 31.0365,
+    accuracyMeters: 18,
+    source: 'bagour_hub',
+    lastUpdatedAt: formatArabicClockTime(new Date()),
+    updatesCount: 1,
+  });
 
   useEffect(() => {
     const unsub = onAuthStateChanged(auth, (u) => {
@@ -1460,13 +1653,22 @@ export const MarketplaceProvider: React.FC<{ children: React.ReactNode }> = ({ c
   const [captainCompletedDeliveries, setCaptainCompletedDeliveries] = useState<number>(8);
   const [captainCashHoldingEgp, setCaptainCashHoldingEgp] = useState<number>(450);
 
-  // Commute Subscriptions (persisted in localStorage)
+  // Commute Subscriptions (persisted in localStorage, with automated daily slots)
   const [commuteSubscriptions, setCommuteSubscriptions] = useState<CommuteSubscriptionItem[]>(() => {
+    const todayIso = new Date().toISOString().slice(0, 10);
     try {
       const saved = typeof window !== 'undefined' ? window.localStorage.getItem(STORAGE_KEYS.COMMUTE_SUBS) : null;
       if (saved) {
         const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          return parsed.map((sub: CommuteSubscriptionItem) => ({
+            ...sub,
+            slots:
+              Array.isArray(sub.slots) && sub.slots.length > 0
+                ? sub.slots
+                : buildTodayCommuteSlots(sub.id, sub.morningTime, sub.returnTime),
+          }));
+        }
       }
     } catch {
       // Fallback
@@ -1484,6 +1686,29 @@ export const MarketplaceProvider: React.FC<{ children: React.ReactNode }> = ({ c
         priceEgp: 420,
         status: 'active',
         createdAtAr: 'منذ يومين',
+        slots: [
+          {
+            id: `sub_seed_1_am_${todayIso.replace(/-/g, '')}`,
+            subscriptionId: 'sub_seed_1',
+            slotType: 'morning_go',
+            slotLabelAr: 'رحلة الذهاب الصباحية',
+            dateIso: todayIso,
+            scheduledTime: '07:45',
+            status: 'driver_assigned',
+            captainName: 'كابتن أحمد فتحي الديب',
+            ridePin: '4821',
+          },
+          {
+            id: `sub_seed_1_pm_${todayIso.replace(/-/g, '')}`,
+            subscriptionId: 'sub_seed_1',
+            slotType: 'evening_return',
+            slotLabelAr: 'رحلة العودة المسائية',
+            dateIso: todayIso,
+            scheduledTime: '14:30',
+            status: 'scheduled',
+            ridePin: '7390',
+          },
+        ],
       },
     ];
   });
@@ -1497,6 +1722,30 @@ export const MarketplaceProvider: React.FC<{ children: React.ReactNode }> = ({ c
       // Ignore storage errors
     }
   }, [commuteSubscriptions]);
+
+  // Driver Ratings Ledger (persisted locally + live synced via Firestore)
+  const [driverRatings, setDriverRatings] = useState<DriverRatingEntry[]>(() => {
+    try {
+      const saved = typeof window !== 'undefined' ? window.localStorage.getItem(STORAGE_KEYS.DRIVER_RATINGS) : null;
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed)) return parsed;
+      }
+    } catch {
+      // Fallback
+    }
+    return [];
+  });
+
+  useEffect(() => {
+    try {
+      if (typeof window !== 'undefined') {
+        window.localStorage.setItem(STORAGE_KEYS.DRIVER_RATINGS, JSON.stringify(driverRatings));
+      }
+    } catch {
+      // Ignore storage errors
+    }
+  }, [driverRatings]);
 
   // Referral Tracking
   const [referredByCode, setReferredByCode] = useState<string | null>(() => {
@@ -1625,14 +1874,80 @@ export const MarketplaceProvider: React.FC<{ children: React.ReactNode }> = ({ c
     ];
   });
 
-  // Real-time Firestore scoped listener when authenticated
+  // Real-time Firestore scoped listeners when authenticated
   useEffect(() => {
-    if (!firebaseUser) return;
+    if (!firebaseUser) {
+      setIsFirestoreStoresLive(false);
+      return;
+    }
+
+    const unsubStores = subscribeToStoresFromFirestore((remoteStores) => {
+      if (!remoteStores || remoteStores.length === 0) return;
+      setIsFirestoreStoresLive(true);
+      setStores((prev) =>
+        prev.map((s) => {
+          const found = remoteStores.find((rs) => String(rs.id) === s.id);
+          if (!found) return s;
+          return {
+            ...s,
+            isOpen: typeof found.isOpen === 'boolean' ? found.isOpen : s.isOpen,
+            rating: typeof found.rating === 'number' ? found.rating : s.rating,
+            deliveryFeeEgp:
+              typeof found.deliveryFeePiasters === 'number'
+                ? Math.round(found.deliveryFeePiasters / 100)
+                : s.deliveryFeeEgp,
+            minOrderEgp:
+              typeof found.minOrderPiasters === 'number'
+                ? Math.round(found.minOrderPiasters / 100)
+                : s.minOrderEgp,
+            deliveryTimeEst:
+              typeof found.prepTimeText === 'string' && found.prepTimeText
+                ? found.prepTimeText
+                : s.deliveryTimeEst,
+            landmark:
+              typeof found.landmark === 'string' && found.landmark ? found.landmark : s.landmark,
+            lat: typeof found.lat === 'number' ? found.lat : s.lat,
+            lng: typeof found.lng === 'number' ? found.lng : s.lng,
+            zoneCluster:
+              typeof found.zoneCluster === 'string' && found.zoneCluster
+                ? found.zoneCluster
+                : s.zoneCluster,
+          };
+        })
+      );
+    });
+
+    const unsubRatings = subscribeToDriverRatingsFromFirestore((remoteRatings) => {
+      if (!remoteRatings || remoteRatings.length === 0) return;
+      const mapped: DriverRatingEntry[] = remoteRatings.map((rr) => {
+        const r = rr as Record<string, any>;
+        return {
+          id: String(r.id || ''),
+          orderId: String(r.orderId || ''),
+          driverId: String(r.driverId || 'cpt_02'),
+          driverName: String(r.driverName || 'كابتن مشوار'),
+          rating: Number(r.rating) || 5,
+          tags: Array.isArray(r.tags) ? r.tags.map(String) : [],
+          feedback: String(r.feedback || ''),
+          createdAtAr: 'موثق عبر Firestore',
+        };
+      });
+      setDriverRatings((prev) => {
+        const map = new Map<string, DriverRatingEntry>();
+        for (const localItem of prev) map.set(localItem.id, localItem);
+        for (const remoteItem of mapped) {
+          if (remoteItem.id) map.set(remoteItem.id, remoteItem);
+        }
+        return Array.from(map.values());
+      });
+    });
 
     const unsubOrders = subscribeToScopedOrdersInFirestore({
       role: currentUser.role,
       onOrders: (remoteDocs) => {
         if (!remoteDocs || remoteDocs.length === 0) return;
+        const remoteIds = remoteDocs.map((d) => String((d as Record<string, any>).id || '')).filter(Boolean);
+        setFirestoreOrderIds((prev) => Array.from(new Set([...prev, ...remoteIds])));
         setOrders((prev) => {
           const map = new Map<string, MarketplaceOrder>();
           for (const localOrd of prev) {
@@ -1741,6 +2056,8 @@ export const MarketplaceProvider: React.FC<{ children: React.ReactNode }> = ({ c
 
     const unsubSubs = subscribeToCommuteSubscriptionsInFirestore((remoteSubs) => {
       if (!remoteSubs || remoteSubs.length === 0) return;
+      const remoteSubIds = remoteSubs.map((rs) => String((rs as Record<string, any>).id || '')).filter(Boolean);
+      setFirestoreSubIds((prev) => Array.from(new Set([...prev, ...remoteSubIds])));
       setCommuteSubscriptions((prev) => {
         const map = new Map<string, CommuteSubscriptionItem>();
         for (const s of prev) map.set(s.id, s);
@@ -1748,29 +2065,337 @@ export const MarketplaceProvider: React.FC<{ children: React.ReactNode }> = ({ c
           const sObj = rs as Record<string, any>;
           const subId = String(sObj.id || '');
           if (!subId) continue;
+          const prevSub = map.get(subId);
+          const mTime = String(sObj.morningTime || '08:00');
+          const rTime = String(sObj.returnTime || '');
           map.set(subId, {
             id: subId,
             fromLandmark: String(sObj.fromLandmark || 'مركز الباجور'),
             toLandmark: String(sObj.toLandmark || 'شبين الكوم'),
             scheduleDays: Array.isArray(sObj.scheduleDays) ? sObj.scheduleDays.map(String) : [],
-            morningTime: String(sObj.morningTime || '08:00'),
-            returnTime: String(sObj.returnTime || ''),
+            morningTime: mTime,
+            returnTime: rTime,
             vehicleTier: sObj.vehicleTier === 'car' ? 'car' : 'tuktuk',
             planType: sObj.planType === 'monthly' ? 'monthly' : 'weekly',
             priceEgp: Math.round((Number(sObj.pricePiasters) || 0) / 100),
             status: sObj.status === 'paused' ? 'paused' : 'active',
             createdAtAr: 'متزامن لحظياً',
+            slots:
+              prevSub?.slots && prevSub.slots.length > 0
+                ? prevSub.slots
+                : buildTodayCommuteSlots(subId, mTime, rTime),
           });
         }
         return Array.from(map.values());
       });
     });
 
+    const seenRemoteNotifIds = new Set<string>();
+    let initialNotifSnapshotHandled = false;
+    const unsubCaptainNotifs = subscribeToCaptainNotificationsInFirestore((remoteNotifs) => {
+      if (!remoteNotifs) return;
+      const mapped: CaptainInAppNotification[] = remoteNotifs.map((rn) => {
+        const r = rn as Record<string, any>;
+        const dt = typeof r.createdAt?.toDate === 'function' ? (r.createdAt.toDate() as Date) : new Date();
+        const soundRaw = String(r.soundProfile || 'radar_pulse');
+        const soundProfile: CaptainAlertSoundType =
+          soundRaw === 'bagour_chime' ||
+          soundRaw === 'urgent_dispatch' ||
+          soundRaw === 'soft_bell'
+            ? soundRaw
+            : 'radar_pulse';
+        return {
+          id: String(r.id || ''),
+          orderId: String(r.orderId || ''),
+          orderNumber: String(r.orderNumber || 'MSH-LIVE'),
+          zoneArea: String(r.zoneArea || 'مركز الباجور'),
+          titleAr: String(r.titleAr || 'طلب جديد في الباجور'),
+          bodyAr: String(r.bodyAr || 'طلب توصيل جديد جاهز للاستلام'),
+          serviceType: (r.serviceType as OrderServiceType) || 'ride',
+          estimatedEarningsEgp: Math.round((Number(r.estimatedEarningsPiasters) || 0) / 100),
+          soundProfile,
+          timeAr: formatArabicClockTime(dt),
+          isRead: Boolean(r.isRead),
+          source: 'firestore',
+        };
+      });
+
+      const newlyArrivedUnread = mapped.filter(
+        (m) => m.id && !m.isRead && !seenRemoteNotifIds.has(m.id)
+      );
+      mapped.forEach((m) => {
+        if (m.id) seenRemoteNotifIds.add(m.id);
+      });
+
+      setCaptainNotifications((prev) => {
+        const map = new Map<string, CaptainInAppNotification>();
+        for (const item of mapped) {
+          if (item.id) map.set(item.id, item);
+        }
+        for (const localItem of prev) {
+          if (localItem.id && !map.has(localItem.id)) {
+            map.set(localItem.id, localItem);
+          }
+        }
+        return Array.from(map.values());
+      });
+
+      if (initialNotifSnapshotHandled && newlyArrivedUnread.length > 0) {
+        const newest = newlyArrivedUnread[0];
+        setLatestCaptainAlert(newest);
+        playDispatchChime('captain', getCaptainCustomSound());
+      }
+      initialNotifSnapshotHandled = true;
+    });
+
     return () => {
+      unsubStores();
+      unsubRatings();
       unsubOrders();
       unsubSubs();
+      unsubCaptainNotifs();
     };
   }, [firebaseUser, currentUser.role]);
+
+  // Real-time Firestore Chat Thread Subscription for active order/ride
+  useEffect(() => {
+    if (!firebaseUser || !activeChatThreadId) return;
+    if (!firestoreOrderIds.includes(activeChatThreadId)) return;
+
+    const unsubChat = subscribeToThreadMessagesInFirestore(activeChatThreadId, (remoteMsgs) => {
+      if (!remoteMsgs || remoteMsgs.length === 0) return;
+      const mapped: ChatMessage[] = remoteMsgs.map((rm) => {
+        const r = rm as Record<string, any>;
+        const dt = typeof r.createdAt?.toDate === 'function' ? (r.createdAt.toDate() as Date) : new Date();
+        return {
+          id: String(r.id || ''),
+          orderId: activeChatThreadId,
+          senderRole:
+            r.senderRole === 'captain' || r.senderRole === 'merchant' ? r.senderRole : 'customer',
+          senderName: String(r.senderName || 'مستخدم مشوار'),
+          text: String(r.text || ''),
+          time: formatArabicClockTime(dt),
+        };
+      });
+      setChatMessages((prev) => {
+        const others = prev.filter((m) => m.orderId !== activeChatThreadId);
+        const existingThisThread = prev.filter((m) => m.orderId === activeChatThreadId);
+        const mergedMap = new Map<string, ChatMessage>();
+        for (const m of existingThisThread) mergedMap.set(m.id, m);
+        for (const m of mapped) {
+          if (m.id) mergedMap.set(m.id, m);
+        }
+        return [...others, ...Array.from(mergedMap.values())];
+      });
+    });
+
+    return () => unsubChat();
+  }, [firebaseUser, activeChatThreadId, firestoreOrderIds]);
+
+  // Real-time Firestore Commute Slots Subscription
+  useEffect(() => {
+    if (!firebaseUser || firestoreSubIds.length === 0) return;
+    const unsubs = firestoreSubIds.map((subId) =>
+      subscribeToCommuteSlotsInFirestore(subId, (remoteSlots) => {
+        if (!remoteSlots || remoteSlots.length === 0) return;
+        setCommuteSubscriptions((prev) =>
+          prev.map((sub) => {
+            if (sub.id !== subId) return sub;
+            const slotMap = new Map<string, CommuteSlotItem>();
+            for (const s of sub.slots || []) slotMap.set(s.id, s);
+            for (const rs of remoteSlots) {
+              const r = rs as Record<string, any>;
+              const slotId = String(r.id || '');
+              if (!slotId) continue;
+              const slotType = r.slotType === 'evening_return' ? 'evening_return' : 'morning_go';
+              slotMap.set(slotId, {
+                id: slotId,
+                subscriptionId: subId,
+                slotType,
+                slotLabelAr: slotType === 'evening_return' ? 'رحلة العودة المسائية' : 'رحلة الذهاب الصباحية',
+                dateIso: String(r.dateIso || new Date().toISOString().slice(0, 10)),
+                scheduledTime: String(r.scheduledTime || sub.morningTime),
+                status: (r.status as CommuteSlotStatus) || 'scheduled',
+                captainName: typeof r.captainName === 'string' ? r.captainName : undefined,
+                ridePin: typeof r.ridePin === 'string' ? r.ridePin : undefined,
+              });
+            }
+            return { ...sub, slots: Array.from(slotMap.values()) };
+          })
+        );
+      })
+    );
+    return () => {
+      for (const u of unsubs) u();
+    };
+  }, [firebaseUser, firestoreSubIds]);
+
+  // Automated Daily Commute Subscription Slot Progression Timer
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      setCommuteSubscriptions((prev) => {
+        let changed = false;
+        const next = prev.map((sub) => {
+          if (sub.status !== 'active' || !sub.slots || sub.slots.length === 0) return sub;
+          const updatedSlots = [...sub.slots];
+          const firstSchedIdx = updatedSlots.findIndex((s) => s.status === 'scheduled');
+          if (firstSchedIdx !== -1) {
+            changed = true;
+            const target = updatedSlots[firstSchedIdx];
+            const promoted: CommuteSlotItem = {
+              ...target,
+              status: 'driver_assigned',
+              captainName: target.captainName || 'كابتن أحمد فتحي الديب',
+              ridePin: target.ridePin || generateFourDigitPin(),
+            };
+            updatedSlots[firstSchedIdx] = promoted;
+            if (firestoreSubIds.includes(sub.id)) {
+              syncCommuteSlotToFirestore(sub.id, promoted).catch(() => {});
+            }
+            return { ...sub, slots: updatedSlots };
+          }
+          const assignedIdx = updatedSlots.findIndex((s) => s.status === 'driver_assigned');
+          if (assignedIdx !== -1) {
+            changed = true;
+            const target = updatedSlots[assignedIdx];
+            const promoted: CommuteSlotItem = {
+              ...target,
+              status: 'en_route',
+            };
+            updatedSlots[assignedIdx] = promoted;
+            if (firestoreSubIds.includes(sub.id)) {
+              syncCommuteSlotToFirestore(sub.id, promoted).catch(() => {});
+            }
+            return { ...sub, slots: updatedSlots };
+          }
+          return sub;
+        });
+        return changed ? next : prev;
+      });
+    }, 30000);
+    return () => window.clearInterval(timer);
+  }, [firestoreSubIds]);
+
+  // Real Battery Status API Listener & Adaptive GPS Polling Engine
+  useEffect(() => {
+    try {
+      if (typeof window !== 'undefined') {
+        window.localStorage.setItem(STORAGE_KEYS.BATTERY_PREF, batterySaverPreference);
+      }
+    } catch {
+      // Ignore storage error
+    }
+  }, [batterySaverPreference]);
+
+  useEffect(() => {
+    if (typeof navigator === 'undefined') return;
+    const navWithBattery = navigator as Navigator & {
+      getBattery?: () => Promise<{
+        level: number;
+        charging: boolean;
+        addEventListener: (type: string, listener: () => void) => void;
+        removeEventListener: (type: string, listener: () => void) => void;
+      }>;
+    };
+    if (typeof navWithBattery.getBattery !== 'function') return;
+
+    let mounted = true;
+    let batteryRef: {
+      level: number;
+      charging: boolean;
+      addEventListener: (type: string, listener: () => void) => void;
+      removeEventListener: (type: string, listener: () => void) => void;
+    } | null = null;
+
+    const syncBattery = () => {
+      if (!mounted || !batteryRef) return;
+      setHardwareBatterySupported(true);
+      setHardwareBatteryPercent(Math.max(1, Math.min(100, Math.round(batteryRef.level * 100))));
+      setIsCharging(Boolean(batteryRef.charging));
+    };
+
+    navWithBattery
+      .getBattery()
+      .then((bat) => {
+        if (!mounted) return;
+        batteryRef = bat;
+        syncBattery();
+        bat.addEventListener('levelchange', syncBattery);
+        bat.addEventListener('chargingchange', syncBattery);
+      })
+      .catch(() => {
+        // Browser blocked or unsupported Battery API; fallback stays active
+      });
+
+    return () => {
+      mounted = false;
+      if (batteryRef) {
+        batteryRef.removeEventListener('levelchange', syncBattery);
+        batteryRef.removeEventListener('chargingchange', syncBattery);
+      }
+    };
+  }, []);
+
+  const batteryLevelPercent = simulatedBatteryPercent ?? hardwareBatteryPercent;
+  const isBatteryLow = batteryLevelPercent < 20 && !isCharging;
+  const isBatterySaverActive =
+    batterySaverPreference === 'always_on' ||
+    (batterySaverPreference === 'auto' && batteryLevelPercent < 20 && !isCharging);
+  const gpsUpdateIntervalMs = isBatterySaverActive ? 15000 : 3000;
+  const gpsHighAccuracy = !isBatterySaverActive;
+
+  const forceGpsSyncNow = React.useCallback(() => {
+    const stamp = formatArabicClockTime(new Date());
+    if (typeof navigator !== 'undefined' && navigator.geolocation) {
+      navigator.geolocation.getCurrentPosition(
+        (pos) => {
+          setGpsTrackingLocation((prev) => ({
+            lat: Number(pos.coords.latitude.toFixed(6)),
+            lng: Number(pos.coords.longitude.toFixed(6)),
+            accuracyMeters: Math.round(pos.coords.accuracy || (gpsHighAccuracy ? 12 : 45)),
+            source: 'gps',
+            lastUpdatedAt: stamp,
+            updatesCount: prev.updatesCount + 1,
+          }));
+        },
+        () => {
+          setGpsTrackingLocation((prev) => ({
+            ...prev,
+            accuracyMeters: gpsHighAccuracy ? 15 : 48,
+            source: 'bagour_hub',
+            lastUpdatedAt: stamp,
+            updatesCount: prev.updatesCount + 1,
+          }));
+        },
+        {
+          enableHighAccuracy: gpsHighAccuracy,
+          maximumAge: isBatterySaverActive ? 15000 : 2000,
+          timeout: 4000,
+        }
+      );
+    } else {
+      setGpsTrackingLocation((prev) => ({
+        ...prev,
+        accuracyMeters: gpsHighAccuracy ? 15 : 48,
+        source: 'bagour_hub',
+        lastUpdatedAt: stamp,
+        updatesCount: prev.updatesCount + 1,
+      }));
+    }
+  }, [gpsHighAccuracy, isBatterySaverActive]);
+
+  useEffect(() => {
+    const hasActiveTrackingNeed =
+      isCaptainOnline ||
+      orders.some((o) => !['delivered', 'cancelled'].includes(o.status));
+    if (!hasActiveTrackingNeed) return;
+
+    const timer = window.setInterval(() => {
+      forceGpsSyncNow();
+    }, gpsUpdateIntervalMs);
+
+    return () => window.clearInterval(timer);
+  }, [gpsUpdateIntervalMs, isCaptainOnline, orders, forceGpsSyncNow]);
 
   // Persist orders, wallet & loyalty across page reloads
   useEffect(() => {
@@ -1808,7 +2433,7 @@ export const MarketplaceProvider: React.FC<{ children: React.ReactNode }> = ({ c
 
   const currentLoyaltyTierInfo = getLoyaltyTierFromPoints(loyaltyPoints);
 
-  // Notifications
+  // Notifications (Customer/Merchant general + Dedicated Firestore El Bagour Captain Alerts)
   const [notifications, setNotifications] = useState<AppNotification[]>([
     {
       id: 'ntf_1',
@@ -1829,6 +2454,32 @@ export const MarketplaceProvider: React.FC<{ children: React.ReactNode }> = ({ c
       isRead: false,
     },
   ]);
+
+  const [captainCustomSound, setCaptainCustomSoundState] = useState<CaptainAlertSoundType>(() =>
+    getCaptainCustomSound()
+  );
+  const [captainNotifications, setCaptainNotifications] = useState<CaptainInAppNotification[]>([
+    {
+      id: 'ntf_cpt_seed_1',
+      orderId: 'ord_seed_3',
+      orderNumber: 'MSH-8103',
+      zoneArea: 'ميدان المحطة - وسط الباجور',
+      titleAr: 'طلب توصيل جديد في وسط الباجور #MSH-8103',
+      bodyAr: 'من ميدان المحطة إلى برج الشروق • صافي الربح +١٥ ج.م (٠٪ عمولة)',
+      serviceType: 'errand',
+      estimatedEarningsEgp: 15,
+      soundProfile: getCaptainCustomSound(),
+      timeAr: 'منذ ٣ دقائق',
+      isRead: false,
+      source: 'local',
+    },
+  ]);
+  const [latestCaptainAlert, setLatestCaptainAlert] = useState<CaptainInAppNotification | null>(null);
+
+  const updateCaptainCustomSound = (sound: CaptainAlertSoundType) => {
+    setCaptainCustomSoundState(sound);
+    setCaptainCustomSound(sound);
+  };
 
   // Complaints
   const [complaints, setComplaints] = useState<SupportComplaint[]>([
@@ -1931,6 +2582,93 @@ export const MarketplaceProvider: React.FC<{ children: React.ReactNode }> = ({ c
     ]);
   };
 
+  const dispatchElBagourCaptainNotification = (params: {
+    orderId: string;
+    orderNumber: string;
+    zoneArea: string;
+    titleAr: string;
+    bodyAr: string;
+    serviceType: OrderServiceType;
+    estimatedEarningsEgp: number;
+    playSoundImmediately?: boolean;
+  }): CaptainInAppNotification => {
+    const activeSound = getCaptainCustomSound();
+    const notifId = `cptntf_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
+    const item: CaptainInAppNotification = {
+      id: notifId,
+      orderId: params.orderId,
+      orderNumber: params.orderNumber,
+      zoneArea: params.zoneArea,
+      titleAr: params.titleAr,
+      bodyAr: params.bodyAr,
+      serviceType: params.serviceType,
+      estimatedEarningsEgp: Math.max(0, Math.round(params.estimatedEarningsEgp)),
+      soundProfile: activeSound,
+      timeAr: formatArabicClockTime(new Date()),
+      isRead: false,
+      source: firebaseUser ? 'firestore' : 'local',
+    };
+
+    setCaptainNotifications((prev) => [item, ...prev.slice(0, 29)]);
+    setLatestCaptainAlert(item);
+    if (params.playSoundImmediately !== false && isCaptainOnline) {
+      playDispatchChime('captain', activeSound);
+    }
+
+    if (firebaseUser) {
+      createCaptainNotificationInFirestore({
+        notifId,
+        orderId: params.orderId,
+        orderNumber: params.orderNumber,
+        zoneArea: params.zoneArea,
+        titleAr: params.titleAr,
+        bodyAr: params.bodyAr,
+        serviceType: params.serviceType,
+        estimatedEarningsPiasters: Math.max(0, Math.round(params.estimatedEarningsEgp * 100)),
+        soundProfile: activeSound,
+      }).catch(() => {});
+    }
+
+    return item;
+  };
+
+  const dismissLatestCaptainAlert = () => setLatestCaptainAlert(null);
+
+  const markCaptainNotificationRead = (notifId: string) => {
+    setCaptainNotifications((prev) =>
+      prev.map((n) => (n.id === notifId ? { ...n, isRead: true } : n))
+    );
+    setLatestCaptainAlert((prev) => (prev?.id === notifId ? null : prev));
+    if (firebaseUser) {
+      markCaptainNotificationReadInFirestore(notifId).catch(() => {});
+    }
+  };
+
+  const markAllCaptainNotificationsRead = () => {
+    const unreadIds = captainNotifications.filter((n) => !n.isRead).map((n) => n.id);
+    setCaptainNotifications((prev) => prev.map((n) => ({ ...n, isRead: true })));
+    setLatestCaptainAlert(null);
+    if (firebaseUser) {
+      for (const nid of unreadIds) {
+        markCaptainNotificationReadInFirestore(nid).catch(() => {});
+      }
+    }
+  };
+
+  const simulateElBagourCaptainDispatchAlert = (): CaptainInAppNotification => {
+    const sampleNum = `MSH-${Math.floor(8500 + Math.random() * 499)}`;
+    return dispatchElBagourCaptainNotification({
+      orderId: `ord_alert_${Date.now()}`,
+      orderNumber: sampleNum,
+      zoneArea: 'ميدان المحطة ↔ شارع الجيش، الباجور',
+      titleAr: `طلب جديد وارد في الباجور #${sampleNum}`,
+      bodyAr: 'توصيل فوري داخل مركز الباجور • صافي الربح المتوقع +٢٢ ج.م (٠٪ عمولة)',
+      serviceType: 'ride',
+      estimatedEarningsEgp: 22,
+      playSoundImmediately: true,
+    });
+  };
+
   const setIsCaptainOnline = (online: boolean) => {
     setIsCaptainOnlineState(online);
     setCaptains((prev) =>
@@ -2003,6 +2741,91 @@ export const MarketplaceProvider: React.FC<{ children: React.ReactNode }> = ({ c
     return { success: true };
   };
 
+  const addExtractedItemsToCart = (
+    storeId: string,
+    extractedItems: { nameAr: string; quantity?: string; unit?: string; notes?: string; priceEgp?: number }[]
+  ): { addedCount: number; limitReached?: boolean } => {
+    const targetStore = stores.find((s) => s.id === storeId) || stores[1] || stores[0];
+    if (!targetStore || extractedItems.length === 0) {
+      return { addedCount: 0 };
+    }
+    const isNewStore = !cartStoreIds.includes(targetStore.id);
+    if (isNewStore && cartStoreIds.length >= BLUEPRINT_LIMITS.MAX_ORDER_STOPS) {
+      return { addedCount: 0, limitReached: true };
+    }
+
+    const newProductsToRegister: ProductItem[] = [];
+    const additions: { product: ProductItem; qty: number; notes?: string }[] = [];
+
+    extractedItems.forEach((item, idx) => {
+      const cleanName = item.nameAr.trim();
+      if (!cleanName) return;
+      const numericQtyMatch = String(item.quantity || '1').match(/\d+/);
+      const parsedQty = numericQtyMatch ? Math.max(1, Math.min(20, parseInt(numericQtyMatch[0], 10))) : 1;
+
+      const existingMatch = products.find(
+        (p) =>
+          p.storeId === targetStore.id &&
+          (p.nameAr.toLowerCase().includes(cleanName.toLowerCase()) ||
+            cleanName.toLowerCase().includes(p.nameAr.toLowerCase()))
+      );
+
+      if (existingMatch) {
+        additions.push({ product: existingMatch, qty: parsedQty, notes: item.notes });
+      } else {
+        const estimatedPrice =
+          typeof item.priceEgp === 'number' && item.priceEgp > 0
+            ? Math.round(item.priceEgp)
+            : targetStore.category === 'pharmacy'
+            ? 65
+            : targetStore.category === 'restaurant'
+            ? 85
+            : 35;
+        const createdProd: ProductItem = {
+          id: `prod_ai_${Date.now()}_${idx}`,
+          storeId: targetStore.id,
+          nameAr: cleanName,
+          descriptionAr: item.notes?.trim() || 'صنف مستخرج بالذكاء الاصطناعي من الصورة/القائمة',
+          priceEgp: estimatedPrice,
+          categoryName: 'أصناف مسحوبة بالذكاء الاصطناعي',
+          isAvailable: true,
+          unit: item.unit?.trim() || 'عبوة / وحدة',
+        };
+        newProductsToRegister.push(createdProd);
+        additions.push({ product: createdProd, qty: parsedQty, notes: item.notes });
+      }
+    });
+
+    if (newProductsToRegister.length > 0) {
+      setProducts((prev) => [...newProductsToRegister, ...prev]);
+    }
+
+    if (additions.length > 0) {
+      setCartItems((prev) => {
+        const updated = [...prev];
+        for (const add of additions) {
+          const existingIdx = updated.findIndex((i) => i.product.id === add.product.id);
+          if (existingIdx !== -1) {
+            updated[existingIdx] = {
+              ...updated[existingIdx],
+              quantity: updated[existingIdx].quantity + add.qty,
+              notes: add.notes || updated[existingIdx].notes,
+            };
+          } else {
+            updated.push({
+              product: add.product,
+              quantity: add.qty,
+              notes: add.notes,
+            });
+          }
+        }
+        return updated;
+      });
+    }
+
+    return { addedCount: additions.length };
+  };
+
   const forceAddToCartNewStore = (product: ProductItem, _store: StoreItem) => {
     setCartItems([{ product, quantity: 1 }]);
   };
@@ -2025,7 +2848,7 @@ export const MarketplaceProvider: React.FC<{ children: React.ReactNode }> = ({ c
     setCartItems([]);
   };
 
-  // Multi-Stop Cart Calculations
+  // Multi-Stop Cart Calculations using Haversine Store Proximity in El Bagour
   const cartSubtotalEgp = cartItems.reduce(
     (sum, item) => sum + item.product.priceEgp * item.quantity,
     0
@@ -2034,23 +2857,29 @@ export const MarketplaceProvider: React.FC<{ children: React.ReactNode }> = ({ c
     (mx, g) => Math.max(mx, g.store.distanceKm || 1.4),
     1.4
   );
+  const cartProximityPricing = calculateElBagourProximityDeliveryFeePiasters({
+    stores: cartStoreGroups.map((g) => ({
+      lat: g.store.lat,
+      lng: g.store.lng,
+      zoneCluster: g.store.zoneCluster,
+    })),
+    isRural: false,
+    extraDistanceKm: maxStoreDistanceKm,
+  });
   const cartDeliveryFeeEgp =
-    cartItems.length > 0
-      ? Math.round(
-          calculateDeliveryFeePiasters({
-            stopsCount: Math.max(1, cartStoreGroups.length),
-            distanceKm: maxStoreDistanceKm,
-            isRural: false,
-          }) / 100
-        )
-      : 0;
+    cartItems.length > 0 ? Math.round(cartProximityPricing.feePiasters / 100) : 0;
+  const cartProximityKm = cartItems.length > 0 ? cartProximityPricing.proximityKm : 0;
+  const cartProximitySavedEgp =
+    cartStoreGroups.length > 1 ? Math.round(cartProximityPricing.savedPiasters / 100) : 0;
+  const cartDeliveryFeeBreakdownAr =
+    cartItems.length > 0 ? cartProximityPricing.breakdownAr : '';
   const individualDeliverySumEgp = cartStoreGroups.reduce(
     (s, g) => s + (g.store.deliveryFeeEgp ?? 15),
     0
   );
   const cartMultiStopSavingsEgp =
     cartStoreGroups.length > 1
-      ? Math.max(0, individualDeliverySumEgp - cartDeliveryFeeEgp)
+      ? Math.max(cartProximitySavedEgp, Math.max(0, individualDeliverySumEgp - cartDeliveryFeeEgp))
       : 0;
   const cartPlatformFeeEgp =
     cartItems.length > 0 ? Math.round(systemSettings.platformFeePiasters / 100) : 0;
@@ -2191,13 +3020,27 @@ export const MarketplaceProvider: React.FC<{ children: React.ReactNode }> = ({ c
       hasVoiceNote: newOrder.hasVoiceNote,
       voiceNoteDurationSec: newOrder.voiceNoteDurationSec,
       voiceNoteTranscript: newOrder.voiceNoteTranscript,
-    }).catch(() => {});
+    })
+      .then((ok) => {
+        if (ok) setFirestoreOrderIds((prev) => Array.from(new Set([...prev, orderId])));
+      })
+      .catch(() => {});
 
     pushNotification({
       recipientRole: 'merchant',
       titleAr: `طلب جديد وارد #${orderNum} (${newOrder.storeName})`,
       bodyAr: `${itemsSummary} • الإجمالي ${finalTotalEgp} ج.م${safeTipEgp > 0 ? ` (يشمل ${safeTipEgp} ج إكرامية)` : ''}`,
       orderNumber: orderNum,
+    });
+
+    dispatchElBagourCaptainNotification({
+      orderId,
+      orderNumber: orderNum,
+      zoneArea: params.deliveryAddress || 'مركز الباجور',
+      titleAr: `طلب متاجر جديد في الباجور #${orderNum}`,
+      bodyAr: `${newOrder.storeName} ← ${params.deliveryAddress} • ربح الكابتن +${cartDeliveryFeeEgp + safeTipEgp} ج.م`,
+      serviceType: 'restaurant_store',
+      estimatedEarningsEgp: cartDeliveryFeeEgp + safeTipEgp,
     });
 
     return newOrder;
@@ -2332,13 +3175,27 @@ export const MarketplaceProvider: React.FC<{ children: React.ReactNode }> = ({ c
       hasVoiceNote: newOrder.hasVoiceNote,
       voiceNoteDurationSec: newOrder.voiceNoteDurationSec,
       voiceNoteTranscript: newOrder.voiceNoteTranscript,
-    }).catch(() => {});
+    })
+      .then((ok) => {
+        if (ok) setFirestoreOrderIds((prev) => Array.from(new Set([...prev, orderId])));
+      })
+      .catch(() => {});
 
     pushNotification({
       recipientRole: 'merchant',
       titleAr: `طلب جديد وارد #${orderNum} لـ ${store.nameAr}`,
       bodyAr: `${itemsSummary} • الإجمالي ${totalEgp} ج.م${safeTipEgp > 0 ? ` (يشمل ${safeTipEgp} ج إكرامية)` : ''}`,
       orderNumber: orderNum,
+    });
+
+    dispatchElBagourCaptainNotification({
+      orderId,
+      orderNumber: orderNum,
+      zoneArea: params.deliveryAddress || 'مركز الباجور',
+      titleAr: `طلب جديد في الباجور #${orderNum} (${store.nameAr})`,
+      bodyAr: `من ${store.landmark} إلى ${params.deliveryAddress} • ربح الكابتن +${deliveryFeeEgp + safeTipEgp} ج.م`,
+      serviceType: 'restaurant_store',
+      estimatedEarningsEgp: deliveryFeeEgp + safeTipEgp,
     });
 
     return newOrder;
@@ -2448,7 +3305,11 @@ export const MarketplaceProvider: React.FC<{ children: React.ReactNode }> = ({ c
       scheduledFor: params.scheduled_for,
       hasVoiceNote: newOrder.hasVoiceNote,
       voiceNoteTranscript: newOrder.voiceNoteTranscript,
-    }).catch(() => {});
+    })
+      .then((ok) => {
+        if (ok) setFirestoreOrderIds((prev) => Array.from(new Set([...prev, orderId])));
+      })
+      .catch(() => {});
 
     pushNotification({
       recipientRole: 'merchant',
@@ -2644,7 +3505,11 @@ export const MarketplaceProvider: React.FC<{ children: React.ReactNode }> = ({ c
         hasVoiceNote: newOrder.hasVoiceNote,
         voiceNoteDurationSec: newOrder.voiceNoteDurationSec,
         voiceNoteTranscript: newOrder.voiceNoteTranscript,
-      }).catch(() => {});
+      })
+        .then((ok) => {
+          if (ok) setFirestoreOrderIds((prev) => Array.from(new Set([...prev, orderId])));
+        })
+        .catch(() => {});
     }
 
     pushNotification({
@@ -2654,6 +3519,16 @@ export const MarketplaceProvider: React.FC<{ children: React.ReactNode }> = ({ c
         params.requiresFamilyTrustedDriver ? ' • كابتن عائلات موثوق' : ''
       }`,
       orderNumber: orderNum,
+    });
+
+    dispatchElBagourCaptainNotification({
+      orderId,
+      orderNumber: orderNum,
+      zoneArea: `${params.pickupAddress} ← ${params.deliveryAddress}`,
+      titleAr: `طلب ${serviceLabel} جديد بالباجور #${orderNum}`,
+      bodyAr: `من ${params.pickupAddress} إلى ${params.deliveryAddress} (${params.distanceKm} كم) • صافي الكابتن +${deliveryFeeEgp + safeTipEgp} ج.م`,
+      serviceType: params.serviceType,
+      estimatedEarningsEgp: deliveryFeeEgp + safeTipEgp,
     });
 
     return newOrder;
@@ -2769,6 +3644,78 @@ export const MarketplaceProvider: React.FC<{ children: React.ReactNode }> = ({ c
           : o
       )
     );
+  };
+
+  // Full Post-Ride / Post-Delivery Rating & Feedback persisted to Firestore driverRatings
+  const submitDriverReview = async (
+    orderId: string,
+    input: { rating: number; tags: string[]; feedback: string }
+  ): Promise<void> => {
+    const clampedRating = Math.max(1, Math.min(5, Math.round(Number(input.rating) || 5)));
+    const cleanTags = input.tags.map((t) => t.trim()).filter(Boolean).slice(0, 5);
+    const cleanFeedback = input.feedback.trim().slice(0, BLUEPRINT_LIMITS.RATING_FEEDBACK_MAX);
+    const targetOrder = orders.find((o) => o.id === orderId || o.orderNumber === orderId);
+    const resolvedOrderId = targetOrder?.id || orderId;
+    const driverId = targetOrder?.assignedCaptainId || 'cpt_02';
+    const driverName = targetOrder?.assignedCaptainName || 'كابتن محمود الصياد';
+    const ratingId = `rat_${resolvedOrderId.replace(/[^a-zA-Z0-9_\-]/g, '_')}`;
+
+    setOrders((prev) =>
+      prev.map((o) =>
+        o.id === orderId || o.orderNumber === orderId
+          ? {
+              ...o,
+              customerRating: clampedRating,
+              customerRatingTags: cleanTags,
+              customerFeedback: cleanFeedback || o.customerFeedback,
+              orderFeedback: cleanFeedback || o.orderFeedback,
+            }
+          : o
+      )
+    );
+
+    const newEntry: DriverRatingEntry = {
+      id: ratingId,
+      orderId: resolvedOrderId,
+      driverId,
+      driverName,
+      rating: clampedRating,
+      tags: cleanTags,
+      feedback: cleanFeedback,
+      createdAtAr: `اليوم • ${formatArabicClockTime(new Date())}`,
+    };
+    setDriverRatings((prev) => [newEntry, ...prev.filter((r) => r.id !== ratingId)]);
+
+    setCaptains((prev) =>
+      prev.map((c) => {
+        if (c.id === driverId || c.userId === driverId || c.name === driverName) {
+          const updatedAvg = Number(((c.rating * 10 + clampedRating) / 11).toFixed(2));
+          return { ...c, rating: updatedAvg };
+        }
+        return c;
+      })
+    );
+
+    if (firebaseUser) {
+      await submitDriverRatingToFirestore({
+        ratingId,
+        orderId: resolvedOrderId,
+        driverId,
+        driverName,
+        rating: clampedRating,
+        tags: cleanTags,
+        feedback: cleanFeedback,
+      }).catch(() => {});
+    }
+
+    pushNotification({
+      recipientRole: 'captain',
+      titleAr: `تقييم جديد ${clampedRating} نجوم من العميل`,
+      bodyAr: cleanFeedback
+        ? `تعليق العميل على #${targetOrder?.orderNumber || resolvedOrderId}: "${cleanFeedback}"`
+        : `شكراً على خدمة التوصيل المتميزة لطلب #${targetOrder?.orderNumber || resolvedOrderId}.`,
+      orderNumber: targetOrder?.orderNumber,
+    });
   };
 
   // Customer updates orderNotes on an active or existing order
@@ -2938,6 +3885,16 @@ export const MarketplaceProvider: React.FC<{ children: React.ReactNode }> = ({ c
         titleAr: `طلب جاهز للاستلام الفوري #${ord.orderNumber}`,
         bodyAr: `المتجر: ${ord.storeName} • الأجرة للكابتن: +${ord.deliveryFeeEgp} ج.م`,
         orderNumber: ord.orderNumber,
+      });
+
+      dispatchElBagourCaptainNotification({
+        orderId: ord.id,
+        orderNumber: ord.orderNumber,
+        zoneArea: ord.deliveryAddress || 'مركز الباجور',
+        titleAr: `طلب جاهز للاستلام الفوري #${ord.orderNumber}`,
+        bodyAr: `${ord.storeName} جاهز للاستلام ← ${ord.deliveryAddress} • +${ord.deliveryFeeEgp + (ord.driverTipEgp || 0)} ج.م`,
+        serviceType: ord.serviceType,
+        estimatedEarningsEgp: ord.deliveryFeeEgp + (ord.driverTipEgp || 0),
       });
     }
   };
@@ -3129,6 +4086,14 @@ export const MarketplaceProvider: React.FC<{ children: React.ReactNode }> = ({ c
   ) => {
     const nowTimeAr = formatArabicClockTime(new Date());
     const targetOrder = orders.find((o) => o.id === orderId);
+    // Enforce 4-digit security PIN verification before starting passenger rides
+    if (
+      targetOrder?.serviceType === 'ride' &&
+      targetOrder.ridePin &&
+      nextStatus === 'in_transit'
+    ) {
+      return;
+    }
     setOrders((prev) =>
       prev.map((o) =>
         o.id === orderId
@@ -3404,8 +4369,10 @@ export const MarketplaceProvider: React.FC<{ children: React.ReactNode }> = ({ c
     });
     const priceEgp = Math.round(pricePiasters / 100);
 
+    const newSubId = `sub_${Date.now()}`;
+    const generatedSlots = buildTodayCommuteSlots(newSubId, input.morningTime, input.returnTime);
     const newSub: CommuteSubscriptionItem = {
-      id: `sub_${Date.now()}`,
+      id: newSubId,
       fromLandmark: input.fromLandmark,
       toLandmark: input.toLandmark,
       scheduleDays: input.scheduleDays,
@@ -3416,6 +4383,7 @@ export const MarketplaceProvider: React.FC<{ children: React.ReactNode }> = ({ c
       priceEgp,
       status: 'active',
       createdAtAr: 'الآن',
+      slots: generatedSlots,
     };
 
     setCommuteSubscriptions((prev) => [newSub, ...prev]);
@@ -3430,7 +4398,16 @@ export const MarketplaceProvider: React.FC<{ children: React.ReactNode }> = ({ c
       vehicleTier: input.vehicleTier,
       planType: input.planType,
       pricePiasters,
-    }).catch(() => {});
+    })
+      .then((ok) => {
+        if (ok) {
+          setFirestoreSubIds((prev) => Array.from(new Set([...prev, newSub.id])));
+          for (const sl of generatedSlots) {
+            syncCommuteSlotToFirestore(newSub.id, sl).catch(() => {});
+          }
+        }
+      })
+      .catch(() => {});
 
     pushNotification({
       recipientRole: 'customer',
@@ -3447,6 +4424,53 @@ export const MarketplaceProvider: React.FC<{ children: React.ReactNode }> = ({ c
         s.id === subId ? { ...s, status: s.status === 'active' ? 'paused' : 'active' } : s
       )
     );
+  };
+
+  const advanceCommuteSlotStatus = (subId: string, slotId: string) => {
+    const orderFlow: CommuteSlotStatus[] = ['scheduled', 'driver_assigned', 'en_route', 'completed'];
+    let promotedForSync: CommuteSlotItem | null = null;
+    setCommuteSubscriptions((prev) =>
+      prev.map((sub) => {
+        if (sub.id !== subId) return sub;
+        const slots = (sub.slots || []).map((sl) => {
+          if (sl.id !== slotId || sl.status === 'completed' || sl.status === 'skipped') return sl;
+          const idx = orderFlow.indexOf(sl.status);
+          const nextStatus = orderFlow[Math.min(orderFlow.length - 1, idx + 1)] || 'completed';
+          const updated: CommuteSlotItem = {
+            ...sl,
+            status: nextStatus,
+            captainName: sl.captainName || 'كابتن أحمد فتحي الديب',
+            ridePin: sl.ridePin || generateFourDigitPin(),
+          };
+          promotedForSync = updated;
+          return updated;
+        });
+        return { ...sub, slots };
+      })
+    );
+    if (promotedForSync && firestoreSubIds.includes(subId)) {
+      syncCommuteSlotToFirestore(subId, promotedForSync).catch(() => {});
+    }
+  };
+
+  const toggleSkipCommuteSlot = (subId: string, slotId: string) => {
+    let updatedForSync: CommuteSlotItem | null = null;
+    setCommuteSubscriptions((prev) =>
+      prev.map((sub) => {
+        if (sub.id !== subId) return sub;
+        const slots = (sub.slots || []).map((sl) => {
+          if (sl.id !== slotId || sl.status === 'completed') return sl;
+          const nextStatus: CommuteSlotStatus = sl.status === 'skipped' ? 'scheduled' : 'skipped';
+          const updated: CommuteSlotItem = { ...sl, status: nextStatus };
+          updatedForSync = updated;
+          return updated;
+        });
+        return { ...sub, slots };
+      })
+    );
+    if (updatedForSync && firestoreSubIds.includes(subId)) {
+      syncCommuteSlotToFirestore(subId, updatedForSync).catch(() => {});
+    }
   };
 
   const markAllNotificationsRead = () => {
@@ -3800,22 +4824,35 @@ export const MarketplaceProvider: React.FC<{ children: React.ReactNode }> = ({ c
   };
 
   const sendChatMessage = (orderId: string, text: string) => {
-    if (!text.trim()) return;
+    const cleanText = text.trim();
+    if (!cleanText) return;
     const nowStr = formatArabicClockTime(new Date());
+    const msgId = `msg_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
+    const senderRole: 'customer' | 'captain' | 'merchant' =
+      currentUser.role === 'captain'
+        ? 'captain'
+        : currentUser.role === 'merchant'
+        ? 'merchant'
+        : 'customer';
     const newMsg: ChatMessage = {
-      id: `msg_${Date.now()}`,
+      id: msgId,
       orderId,
-      senderRole:
-        currentUser.role === 'captain'
-          ? 'captain'
-          : currentUser.role === 'merchant'
-          ? 'merchant'
-          : 'customer',
+      senderRole,
       senderName: currentUser.name,
-      text: text.trim(),
+      text: cleanText,
       time: nowStr,
     };
     setChatMessages((prev) => [...prev, newMsg]);
+
+    if (firebaseUser && firestoreOrderIds.includes(orderId)) {
+      sendThreadMessageToFirestore({
+        threadId: orderId,
+        msgId,
+        senderRole,
+        senderName: currentUser.name,
+        text: cleanText,
+      }).catch(() => {});
+    }
   };
 
   // Active order for current customer
@@ -3854,6 +4891,8 @@ export const MarketplaceProvider: React.FC<{ children: React.ReactNode }> = ({ c
     if (stageIndex === 1) {
       if (!target.assignedCaptainId) {
         simulateInstantCaptainAccept(orderId);
+      } else if (target.serviceType === 'ride' && target.ridePin) {
+        captainVerifyRidePinAndStart(orderId, target.ridePin);
       } else {
         captainUpdateStep(orderId, 'in_transit');
       }
@@ -3915,6 +4954,7 @@ export const MarketplaceProvider: React.FC<{ children: React.ReactNode }> = ({ c
         currentUser,
         firebaseUser,
         isFirestoreRealtimeActive: Boolean(firebaseUser),
+        isFirestoreStoresLive,
         switchDemoUser,
         isAuthModalOpen,
         setIsAuthModalOpen,
@@ -3937,7 +4977,11 @@ export const MarketplaceProvider: React.FC<{ children: React.ReactNode }> = ({ c
         cartStoreIds,
         cartStoreGroups,
         cartMultiStopSavingsEgp,
+        cartProximityKm,
+        cartProximitySavedEgp,
+        cartDeliveryFeeBreakdownAr,
         addToCart,
+        addExtractedItemsToCart,
         removeFromCart,
         updateCartItemQty,
         clearCart,
@@ -3958,6 +5002,8 @@ export const MarketplaceProvider: React.FC<{ children: React.ReactNode }> = ({ c
         updateOrderNotes,
         updateOrderFeedback,
         updateOrderDriverTip,
+        driverRatings,
+        submitDriverReview,
         merchantAcceptOrder,
         merchantSubmitOrderQuote,
         merchantMarkReady,
@@ -3982,6 +5028,8 @@ export const MarketplaceProvider: React.FC<{ children: React.ReactNode }> = ({ c
         commuteSubscriptions,
         createCommuteSubscription,
         toggleCommuteSubscriptionStatus,
+        advanceCommuteSlotStatus,
+        toggleSkipCommuteSlot,
         loyaltyPoints,
         loyaltyCashbackBalanceEgp,
         loyaltyTier: currentLoyaltyTierInfo.tier,
@@ -3994,6 +5042,14 @@ export const MarketplaceProvider: React.FC<{ children: React.ReactNode }> = ({ c
         awardLoyaltyForOrder,
         notifications,
         markAllNotificationsRead,
+        captainNotifications,
+        latestCaptainAlert,
+        dismissLatestCaptainAlert,
+        markCaptainNotificationRead,
+        markAllCaptainNotificationsRead,
+        captainCustomSound,
+        updateCaptainCustomSound,
+        simulateElBagourCaptainDispatchAlert,
         complaints,
         submitComplaint,
         captains,
@@ -4007,6 +5063,21 @@ export const MarketplaceProvider: React.FC<{ children: React.ReactNode }> = ({ c
         adminUpdateSettings,
         chatMessages,
         sendChatMessage,
+        activeChatThreadId,
+        setActiveChatThreadId,
+        batteryLevelPercent,
+        hardwareBatterySupported,
+        isCharging,
+        batterySaverPreference,
+        setBatterySaverPreference,
+        simulatedBatteryPercent,
+        setSimulatedBatteryPercent,
+        isBatteryLow,
+        isBatterySaverActive,
+        gpsUpdateIntervalMs,
+        gpsHighAccuracy,
+        gpsTrackingLocation,
+        forceGpsSyncNow,
         activeCustomerOrder,
         activeOrderTrackingCard,
         advanceOrderTrackingStage,

@@ -285,6 +285,7 @@ service cloud.firestore {
         ]) &&
         data.keys().hasOnly([
           'id', 'ownerUid', 'nameAr', 'category', 'cityId', 'landmark',
+          'lat', 'lng', 'zoneCluster',
           'deliveryFeePiasters', 'minOrderPiasters', 'prepTimeText', 'rating', 'isOpen', 'updatedAt'
         ]) &&
         isValidId(data.id) && data.id == storeId &&
@@ -293,6 +294,9 @@ service cloud.firestore {
         data.category in ['restaurant', 'pharmacy', 'supermarket'] &&
         isValidId(data.cityId) && data.cityId.size() <= 64 &&
         data.landmark is string && data.landmark.size() >= 2 && data.landmark.size() <= 140 &&
+        (!('lat' in data) || (data.lat is number && data.lat >= -90 && data.lat <= 90)) &&
+        (!('lng' in data) || (data.lng is number && data.lng >= -180 && data.lng <= 180)) &&
+        (!('zoneCluster' in data) || (data.zoneCluster is string && data.zoneCluster.size() <= 40)) &&
         data.deliveryFeePiasters is int && data.deliveryFeePiasters >= 0 && data.deliveryFeePiasters <= 50000 &&
         data.minOrderPiasters is int && data.minOrderPiasters >= 0 && data.minOrderPiasters <= 100000 &&
         data.prepTimeText is string && data.prepTimeText.size() >= 2 && data.prepTimeText.size() <= 40 &&
@@ -693,6 +697,27 @@ service cloud.firestore {
         data.updatedAt is timestamp;
     }
 
+    function isValidCommuteSlot(data, subId, slotId) {
+      return data.keys().hasAll([
+          'id', 'subscriptionId', 'passengerId', 'slotType',
+          'dateIso', 'scheduledTime', 'status', 'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'id', 'subscriptionId', 'passengerId', 'slotType',
+          'dateIso', 'scheduledTime', 'status', 'captainName', 'ridePin', 'updatedAt'
+        ]) &&
+        isValidId(data.id) && data.id == slotId &&
+        isValidId(data.subscriptionId) && data.subscriptionId == subId &&
+        isValidId(data.passengerId) &&
+        data.slotType in ['morning_go', 'evening_return'] &&
+        data.dateIso is string && data.dateIso.size() >= 8 && data.dateIso.size() <= 20 &&
+        data.scheduledTime is string && data.scheduledTime.size() >= 4 && data.scheduledTime.size() <= 12 &&
+        data.status in ['scheduled', 'driver_assigned', 'en_route', 'completed', 'skipped'] &&
+        (!('captainName' in data) || (data.captainName is string && data.captainName.size() <= 80)) &&
+        (!('ridePin' in data) || (data.ridePin is string && data.ridePin.size() >= 4 && data.ridePin.size() <= 6)) &&
+        data.updatedAt is timestamp;
+    }
+
     match /commuteSubscriptions/{subId} {
       allow get: if isValidId(subId) && isVerifiedAccount() && (
         existing().passengerId == request.auth.uid || isAdmin()
@@ -721,6 +746,38 @@ service cloud.firestore {
             incoming().diff(existing()).affectedKeys().hasOnly(['status', 'updatedAt'])
           )
         );
+
+      match /slots/{slotId} {
+        allow get, list: if isValidId(subId) && isVerifiedAccount() &&
+          exists(/databases/$(database)/documents/commuteSubscriptions/$(subId)) &&
+          (get(/databases/$(database)/documents/commuteSubscriptions/$(subId)).data.passengerId == request.auth.uid || isAdmin());
+        allow create: if isValidId(subId) && isValidId(slotId) && isVerifiedAccount() &&
+          exists(/databases/$(database)/documents/commuteSubscriptions/$(subId)) &&
+          isValidCommuteSlot(incoming(), subId, slotId) &&
+          incoming().updatedAt == request.time &&
+          (
+            isAdmin() ||
+            (
+              get(/databases/$(database)/documents/commuteSubscriptions/$(subId)).data.passengerId == request.auth.uid &&
+              incoming().passengerId == request.auth.uid
+            )
+          );
+        allow update: if isValidId(subId) && isValidId(slotId) && isVerifiedAccount() &&
+          exists(/databases/$(database)/documents/commuteSubscriptions/$(subId)) &&
+          isValidCommuteSlot(incoming(), subId, slotId) &&
+          incoming().id == existing().id &&
+          incoming().subscriptionId == existing().subscriptionId &&
+          incoming().passengerId == existing().passengerId &&
+          incoming().updatedAt == request.time &&
+          (
+            isAdmin() ||
+            (
+              get(/databases/$(database)/documents/commuteSubscriptions/$(subId)).data.passengerId == request.auth.uid &&
+              incoming().diff(existing()).affectedKeys().hasOnly(['status', 'captainName', 'ridePin', 'updatedAt'])
+            )
+          );
+        allow delete: if false;
+      }
     }
 
     // ------------------------------------------------------------------------
@@ -812,6 +869,106 @@ service cloud.firestore {
         isValidChatMessage(incoming(), messageId) &&
         incoming().createdAt == request.time;
       allow update, delete: if false;
+    }
+
+    // ------------------------------------------------------------------------
+    // Post-Ride & Post-Delivery Driver Ratings & Feedback
+    // ------------------------------------------------------------------------
+    function isValidDriverRating(data, ratingId) {
+      return data.keys().hasAll([
+          'id', 'orderId', 'driverId', 'driverName', 'customerId',
+          'rating', 'tags', 'feedback', 'createdAt'
+        ]) &&
+        data.keys().hasOnly([
+          'id', 'orderId', 'driverId', 'driverName', 'customerId',
+          'rating', 'tags', 'feedback', 'createdAt'
+        ]) &&
+        isValidId(data.id) && data.id == ratingId &&
+        isValidId(data.orderId) &&
+        isValidId(data.driverId) &&
+        data.driverName is string && data.driverName.size() >= 2 && data.driverName.size() <= 80 &&
+        isValidId(data.customerId) &&
+        data.rating is int && data.rating >= 1 && data.rating <= 5 &&
+        data.tags is list && data.tags.size() <= 5 &&
+        (data.tags.size() == 0 || (data.tags[0] is string && data.tags[0].size() <= 40)) &&
+        data.feedback is string && data.feedback.size() <= 300 &&
+        data.createdAt is timestamp;
+    }
+
+    match /driverRatings/{ratingId} {
+      allow get, list: if isSignedIn();
+      allow create: if isValidId(ratingId) && isVerifiedAccount() &&
+        isValidDriverRating(incoming(), ratingId) &&
+        incoming().customerId == request.auth.uid &&
+        incoming().createdAt == request.time;
+      allow update, delete: if false;
+    }
+
+    // ------------------------------------------------------------------------
+    // Real-Time El Bagour Captain In-App Notifications
+    // ------------------------------------------------------------------------
+    function isValidCaptainNotification(data, notifId) {
+      return data.keys().hasAll([
+          'id', 'orderId', 'orderNumber', 'recipientScope', 'senderUid',
+          'cityId', 'zoneArea', 'titleAr', 'bodyAr', 'serviceType',
+          'estimatedEarningsPiasters', 'soundProfile', 'isRead', 'createdAt', 'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'id', 'orderId', 'orderNumber', 'recipientScope', 'targetCaptainUid', 'senderUid',
+          'cityId', 'zoneArea', 'titleAr', 'bodyAr', 'serviceType',
+          'estimatedEarningsPiasters', 'soundProfile', 'isRead', 'createdAt', 'updatedAt'
+        ]) &&
+        isValidId(data.id) && data.id == notifId &&
+        isValidId(data.orderId) &&
+        data.orderNumber is string && data.orderNumber.size() >= 2 && data.orderNumber.size() <= 32 &&
+        data.recipientScope in ['el_bagour_captains', 'specific_captain'] &&
+        (!('targetCaptainUid' in data) || isValidId(data.targetCaptainUid)) &&
+        isValidId(data.senderUid) &&
+        data.cityId == 'el_bagour' &&
+        data.zoneArea is string && data.zoneArea.size() >= 2 && data.zoneArea.size() <= 80 &&
+        data.titleAr is string && data.titleAr.size() >= 2 && data.titleAr.size() <= 140 &&
+        data.bodyAr is string && data.bodyAr.size() >= 2 && data.bodyAr.size() <= 320 &&
+        data.serviceType in ['restaurant_store', 'package', 'errand', 'ride', 'prescription_list'] &&
+        data.estimatedEarningsPiasters is int && data.estimatedEarningsPiasters >= 0 && data.estimatedEarningsPiasters <= 500000 &&
+        data.soundProfile in ['radar_pulse', 'bagour_chime', 'urgent_dispatch', 'soft_bell'] &&
+        data.isRead is bool &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    match /captainNotifications/{notifId} {
+      allow get: if isValidId(notifId) && isVerifiedAccount() && (
+        existing().recipientScope == 'el_bagour_captains' ||
+        existing().targetCaptainUid == request.auth.uid ||
+        existing().senderUid == request.auth.uid ||
+        isAdmin()
+      );
+      allow list: if isVerifiedAccount() && (
+        resource.data.recipientScope == 'el_bagour_captains' ||
+        resource.data.targetCaptainUid == request.auth.uid ||
+        resource.data.senderUid == request.auth.uid ||
+        isBootstrappedOwnerEmail()
+      );
+      allow create: if isValidId(notifId) && isVerifiedAccount() &&
+        isValidCaptainNotification(incoming(), notifId) &&
+        incoming().senderUid == request.auth.uid &&
+        incoming().isRead == false &&
+        incoming().createdAt == request.time &&
+        incoming().updatedAt == request.time;
+      allow update: if isValidId(notifId) && isVerifiedAccount() &&
+        isValidCaptainNotification(incoming(), notifId) &&
+        incoming().id == existing().id &&
+        incoming().orderId == existing().orderId &&
+        incoming().senderUid == existing().senderUid &&
+        incoming().cityId == existing().cityId &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().updatedAt == request.time &&
+        incoming().diff(existing()).affectedKeys().hasOnly(['isRead', 'updatedAt']) && (
+          existing().recipientScope == 'el_bagour_captains' ||
+          existing().targetCaptainUid == request.auth.uid ||
+          isAdmin()
+        );
+      allow delete: if false;
     }
   }
 }

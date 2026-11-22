@@ -27,12 +27,23 @@ import {
   VolumeX,
   Lock,
   Shield,
+  MessageSquare,
+  Send,
+  Battery,
+  BatteryLow,
+  BatteryCharging,
+  Bell,
+  BellRing,
+  Check,
+  Music,
 } from 'lucide-react';
 import { EgyptianMapCanvas } from './EgyptianMapCanvas';
 import {
   playDispatchChime,
   isDispatchSoundMuted,
   setDispatchSoundMuted,
+  CAPTAIN_SOUND_PROFILES,
+  previewCaptainAlertSound,
 } from './SoundAlertHelper';
 import {
   useMarketplace,
@@ -63,18 +74,44 @@ export const CaptainMobileExperience: React.FC<CaptainMobileExperienceProps> = (
     captainVerifyRidePinAndStart,
     captainUpdateStep,
     captainConfirmCashCollection,
+    chatMessages,
+    sendChatMessage,
+    setActiveChatThreadId,
+    isFirestoreRealtimeActive,
     setIsAuthModalOpen,
+    batteryLevelPercent,
+    isCharging,
+    isBatterySaverActive,
+    batterySaverPreference,
+    setBatterySaverPreference,
+    simulatedBatteryPercent,
+    setSimulatedBatteryPercent,
+    gpsUpdateIntervalMs,
+    gpsTrackingLocation,
+    forceGpsSyncNow,
+    captainNotifications,
+    latestCaptainAlert,
+    dismissLatestCaptainAlert,
+    markCaptainNotificationRead,
+    markAllCaptainNotificationsRead,
+    captainCustomSound,
+    updateCaptainCustomSound,
+    simulateElBagourCaptainDispatchAlert,
   } = useMarketplace();
 
   // Active Tab: radar, trips, wallet, profile
   const [activeTab, setActiveTab] = useState<'radar' | 'trips' | 'wallet' | 'profile'>('radar');
 
-  // Sound Mute & Ride PIN & Error Feedback
+  // Sound Mute & Notifications & Ride PIN & Chat Feedback
   const [soundMuted, setSoundMuted] = useState<boolean>(isDispatchSoundMuted);
+  const [showNotificationsDrawer, setShowNotificationsDrawer] = useState<boolean>(false);
   const [acceptErrorMsg, setAcceptErrorMsg] = useState<string | null>(null);
   const [ridePinInput, setRidePinInput] = useState<string>('');
   const [pinErrorMsg, setPinErrorMsg] = useState<string | null>(null);
+  const [showCaptainChat, setShowCaptainChat] = useState<boolean>(false);
+  const [captainChatInput, setCaptainChatInput] = useState<string>('');
   const lastAlertedOrderIdRef = React.useRef<string | null>(null);
+  const unreadCaptainNotifCount = captainNotifications.filter((n) => !n.isRead).length;
 
   // Request countdown timer
   const [requestCountdown, setRequestCountdown] = useState<number>(15);
@@ -98,6 +135,15 @@ export const CaptainMobileExperience: React.FC<CaptainMobileExperienceProps> = (
       ['captain_assigned', 'at_pickup', 'picked_up', 'in_transit'].includes(o.status)
   );
 
+  useEffect(() => {
+    setActiveChatThreadId(activeAssignedOrder?.id || null);
+    return () => setActiveChatThreadId(null);
+  }, [activeAssignedOrder?.id, setActiveChatThreadId]);
+
+  const activeThreadMessages = activeAssignedOrder
+    ? chatMessages.filter((m) => m.orderId === activeAssignedOrder.id)
+    : [];
+
   // Ready store orders OR direct customer ride/package requests waiting for dispatch
   const incomingDispatchOrder = !activeAssignedOrder && isCaptainOnline
     ? orders.find(
@@ -111,9 +157,9 @@ export const CaptainMobileExperience: React.FC<CaptainMobileExperienceProps> = (
   useEffect(() => {
     if (incomingDispatchOrder && incomingDispatchOrder.id !== lastAlertedOrderIdRef.current) {
       lastAlertedOrderIdRef.current = incomingDispatchOrder.id;
-      playDispatchChime('captain');
+      playDispatchChime('captain', captainCustomSound);
     }
-  }, [incomingDispatchOrder]);
+  }, [incomingDispatchOrder, captainCustomSound]);
 
   // Countdown timer when an incoming dispatch order appears
   useEffect(() => {
@@ -186,8 +232,35 @@ export const CaptainMobileExperience: React.FC<CaptainMobileExperienceProps> = (
           </div>
         </div>
 
-        {/* Sound Mute & Switchers */}
+        {/* Notifications Bell, Sound Mute & Switchers */}
         <div className="flex items-center gap-1.5">
+          <button
+            type="button"
+            data-testid="captain-notifications-btn"
+            onClick={() => setShowNotificationsDrawer(true)}
+            className={`relative min-h-[44px] min-w-[44px] px-2 rounded-xl border flex items-center justify-center transition-colors cursor-pointer ${
+              unreadCaptainNotifCount > 0
+                ? 'bg-emerald-50 border-emerald-300 text-emerald-900'
+                : 'bg-slate-50 border-slate-200 text-slate-700'
+            }`}
+            title="إشعارات الطلبات الواردة بالباجور"
+            aria-label="إشعارات الكابتن"
+          >
+            {unreadCaptainNotifCount > 0 ? (
+              <BellRing className="w-4 h-4 text-emerald-700" />
+            ) : (
+              <Bell className="w-4 h-4" />
+            )}
+            {unreadCaptainNotifCount > 0 && (
+              <span
+                data-testid="captain-notifications-unread-badge"
+                className="absolute -top-1 -left-1 min-w-[18px] h-[18px] px-1 rounded-full bg-rose-600 text-white text-[10px] font-black flex items-center justify-center tabular-nums shadow-xs"
+              >
+                {unreadCaptainNotifCount > 9 ? '9+' : unreadCaptainNotifCount}
+              </span>
+            )}
+          </button>
+
           <button
             type="button"
             onClick={() => {
@@ -195,14 +268,14 @@ export const CaptainMobileExperience: React.FC<CaptainMobileExperienceProps> = (
               setSoundMuted(next);
               setDispatchSoundMuted(next);
             }}
-            className={`p-1.5 rounded-lg border text-[11px] font-bold transition-colors cursor-pointer ${
+            className={`min-h-[44px] min-w-[44px] p-2 rounded-xl border text-[11px] font-bold flex items-center justify-center transition-colors cursor-pointer ${
               soundMuted
                 ? 'bg-slate-100 border-slate-200 text-slate-500'
                 : 'bg-amber-50 border-amber-300 text-amber-900'
             }`}
             title={soundMuted ? 'تفعيل صوت التنبيهات' : 'كتم صوت التنبيهات'}
           >
-            {soundMuted ? <VolumeX className="w-3.5 h-3.5" /> : <Volume2 className="w-3.5 h-3.5" />}
+            {soundMuted ? <VolumeX className="w-4 h-4" /> : <Volume2 className="w-4 h-4" />}
           </button>
 
           {onSwitchToCustomer && (
@@ -309,6 +382,103 @@ export const CaptainMobileExperience: React.FC<CaptainMobileExperienceProps> = (
                   </div>
                 </div>
               </div>
+
+              {/* Adaptive GPS & Battery Saver Strip */}
+              <div
+                data-testid="captain-battery-gps-strip"
+                className={`rounded-xl px-3 py-2 border flex items-center justify-between gap-2 text-[11px] backdrop-blur-md shadow-sm ${
+                  isBatterySaverActive
+                    ? 'bg-amber-950/90 border-amber-500/50 text-amber-200'
+                    : 'bg-white/95 border-slate-200 text-slate-700'
+                }`}
+              >
+                <div className="flex items-center gap-1.5 min-w-0 font-bold">
+                  {isCharging ? (
+                    <BatteryCharging className="w-3.5 h-3.5 text-emerald-500 shrink-0" />
+                  ) : isBatterySaverActive ? (
+                    <BatteryLow className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+                  ) : (
+                    <Battery className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                  )}
+                  <span className="truncate tabular-nums">
+                    {isBatterySaverActive
+                      ? `توفير الطاقة (${batteryLevelPercent}%) · بث GPS كل ${Math.round(gpsUpdateIntervalMs / 1000)} ث`
+                      : `بث GPS حي كل ${Math.round(gpsUpdateIntervalMs / 1000)} ث · البطارية ${batteryLevelPercent}%`}
+                  </span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setActiveTab('profile')}
+                  className={`px-2 py-1 rounded-lg text-[10px] font-extrabold shrink-0 cursor-pointer ${
+                    isBatterySaverActive
+                      ? 'bg-amber-400 text-slate-950'
+                      : 'bg-slate-100 hover:bg-slate-200 text-slate-800'
+                  }`}
+                >
+                  إعدادات الطاقة
+                </button>
+              </div>
+
+              {/* Live In-App Firestore Captain Dispatch Notification Banner */}
+              {latestCaptainAlert && (
+                <div
+                  data-testid="captain-live-notification-banner"
+                  className="bg-slate-950/95 text-white rounded-2xl p-3 border border-emerald-500/60 shadow-xl flex flex-col gap-2"
+                >
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="flex items-start gap-2 min-w-0">
+                      <div className="w-9 h-9 rounded-xl bg-emerald-500/20 border border-emerald-400/40 flex items-center justify-center shrink-0">
+                        <BellRing className="w-4 h-4 text-emerald-400" />
+                      </div>
+                      <div className="min-w-0">
+                        <div className="flex items-center gap-1.5 flex-wrap">
+                          <span className="text-[10px] font-black px-1.5 py-0.5 rounded bg-emerald-500/25 text-emerald-300">
+                            {latestCaptainAlert.zoneArea}
+                          </span>
+                          <span className="text-[10px] font-mono text-slate-400">
+                            {latestCaptainAlert.orderNumber}
+                          </span>
+                        </div>
+                        <div className="font-black text-xs text-white mt-0.5 truncate">
+                          {latestCaptainAlert.titleAr}
+                        </div>
+                        <p className="text-[11px] text-slate-300 line-clamp-2 mt-0.5">
+                          {latestCaptainAlert.bodyAr}
+                        </p>
+                      </div>
+                    </div>
+                    <div className="text-left shrink-0">
+                      <span className="text-[10px] text-slate-400 block">صافي العائد</span>
+                      <span className="text-sm font-black text-emerald-400 tabular-nums">
+                        +{latestCaptainAlert.estimatedEarningsEgp} ج.م
+                      </span>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2 pt-1 border-t border-slate-800">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        markCaptainNotificationRead(latestCaptainAlert.id);
+                        dismissLatestCaptainAlert();
+                        setShowNotificationsDrawer(true);
+                      }}
+                      className="flex-1 min-h-[44px] rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-extrabold cursor-pointer"
+                    >
+                      عرض في مركز الإشعارات
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        markCaptainNotificationRead(latestCaptainAlert.id);
+                        dismissLatestCaptainAlert();
+                      }}
+                      className="min-h-[44px] px-3 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-bold cursor-pointer"
+                    >
+                      تم
+                    </button>
+                  </div>
+                </div>
+              )}
 
               {isOverCashCeiling && (
                 <div className="bg-rose-600 text-white rounded-xl p-2.5 shadow-md flex items-start gap-2 text-[11px] font-bold">
@@ -509,25 +679,125 @@ export const CaptainMobileExperience: React.FC<CaptainMobileExperienceProps> = (
                   </div>
                 </div>
 
-                {/* Customer / Store Contact info */}
-                <div className="p-3 bg-slate-50 rounded-2xl border border-slate-200/80 flex items-center justify-between text-xs">
-                  <div>
-                    <div className="font-extrabold text-slate-900">
+                {/* Customer / Store Contact info + Live Chat Toggle */}
+                <div className="p-3 bg-slate-50 rounded-2xl border border-slate-200/80 flex items-center justify-between text-xs gap-2">
+                  <div className="min-w-0">
+                    <div className="font-extrabold text-slate-900 truncate">
                       {activeAssignedOrder.customerName} ({activeAssignedOrder.customerPhone})
                     </div>
                     <div className="text-[10px] text-slate-500">
                       الدفع: {activeAssignedOrder.paymentMethod === 'cash' ? 'كاش عند التسليم' : 'إلكتروني'}
                     </div>
                   </div>
-                  <a
-                    href="tel:01012345678"
-                    onClick={(e) => e.preventDefault()}
-                    className="w-8 h-8 rounded-full bg-emerald-700 text-white flex items-center justify-center shadow-xs"
-                    title="اتصال"
-                  >
-                    <Phone className="w-3.5 h-3.5" />
-                  </a>
+                  <div className="flex items-center gap-1.5 shrink-0">
+                    <button
+                      type="button"
+                      onClick={() => setShowCaptainChat((p) => !p)}
+                      className={`relative px-2.5 h-8 rounded-full font-extrabold text-[11px] flex items-center gap-1 cursor-pointer transition ${
+                        showCaptainChat
+                          ? 'bg-slate-900 text-white'
+                          : 'bg-white border border-emerald-300 text-emerald-800'
+                      }`}
+                    >
+                      <MessageSquare className="w-3.5 h-3.5" />
+                      <span>محادثة</span>
+                      {activeThreadMessages.length > 0 && (
+                        <span className="px-1.5 py-0.2 rounded-full bg-amber-400 text-slate-950 text-[9px] font-black">
+                          {activeThreadMessages.length}
+                        </span>
+                      )}
+                    </button>
+                    <a
+                      href={`tel:${activeAssignedOrder.customerPhone || '01012345678'}`}
+                      className="w-8 h-8 rounded-full bg-emerald-700 text-white flex items-center justify-center shadow-xs"
+                      title="اتصال"
+                    >
+                      <Phone className="w-3.5 h-3.5" />
+                    </a>
+                  </div>
                 </div>
+
+                {/* Captain-Customer Real-Time Firestore Chat Drawer */}
+                {showCaptainChat && (
+                  <div
+                    data-testid="captain-order-chat-panel"
+                    className="p-3 rounded-2xl bg-slate-50 border border-emerald-200 flex flex-col gap-2 text-xs"
+                  >
+                    <div className="flex items-center justify-between">
+                      <span className="font-extrabold text-slate-900">
+                        محادثة مباشرة مع {activeAssignedOrder.customerName}
+                      </span>
+                      <span className="text-[9px] font-bold px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800">
+                        {isFirestoreRealtimeActive ? 'مباشر Firestore' : 'متصل'}
+                      </span>
+                    </div>
+
+                    <div className="max-h-36 overflow-y-auto flex flex-col gap-1.5 p-1.5 bg-white rounded-xl border border-slate-200/80">
+                      {activeThreadMessages.length === 0 ? (
+                        <div className="text-[10px] text-slate-400 text-center py-2">
+                          لا توجد رسائل بعد. تواصل مع العميل للتأكيد.
+                        </div>
+                      ) : (
+                        activeThreadMessages.map((msg) => {
+                          const isCaptain = msg.senderRole === 'captain';
+                          return (
+                            <div
+                              key={msg.id}
+                              className={`max-w-[85%] px-2.5 py-1.5 rounded-xl text-[11px] ${
+                                isCaptain
+                                  ? 'self-start bg-emerald-700 text-white'
+                                  : 'self-end bg-slate-100 text-slate-900'
+                              }`}
+                            >
+                              <div className="text-[9px] opacity-75 font-bold">
+                                {msg.senderName} • {msg.time}
+                              </div>
+                              <div>{msg.text}</div>
+                            </div>
+                          );
+                        })
+                      )}
+                    </div>
+
+                    <div className="flex gap-1 overflow-x-auto pb-0.5 no-scrollbar">
+                      {['أنا في الطريق إليك الآن', 'وصلت أمام الموقع', 'معي الفكة المطلوبة'].map((quick) => (
+                        <button
+                          key={quick}
+                          type="button"
+                          onClick={() => sendChatMessage(activeAssignedOrder.id, quick)}
+                          className="shrink-0 px-2 py-1 rounded-lg bg-white border border-slate-200 text-slate-700 text-[10px] font-bold cursor-pointer"
+                        >
+                          {quick}
+                        </button>
+                      ))}
+                    </div>
+
+                    <form
+                      onSubmit={(e) => {
+                        e.preventDefault();
+                        if (!captainChatInput.trim()) return;
+                        sendChatMessage(activeAssignedOrder.id, captainChatInput);
+                        setCaptainChatInput('');
+                      }}
+                      className="flex items-center gap-1.5"
+                    >
+                      <input
+                        type="text"
+                        value={captainChatInput}
+                        onChange={(e) => setCaptainChatInput(e.target.value)}
+                        placeholder="اكتب رسالة للعميل..."
+                        className="flex-1 px-2.5 py-1.5 rounded-xl bg-white border border-slate-200 text-xs text-slate-900"
+                      />
+                      <button
+                        type="submit"
+                        className="p-2 rounded-xl bg-emerald-700 hover:bg-emerald-800 text-white cursor-pointer"
+                        title="إرسال"
+                      >
+                        <Send className="w-3.5 h-3.5" />
+                      </button>
+                    </form>
+                  </div>
+                )}
 
                 {/* If In Transit: Cash Collection Confirmation section */}
                 {activeAssignedOrder.status === 'in_transit' && (
@@ -762,9 +1032,324 @@ export const CaptainMobileExperience: React.FC<CaptainMobileExperienceProps> = (
                 <span className="text-emerald-700 font-bold">معتمدة وسارية</span>
               </div>
             </div>
+
+            {/* Captain Battery Saver & GPS Telemetry Controls */}
+            <div
+              data-testid="captain-profile-battery-saver"
+              className="bg-white rounded-2xl border border-slate-200/80 p-3.5 shadow-2xs flex flex-col gap-2.5 text-xs"
+            >
+              <div className="flex items-center justify-between gap-2">
+                <div className="flex items-center gap-2">
+                  {isBatterySaverActive ? (
+                    <BatteryLow className="w-4 h-4 text-amber-600 shrink-0" />
+                  ) : (
+                    <Battery className="w-4 h-4 text-emerald-700 shrink-0" />
+                  )}
+                  <div>
+                    <h4 className="font-extrabold text-slate-900">وضع توفير الطاقة (GPS الكابتن)</h4>
+                    <span className="text-[10px] text-slate-500 tabular-nums">
+                      الشحن: {batteryLevelPercent}% · معدل البث: كل {Math.round(gpsUpdateIntervalMs / 1000)} ث · آخر مزامنة {gpsTrackingLocation.lastUpdatedAt}
+                    </span>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={forceGpsSyncNow}
+                  className="min-h-[44px] px-2.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-800 text-[10px] font-extrabold cursor-pointer"
+                >
+                  مزامنة الآن
+                </button>
+              </div>
+
+              <div className="grid grid-cols-3 gap-1.5">
+                {([
+                  { id: 'auto', label: 'تلقائي (< ٢٠٪)' },
+                  { id: 'always_on', label: 'تشغيل دائم' },
+                  { id: 'off', label: 'إيقاف التوفير' },
+                ] as const).map((opt) => (
+                  <button
+                    key={opt.id}
+                    type="button"
+                    onClick={() => setBatterySaverPreference(opt.id)}
+                    className={`min-h-[44px] px-2 rounded-xl border text-[10px] font-extrabold cursor-pointer transition ${
+                      batterySaverPreference === opt.id
+                        ? 'bg-emerald-700 text-white border-emerald-700'
+                        : 'bg-slate-50 text-slate-700 border-slate-200 hover:bg-slate-100'
+                    }`}
+                  >
+                    {opt.label}
+                  </button>
+                ))}
+              </div>
+
+              <div className="flex items-center justify-between gap-2 pt-1 border-t border-slate-100">
+                <span className="text-[10px] text-slate-500 font-semibold">
+                  اختبار انخفاض البطارية أقل من ٢٠٪:
+                </span>
+                <button
+                  type="button"
+                  onClick={() =>
+                    setSimulatedBatteryPercent(
+                      simulatedBatteryPercent !== null && simulatedBatteryPercent < 20 ? null : 15
+                    )
+                  }
+                  className={`min-h-[44px] px-3 rounded-xl border text-[10px] font-extrabold cursor-pointer ${
+                    simulatedBatteryPercent !== null && simulatedBatteryPercent < 20
+                      ? 'bg-amber-500 text-slate-950 border-amber-500'
+                      : 'bg-white text-slate-800 border-slate-200 hover:bg-slate-50'
+                  }`}
+                >
+                  {simulatedBatteryPercent !== null && simulatedBatteryPercent < 20
+                    ? 'استعادة الشحن الطبيعي'
+                    : 'محاكاة بطارية ١٥٪'}
+                </button>
+              </div>
+            </div>
+
+            {/* Captain Custom Dispatch Alert Sound Settings */}
+            <div
+              data-testid="captain-profile-sound-settings"
+              className="bg-white rounded-2xl border border-slate-200/80 p-3.5 shadow-2xs flex flex-col gap-2.5 text-xs"
+            >
+              <div className="flex items-center justify-between gap-2">
+                <div className="flex items-center gap-2">
+                  <Music className="w-4 h-4 text-emerald-700 shrink-0" />
+                  <div>
+                    <h4 className="font-extrabold text-slate-900">تخصيص صوت تنبيه طلبات الباجور</h4>
+                    <span className="text-[10px] text-slate-500">
+                      يعمل تلقائياً عند ورود طلب جديد عبر Firestore
+                    </span>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => previewCaptainAlertSound(captainCustomSound)}
+                  className="min-h-[44px] px-3 rounded-xl bg-amber-50 border border-amber-300 text-amber-900 text-[11px] font-extrabold flex items-center gap-1 cursor-pointer"
+                >
+                  <Volume2 className="w-3.5 h-3.5" />
+                  <span>تجربة</span>
+                </button>
+              </div>
+              <div className="grid grid-cols-2 gap-1.5">
+                {CAPTAIN_SOUND_PROFILES.map((profile) => {
+                  const selected = captainCustomSound === profile.id;
+                  return (
+                    <button
+                      key={profile.id}
+                      type="button"
+                      onClick={() => {
+                        updateCaptainCustomSound(profile.id);
+                        previewCaptainAlertSound(profile.id);
+                      }}
+                      className={`min-h-[44px] p-2 rounded-xl border text-right transition cursor-pointer ${
+                        selected
+                          ? 'bg-emerald-700 text-white border-emerald-700'
+                          : 'bg-slate-50 text-slate-800 border-slate-200 hover:bg-slate-100'
+                      }`}
+                    >
+                      <div className="font-extrabold text-[11px]">{profile.labelAr}</div>
+                      <div
+                        className={`text-[9px] mt-0.5 line-clamp-1 ${
+                          selected ? 'text-emerald-100' : 'text-slate-500'
+                        }`}
+                      >
+                        {profile.descriptionAr}
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
           </div>
         )}
       </div>
+
+      {/* IN-APP CAPTAIN NOTIFICATIONS DRAWER & SOUND CUSTOMIZER */}
+      {showNotificationsDrawer && (
+        <div
+          data-testid="captain-notifications-drawer"
+          className="absolute inset-0 z-50 bg-slate-950/55 backdrop-blur-xs flex flex-col justify-end"
+        >
+          <div className="bg-white rounded-t-3xl max-h-[88%] flex flex-col overflow-hidden shadow-2xl border-t border-slate-200">
+            {/* Drawer Header */}
+            <div className="p-4 border-b border-slate-100 flex items-center justify-between gap-2 bg-slate-50/70">
+              <div className="flex items-center gap-2.5 min-w-0">
+                <div className="w-10 h-10 rounded-xl bg-emerald-700 text-white flex items-center justify-center shrink-0">
+                  <BellRing className="w-5 h-5" />
+                </div>
+                <div className="min-w-0">
+                  <div className="flex items-center gap-1.5">
+                    <h3 className="font-black text-sm text-slate-900">إشعارات طلبات الباجور</h3>
+                    <span className="text-[10px] font-black px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-900 tabular-nums">
+                      {unreadCaptainNotifCount} جديد
+                    </span>
+                  </div>
+                  <div className="text-[10px] text-slate-500">
+                    {isFirestoreRealtimeActive
+                      ? 'بث لحظي مباشر عبر Firestore + تنبيه صوتي'
+                      : 'بث محلي فوري + مزامنة Firestore'}
+                  </div>
+                </div>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => setShowNotificationsDrawer(false)}
+                className="min-h-[44px] min-w-[44px] rounded-xl bg-white border border-slate-200 text-slate-600 flex items-center justify-center cursor-pointer"
+                aria-label="إغلاق الإشعارات"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="flex-1 overflow-y-auto p-4 flex flex-col gap-3">
+              {/* Quick Actions Bar */}
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  data-testid="captain-test-notification-btn"
+                  onClick={() => simulateElBagourCaptainDispatchAlert()}
+                  className="flex-1 min-h-[44px] px-3 rounded-xl bg-slate-900 hover:bg-slate-800 text-white text-xs font-extrabold flex items-center justify-center gap-1.5 cursor-pointer"
+                >
+                  <Sparkles className="w-3.5 h-3.5 text-amber-400" />
+                  <span>محاكاة إشعار طلب جديد</span>
+                </button>
+                {unreadCaptainNotifCount > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => markAllCaptainNotificationsRead()}
+                    className="min-h-[44px] px-3 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs font-extrabold flex items-center gap-1 cursor-pointer"
+                  >
+                    <Check className="w-3.5 h-3.5" />
+                    <span>قراءة الكل</span>
+                  </button>
+                )}
+              </div>
+
+              {/* Custom Alert Sound Picker */}
+              <div
+                data-testid="captain-sound-selector"
+                className="p-3 rounded-2xl bg-amber-50/70 border border-amber-200 flex flex-col gap-2"
+              >
+                <div className="flex items-center justify-between gap-2">
+                  <div className="flex items-center gap-1.5">
+                    <Music className="w-4 h-4 text-amber-800" />
+                    <span className="font-extrabold text-xs text-slate-900">
+                      نغمة تنبيه الطلبات المخصصة
+                    </span>
+                  </div>
+                  <div className="flex items-center gap-1.5">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const next = !soundMuted;
+                        setSoundMuted(next);
+                        setDispatchSoundMuted(next);
+                      }}
+                      className={`min-h-[36px] px-2.5 rounded-lg border text-[10px] font-extrabold cursor-pointer ${
+                        soundMuted
+                          ? 'bg-rose-50 border-rose-200 text-rose-800'
+                          : 'bg-white border-amber-300 text-amber-900'
+                      }`}
+                    >
+                      {soundMuted ? 'الصوت مكتوم' : 'الصوت مفعل'}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => previewCaptainAlertSound(captainCustomSound)}
+                      className="min-h-[36px] px-2.5 rounded-lg bg-amber-500 hover:bg-amber-400 text-slate-950 text-[10px] font-black cursor-pointer"
+                    >
+                      تجربة الصوت
+                    </button>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-2 gap-1.5">
+                  {CAPTAIN_SOUND_PROFILES.map((profile) => {
+                    const selected = captainCustomSound === profile.id;
+                    return (
+                      <button
+                        key={profile.id}
+                        type="button"
+                        data-testid={`captain-sound-option-${profile.id}`}
+                        onClick={() => {
+                          updateCaptainCustomSound(profile.id);
+                          previewCaptainAlertSound(profile.id);
+                        }}
+                        className={`min-h-[44px] p-2 rounded-xl border text-right transition cursor-pointer ${
+                          selected
+                            ? 'bg-slate-900 text-white border-slate-900 shadow-xs'
+                            : 'bg-white text-slate-800 border-amber-200/80 hover:border-amber-400'
+                        }`}
+                      >
+                        <div className="flex items-center justify-between gap-1">
+                          <span className="font-extrabold text-[11px]">{profile.labelAr}</span>
+                          {selected && <Check className="w-3 h-3 text-emerald-400 shrink-0" />}
+                        </div>
+                        <span
+                          className={`text-[9px] block mt-0.5 line-clamp-1 ${
+                            selected ? 'text-slate-300' : 'text-slate-500'
+                          }`}
+                        >
+                          {profile.descriptionAr}
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {/* Notifications Feed */}
+              <div className="flex flex-col gap-2">
+                {captainNotifications.length === 0 ? (
+                  <div className="p-6 rounded-2xl bg-slate-50 border border-slate-200 text-center text-xs text-slate-500">
+                    لا توجد إشعارات واردة حالياً. سيتم إشعارك فوراً فور إنشاء أي طلب في مركز الباجور.
+                  </div>
+                ) : (
+                  captainNotifications.map((notif) => (
+                    <button
+                      key={notif.id}
+                      type="button"
+                      onClick={() => markCaptainNotificationRead(notif.id)}
+                      className={`w-full text-right p-3 rounded-2xl border transition flex flex-col gap-1 cursor-pointer ${
+                        notif.isRead
+                          ? 'bg-white border-slate-200 text-slate-700'
+                          : 'bg-emerald-50/70 border-emerald-300 text-slate-900 shadow-2xs'
+                      }`}
+                    >
+                      <div className="flex items-center justify-between gap-2">
+                        <div className="flex items-center gap-1.5 min-w-0">
+                          {!notif.isRead && (
+                            <span className="w-2 h-2 rounded-full bg-emerald-600 shrink-0" />
+                          )}
+                          <span className="text-[10px] font-black px-1.5 py-0.5 rounded bg-slate-900 text-emerald-300 shrink-0">
+                            {notif.zoneArea}
+                          </span>
+                          <span className="text-[10px] font-mono text-slate-400 truncate">
+                            {notif.orderNumber}
+                          </span>
+                        </div>
+                        <span className="text-xs font-black text-emerald-800 tabular-nums shrink-0">
+                          +{notif.estimatedEarningsEgp} ج.م
+                        </span>
+                      </div>
+                      <div className="font-extrabold text-xs text-slate-900">{notif.titleAr}</div>
+                      <p className="text-[11px] text-slate-600 leading-relaxed">{notif.bodyAr}</p>
+                      <div className="flex items-center justify-between text-[10px] text-slate-400 pt-1">
+                        <span>{notif.timeAr}</span>
+                        <span>
+                          {notif.source === 'firestore' ? 'Firestore مباشر' : 'إشعار محلي'}
+                          {notif.isRead ? ' • مقروء' : ' • اضغط للتحديد كمقروء'}
+                        </span>
+                      </div>
+                    </button>
+                  ))
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Captain Mobile Bottom Navigation Bar */}
       <div className="relative z-20 bg-white border-t border-slate-100 py-1.5 px-3 flex items-center justify-around shadow-sm shrink-0">

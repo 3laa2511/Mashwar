@@ -30,6 +30,11 @@ import {
   Lock,
   Banknote,
   CheckCircle2,
+  Send,
+  Star,
+  Battery,
+  BatteryLow,
+  BatteryCharging,
 } from 'lucide-react';
 import { ActiveOrderStaticMapThumbnail } from './ActiveOrderStaticMapThumbnail';
 import { SosEmergencySheet } from './SosEmergencySheet';
@@ -57,10 +62,25 @@ export const OrderTrackingScreen: React.FC<OrderTrackingScreenProps> = ({
     refreshOrderStatus,
     simulateInstantCaptainAccept,
     customerApproveOrderQuote,
+    captainVerifyRidePinAndStart,
     captainUpdateStep,
     updateOrderNotes,
     updateOrderDriverTip,
-    sendChatMessage: _sendChatMessage,
+    chatMessages,
+    sendChatMessage,
+    setActiveChatThreadId,
+    submitDriverReview,
+    isFirestoreRealtimeActive,
+    batteryLevelPercent,
+    isCharging,
+    isBatterySaverActive,
+    batterySaverPreference,
+    setBatterySaverPreference,
+    simulatedBatteryPercent,
+    setSimulatedBatteryPercent,
+    gpsUpdateIntervalMs,
+    gpsTrackingLocation,
+    forceGpsSyncNow,
   } = useMarketplace();
 
   // Resolve target order
@@ -269,14 +289,18 @@ export const OrderTrackingScreen: React.FC<OrderTrackingScreenProps> = ({
     } else if (st === 'at_pickup') {
       captainUpdateStep(order.id, 'picked_up');
     } else if (st === 'picked_up') {
-      captainUpdateStep(order.id, 'in_transit');
+      if (order.serviceType === 'ride' && order.ridePin) {
+        captainVerifyRidePinAndStart(order.id, order.ridePin);
+      } else {
+        captainUpdateStep(order.id, 'in_transit');
+      }
     } else if (st === 'in_transit') {
       captainUpdateStep(order.id, 'delivered');
     }
   };
 
   // Interactive panels
-  const [activeInlineTool, setActiveInlineTool] = useState<'none' | 'notes' | 'tip' | 'share' | 'call'>('none');
+  const [activeInlineTool, setActiveInlineTool] = useState<'none' | 'notes' | 'tip' | 'share' | 'call' | 'chat'>('none');
   const [isTimelineExpanded, setIsTimelineExpanded] = useState<boolean>(true);
   const [notesDraft, setNotesDraft] = useState<string>(order?.orderNotes || order?.notes || '');
   const [notesSaved, setNotesSaved] = useState<boolean>(false);
@@ -284,7 +308,21 @@ export const OrderTrackingScreen: React.FC<OrderTrackingScreenProps> = ({
   const [showSosSheet, setShowSosSheet] = useState<boolean>(false);
   const [liveLinkCopied, setLiveLinkCopied] = useState<boolean>(false);
   const [captainPhoneCopied, setCaptainPhoneCopied] = useState<boolean>(false);
+  const [chatInput, setChatInput] = useState<string>('');
+  const [ratingStars, setRatingStars] = useState<number>(5);
+  const [ratingTags, setRatingTags] = useState<string[]>(['أخلاق عالية']);
+  const [ratingFeedbackText, setRatingFeedbackText] = useState<string>('');
+  const [ratingSubmittedDone, setRatingSubmittedDone] = useState<boolean>(false);
   const tipEgp = order?.driverTipEgp ?? 0;
+
+  useEffect(() => {
+    setActiveChatThreadId(order?.id || null);
+    return () => setActiveChatThreadId(null);
+  }, [order?.id, setActiveChatThreadId]);
+
+  const orderThreadMessages = order
+    ? chatMessages.filter((m) => m.orderId === order.id)
+    : [];
 
   const pickupAddress = order?.storeAddress || order?.pickupAddress || 'ميدان المحطة - وسط الباجور';
   const dropoffAddress = order?.deliveryAddress || 'شارع الجيش - برج الشروق، الباجور';
@@ -517,6 +555,76 @@ export const OrderTrackingScreen: React.FC<OrderTrackingScreenProps> = ({
           </div>
         </div>
 
+        {/* Battery Saver & Adaptive GPS Polling Telemetry Bar */}
+        <div
+          data-testid="tracking-battery-saver-card"
+          className={`p-3 rounded-2xl border flex flex-col gap-2.5 text-xs ${
+            isBatterySaverActive
+              ? 'bg-amber-50 border-amber-300 text-amber-950'
+              : 'bg-white border-slate-200/80 text-slate-800'
+          }`}
+        >
+          <div className="flex items-center justify-between gap-2">
+            <div className="flex items-center gap-2 min-w-0">
+              {isCharging ? (
+                <BatteryCharging className="w-4 h-4 text-emerald-700 shrink-0" />
+              ) : isBatterySaverActive ? (
+                <BatteryLow className="w-4 h-4 text-amber-600 shrink-0" />
+              ) : (
+                <Battery className="w-4 h-4 text-emerald-700 shrink-0" />
+              )}
+              <div className="min-w-0">
+                <div className="font-extrabold text-[11px] truncate">
+                  {isBatterySaverActive
+                    ? 'وضع توفير الطاقة نشط — تقليل تحديث GPS'
+                    : 'تتبع GPS بالوضع القياسي عالي الدقة'}
+                </div>
+                <div className="text-[10px] opacity-80 tabular-nums truncate">
+                  شحن {batteryLevelPercent}% · تحديث كل {Math.round(gpsUpdateIntervalMs / 1000)} ث · آخر مزامنة {gpsTrackingLocation.lastUpdatedAt}
+                </div>
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={forceGpsSyncNow}
+              className="min-h-[44px] px-2.5 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 text-[10px] font-extrabold text-slate-800 shrink-0 cursor-pointer"
+            >
+              تحديث الموقع
+            </button>
+          </div>
+
+          <div className="flex items-center gap-2 border-t border-slate-200/70 pt-2">
+            <button
+              type="button"
+              data-testid="tracking-battery-saver-toggle"
+              onClick={() =>
+                setBatterySaverPreference(batterySaverPreference === 'always_on' ? 'auto' : 'always_on')
+              }
+              className={`flex-1 min-h-[44px] px-2.5 rounded-xl font-extrabold text-[11px] border cursor-pointer transition ${
+                batterySaverPreference === 'always_on'
+                  ? 'bg-amber-600 text-white border-amber-600'
+                  : 'bg-slate-50 text-slate-800 border-slate-200 hover:bg-slate-100'
+              }`}
+            >
+              {batterySaverPreference === 'always_on'
+                ? 'وضع التوفير مفعل يدوياً'
+                : 'تلقائي عند أقل من ٢٠٪'}
+            </button>
+            <button
+              type="button"
+              data-testid="tracking-battery-simulate-low-btn"
+              onClick={() => setSimulatedBatteryPercent(simulatedBatteryPercent !== null && simulatedBatteryPercent < 20 ? null : 15)}
+              className={`min-h-[44px] px-3 rounded-xl font-extrabold text-[11px] border cursor-pointer transition ${
+                simulatedBatteryPercent !== null && simulatedBatteryPercent < 20
+                  ? 'bg-slate-900 text-amber-300 border-slate-900'
+                  : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-50'
+              }`}
+            >
+              {simulatedBatteryPercent !== null && simulatedBatteryPercent < 20 ? 'إلغاء محاكاة ١٥٪' : 'اختبار شحن ١٥٪'}
+            </button>
+          </div>
+        </div>
+
         {/* Ride 4-Digit Security PIN + Family Trusted / Multi-Stop / Quote Cards */}
         {order.ridePin && order.status !== 'delivered' && order.status !== 'cancelled' && (
           <div
@@ -641,8 +749,8 @@ export const OrderTrackingScreen: React.FC<OrderTrackingScreenProps> = ({
           )}
         </div>
 
-        {/* Action Controls Grid (Call, Notes, Tip, Share) */}
-        <div data-testid="active-order-actions-grid" className="grid grid-cols-4 gap-1.5">
+        {/* Action Controls Grid (Call, Chat, Notes, Tip, Share) */}
+        <div data-testid="active-order-actions-grid" className="grid grid-cols-5 gap-1">
           <button
             type="button"
             data-testid="call-captain-btn"
@@ -656,6 +764,26 @@ export const OrderTrackingScreen: React.FC<OrderTrackingScreenProps> = ({
           >
             <Phone className={`w-3.5 h-3.5 ${activeInlineTool === 'call' ? 'text-white' : 'text-emerald-700'}`} />
             <span className="text-[10px] font-extrabold">اتصال</span>
+          </button>
+
+          <button
+            type="button"
+            data-testid="tracking-chat-btn"
+            onClick={() => {
+              triggerHaptic();
+              setActiveInlineTool((p) => (p === 'chat' ? 'none' : 'chat'));
+            }}
+            className={`relative p-2 rounded-xl border flex flex-col items-center justify-center gap-1 transition hover:scale-105 active:scale-95 cursor-pointer ${
+              activeInlineTool === 'chat' ? 'bg-emerald-700 text-white border-emerald-700' : 'bg-slate-50 hover:bg-emerald-50 border-slate-200 text-slate-700 hover:text-emerald-900'
+            }`}
+          >
+            <MessageSquare className={`w-3.5 h-3.5 ${activeInlineTool === 'chat' ? 'text-white' : 'text-emerald-700'}`} />
+            <span className="text-[10px] font-extrabold">محادثة</span>
+            {orderThreadMessages.length > 0 && (
+              <span className="absolute -top-1 -left-1 w-4 h-4 rounded-full bg-amber-500 text-slate-950 text-[9px] font-black flex items-center justify-center">
+                {orderThreadMessages.length}
+              </span>
+            )}
           </button>
 
           <button
@@ -703,6 +831,86 @@ export const OrderTrackingScreen: React.FC<OrderTrackingScreenProps> = ({
             <span className="text-[10px] font-extrabold">مشاركة</span>
           </button>
         </div>
+
+        {/* Inline Real-Time Chat Panel (Firestore Threads) */}
+        {activeInlineTool === 'chat' && (
+          <div data-testid="tracking-chat-panel" className="p-3 rounded-2xl bg-white border-2 border-emerald-200 flex flex-col gap-2 text-xs shadow-xs">
+            <div className="flex items-center justify-between border-b border-slate-100 pb-1.5">
+              <div className="flex items-center gap-1.5">
+                <MessageSquare className="w-4 h-4 text-emerald-700" />
+                <span className="font-extrabold text-slate-900">محادثة آمنة مع {order.assignedCaptainName || 'الكابتن'}</span>
+              </div>
+              <span className="text-[9px] font-bold px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700">
+                {isFirestoreRealtimeActive ? 'متزامن لحظياً' : 'محادثة مشوار'}
+              </span>
+            </div>
+
+            <div className="max-h-40 overflow-y-auto flex flex-col gap-1.5 p-1 bg-slate-50 rounded-xl">
+              {orderThreadMessages.length === 0 ? (
+                <p className="text-[10px] text-slate-400 text-center py-3">
+                  ابدأ المحادثة مع الكابتن لتنسيق نقطة الالتقاء أو علامات الطريق
+                </p>
+              ) : (
+                orderThreadMessages.map((msg) => {
+                  const isMine = msg.senderRole === 'customer';
+                  return (
+                    <div
+                      key={msg.id}
+                      className={`max-w-[85%] px-2.5 py-1.5 rounded-xl text-[11px] ${
+                        isMine
+                          ? 'self-start bg-emerald-700 text-white rounded-br-xs'
+                          : 'self-end bg-white border border-slate-200 text-slate-800 rounded-bl-xs'
+                      }`}
+                    >
+                      <div className="text-[9px] opacity-75 font-bold mb-0.5">
+                        {msg.senderName} • {msg.time}
+                      </div>
+                      <div className="font-semibold">{msg.text}</div>
+                    </div>
+                  );
+                })
+              )}
+            </div>
+
+            <div className="flex gap-1 overflow-x-auto pb-0.5 no-scrollbar">
+              {['أنا منتظر عند المدخل', 'كود الأمان معي جاهز', 'رن عليا لما توصل'].map((chip) => (
+                <button
+                  key={chip}
+                  type="button"
+                  onClick={() => sendChatMessage(order.id, chip)}
+                  className="shrink-0 px-2 py-1 rounded-lg bg-slate-100 hover:bg-emerald-50 text-slate-700 text-[10px] font-bold cursor-pointer"
+                >
+                  {chip}
+                </button>
+              ))}
+            </div>
+
+            <form
+              onSubmit={(e) => {
+                e.preventDefault();
+                if (!chatInput.trim()) return;
+                sendChatMessage(order.id, chatInput);
+                setChatInput('');
+              }}
+              className="flex items-center gap-1.5"
+            >
+              <input
+                type="text"
+                value={chatInput}
+                onChange={(e) => setChatInput(e.target.value)}
+                placeholder="اكتب رسالتك للكابتن..."
+                className="flex-1 px-2.5 py-1.5 rounded-xl border border-slate-200 bg-slate-50 text-xs text-slate-900"
+              />
+              <button
+                type="submit"
+                className="p-2 rounded-xl bg-emerald-700 hover:bg-emerald-800 text-white cursor-pointer"
+                title="إرسال"
+              >
+                <Send className="w-3.5 h-3.5" />
+              </button>
+            </form>
+          </div>
+        )}
 
         {/* Inline Call Captain Panel */}
         {activeInlineTool === 'call' && (
@@ -875,6 +1083,114 @@ export const OrderTrackingScreen: React.FC<OrderTrackingScreenProps> = ({
                 <span>{liveLinkCopied ? 'تم' : 'نسخ'}</span>
               </button>
             </div>
+          </div>
+        )}
+
+        {/* Post-Ride & Post-Delivery Driver Rating & Feedback Card */}
+        {order.status === 'delivered' && (
+          <div
+            data-testid="tracking-post-ride-rating-card"
+            className="p-3.5 rounded-2xl bg-white border-2 border-amber-300 shadow-xs flex flex-col gap-2.5"
+          >
+            {order.customerRating || ratingSubmittedDone ? (
+              <div className="flex flex-col gap-1.5">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-black text-emerald-900 flex items-center gap-1.5">
+                    <CheckCircle2 className="w-4 h-4 text-emerald-700" />
+                    <span>تم حفظ تقييمك للكابتن بنجاح</span>
+                  </span>
+                  <div className="flex items-center gap-0.5 text-amber-500 font-black text-xs">
+                    <Star className="w-3.5 h-3.5 fill-amber-400 text-amber-400" />
+                    <span>{order.customerRating || ratingStars} / 5</span>
+                  </div>
+                </div>
+                {(order.customerFeedback || ratingFeedbackText) && (
+                  <p className="text-[11px] text-slate-600 bg-slate-50 px-2.5 py-1.5 rounded-xl">
+                    “{order.customerFeedback || ratingFeedbackText}”
+                  </p>
+                )}
+              </div>
+            ) : (
+              <>
+                <div className="flex items-center justify-between">
+                  <div>
+                    <h4 className="text-xs font-black text-slate-900">
+                      قيّم تجربتك مع {order.assignedCaptainName || 'الكابتن'}
+                    </h4>
+                    <p className="text-[10px] text-slate-500">
+                      يساهم تقييمك في تحسين جودة كباتن الباجور ومكافأة الملتزمين
+                    </p>
+                  </div>
+                  <span className="text-[10px] font-black text-amber-800 bg-amber-50 px-2 py-0.5 rounded-lg border border-amber-200">
+                    {ratingStars} ★
+                  </span>
+                </div>
+
+                <div className="flex items-center justify-center gap-2 py-1">
+                  {[1, 2, 3, 4, 5].map((star) => (
+                    <button
+                      key={star}
+                      type="button"
+                      onClick={() => setRatingStars(star)}
+                      className="p-1 cursor-pointer transition-transform hover:scale-110"
+                    >
+                      <Star
+                        className={`w-7 h-7 ${
+                          star <= ratingStars ? 'fill-amber-400 text-amber-400' : 'text-slate-300'
+                        }`}
+                      />
+                    </button>
+                  ))}
+                </div>
+
+                <div className="flex flex-wrap gap-1.5">
+                  {['سرعة الوصول', 'أخلاق عالية', 'قيادة آمنة', 'فكة مظبوطة', 'نظافة المركبة'].map((tag) => {
+                    const active = ratingTags.includes(tag);
+                    return (
+                      <button
+                        key={tag}
+                        type="button"
+                        onClick={() =>
+                          setRatingTags((prev) =>
+                            prev.includes(tag) ? prev.filter((t) => t !== tag) : [...prev, tag].slice(0, 5)
+                          )
+                        }
+                        className={`px-2 py-1 rounded-lg text-[10px] font-bold border cursor-pointer ${
+                          active
+                            ? 'bg-amber-50 border-amber-400 text-amber-950'
+                            : 'bg-slate-50 border-slate-200 text-slate-600'
+                        }`}
+                      >
+                        {tag}
+                      </button>
+                    );
+                  })}
+                </div>
+
+                <textarea
+                  rows={2}
+                  value={ratingFeedbackText}
+                  onChange={(e) => setRatingFeedbackText(e.target.value)}
+                  placeholder="اكتب ملاحظتك أو رأيك في المشوار والكابتن (اختياري)..."
+                  className="w-full px-2.5 py-1.5 rounded-xl border border-slate-200 bg-slate-50 text-xs text-slate-900 resize-none"
+                />
+
+                <button
+                  type="button"
+                  onClick={async () => {
+                    await submitDriverReview(order.id, {
+                      rating: ratingStars,
+                      tags: ratingTags,
+                      feedback: ratingFeedbackText,
+                    });
+                    setRatingSubmittedDone(true);
+                  }}
+                  className="w-full min-h-[40px] py-2 rounded-xl bg-emerald-700 hover:bg-emerald-800 text-white font-extrabold text-xs cursor-pointer"
+                >
+                  إرسال التقييم وحفظه
+                </button>
+              </>
+            )}
           </div>
         )}
       </div>

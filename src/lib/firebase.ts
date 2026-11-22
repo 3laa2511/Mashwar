@@ -18,6 +18,8 @@ import {
   collection,
   query,
   where,
+  orderBy,
+  limit,
   onSnapshot,
   getDocFromServer,
   serverTimestamp,
@@ -567,6 +569,307 @@ export async function triggerRideSafetySosInFirestore(rideId: string): Promise<b
     return true;
   } catch (error) {
     handleFirestoreError(error, OperationType.UPDATE, ridePath);
+  }
+}
+
+export function subscribeToStoresFromFirestore(
+  onStores: (docs: Record<string, unknown>[]) => void
+): Unsubscribe {
+  const user = auth.currentUser;
+  if (!user) return () => {};
+  const storesQuery = query(collection(db, 'stores'), where('isOpen', 'in', [true, false]));
+  return onSnapshot(
+    storesQuery,
+    (snap) => {
+      onStores(snap.docs.map((d) => ({ id: d.id, ...(d.data() as Record<string, unknown>) })));
+    },
+    (error) => {
+      handleFirestoreError(error, OperationType.LIST, 'stores');
+    }
+  );
+}
+
+export function subscribeToDriverRatingsFromFirestore(
+  onRatings: (docs: Record<string, unknown>[]) => void
+): Unsubscribe {
+  const user = auth.currentUser;
+  if (!user) return () => {};
+  const ratingsQuery = query(
+    collection(db, 'driverRatings'),
+    orderBy('createdAt', 'desc'),
+    limit(50)
+  );
+  return onSnapshot(
+    ratingsQuery,
+    (snap) => {
+      onRatings(snap.docs.map((d) => ({ id: d.id, ...(d.data() as Record<string, unknown>) })));
+    },
+    (error) => {
+      handleFirestoreError(error, OperationType.LIST, 'driverRatings');
+    }
+  );
+}
+
+export async function submitDriverRatingToFirestore(input: {
+  ratingId: string;
+  orderId: string;
+  driverId: string;
+  driverName: string;
+  rating: number;
+  tags: string[];
+  feedback: string;
+}): Promise<boolean> {
+  const user = auth.currentUser;
+  if (!user) return false;
+  const safeId = sanitizeDocId(input.ratingId);
+  const path = `driverRatings/${safeId}`;
+  const cleanTags = input.tags
+    .map((t) => clampStr(t, BLUEPRINT_LIMITS.RATING_TAG_TEXT_MAX))
+    .filter(Boolean)
+    .slice(0, BLUEPRINT_LIMITS.RATING_TAGS_MAX);
+  try {
+    await setDoc(doc(db, 'driverRatings', safeId), {
+      id: safeId,
+      orderId: sanitizeDocId(input.orderId),
+      driverId: sanitizeDocId(input.driverId || 'cpt_02'),
+      driverName: clampStr(input.driverName || 'كابتن مشوار', BLUEPRINT_LIMITS.DISPLAY_NAME_MAX),
+      customerId: user.uid,
+      rating: Math.max(1, Math.min(5, Math.round(input.rating))),
+      tags: cleanTags,
+      feedback: clampStr(input.feedback || '', BLUEPRINT_LIMITS.RATING_FEEDBACK_MAX),
+      createdAt: serverTimestamp(),
+    });
+    return true;
+  } catch (error) {
+    handleFirestoreError(error, OperationType.CREATE, path);
+  }
+}
+
+export function subscribeToThreadMessagesInFirestore(
+  threadId: string,
+  onMessages: (docs: Record<string, unknown>[]) => void
+): Unsubscribe {
+  const user = auth.currentUser;
+  if (!user || !threadId) return () => {};
+  const safeThreadId = sanitizeDocId(threadId);
+  const path = `threads/${safeThreadId}/messages`;
+  const msgsQuery = query(
+    collection(db, 'threads', safeThreadId, 'messages'),
+    orderBy('createdAt', 'asc'),
+    limit(100)
+  );
+  return onSnapshot(
+    msgsQuery,
+    (snap) => {
+      onMessages(snap.docs.map((d) => ({ id: d.id, ...(d.data() as Record<string, unknown>) })));
+    },
+    (error) => {
+      handleFirestoreError(error, OperationType.LIST, path);
+    }
+  );
+}
+
+export async function sendThreadMessageToFirestore(input: {
+  threadId: string;
+  msgId: string;
+  senderRole: 'customer' | 'captain' | 'merchant';
+  senderName: string;
+  text: string;
+}): Promise<boolean> {
+  const user = auth.currentUser;
+  if (!user || !input.threadId || !input.text.trim()) return false;
+  const safeThreadId = sanitizeDocId(input.threadId);
+  const safeMsgId = sanitizeDocId(input.msgId);
+  const path = `threads/${safeThreadId}/messages/${safeMsgId}`;
+  try {
+    await setDoc(doc(db, 'threads', safeThreadId, 'messages', safeMsgId), {
+      id: safeMsgId,
+      senderUid: user.uid,
+      senderRole: input.senderRole,
+      senderName: clampStr(input.senderName || 'مستخدم مشوار', BLUEPRINT_LIMITS.DISPLAY_NAME_MAX),
+      text: clampStr(input.text, BLUEPRINT_LIMITS.CHAT_TEXT_MAX),
+      createdAt: serverTimestamp(),
+    });
+    return true;
+  } catch (error) {
+    handleFirestoreError(error, OperationType.CREATE, path);
+  }
+}
+
+export async function syncCommuteSlotToFirestore(
+  subId: string,
+  slot: {
+    id: string;
+    slotType: 'morning_go' | 'evening_return';
+    dateIso: string;
+    scheduledTime: string;
+    status: 'scheduled' | 'driver_assigned' | 'en_route' | 'completed' | 'skipped';
+    captainName?: string;
+    ridePin?: string;
+  }
+): Promise<boolean> {
+  const user = auth.currentUser;
+  if (!user || !subId || !slot.id) return false;
+  const safeSubId = sanitizeDocId(subId);
+  const safeSlotId = sanitizeDocId(slot.id);
+  const path = `commuteSubscriptions/${safeSubId}/slots/${safeSlotId}`;
+  try {
+    const subSnap = await getDoc(doc(db, 'commuteSubscriptions', safeSubId));
+    if (!subSnap.exists()) return false;
+    const slotRef = doc(db, 'commuteSubscriptions', safeSubId, 'slots', safeSlotId);
+    const slotSnap = await getDoc(slotRef);
+    if (slotSnap.exists()) {
+      const updatePayload: Record<string, unknown> = {
+        status: slot.status,
+        updatedAt: serverTimestamp(),
+      };
+      if (slot.captainName !== undefined) {
+        updatePayload.captainName = clampStr(slot.captainName, BLUEPRINT_LIMITS.DISPLAY_NAME_MAX);
+      }
+      if (slot.ridePin !== undefined) {
+        updatePayload.ridePin = clampStr(slot.ridePin, BLUEPRINT_LIMITS.RIDE_PIN_MAX);
+      }
+      await updateDoc(slotRef, updatePayload);
+      return true;
+    }
+
+    const createPayload: Record<string, unknown> = {
+      id: safeSlotId,
+      subscriptionId: safeSubId,
+      passengerId: user.uid,
+      slotType: slot.slotType,
+      dateIso: clampStr(slot.dateIso, 20),
+      scheduledTime: clampStr(slot.scheduledTime, 12),
+      status: slot.status,
+      updatedAt: serverTimestamp(),
+    };
+    if (slot.captainName) {
+      createPayload.captainName = clampStr(slot.captainName, BLUEPRINT_LIMITS.DISPLAY_NAME_MAX);
+    }
+    if (slot.ridePin) {
+      createPayload.ridePin = clampStr(slot.ridePin, BLUEPRINT_LIMITS.RIDE_PIN_MAX);
+    }
+    await setDoc(slotRef, createPayload);
+    return true;
+  } catch (error) {
+    handleFirestoreError(error, OperationType.WRITE, path);
+  }
+}
+
+export function subscribeToCommuteSlotsInFirestore(
+  subId: string,
+  onSlots: (docs: Record<string, unknown>[]) => void
+): Unsubscribe {
+  const user = auth.currentUser;
+  if (!user || !subId) return () => {};
+  const safeSubId = sanitizeDocId(subId);
+  const path = `commuteSubscriptions/${safeSubId}/slots`;
+  return onSnapshot(
+    collection(db, 'commuteSubscriptions', safeSubId, 'slots'),
+    (snap) => {
+      onSlots(snap.docs.map((d) => ({ id: d.id, ...(d.data() as Record<string, unknown>) })));
+    },
+    (error) => {
+      handleFirestoreError(error, OperationType.LIST, path);
+    }
+  );
+}
+
+export interface CaptainNotificationFirestoreInput {
+  notifId: string;
+  orderId: string;
+  orderNumber: string;
+  zoneArea: string;
+  titleAr: string;
+  bodyAr: string;
+  serviceType: 'restaurant_store' | 'package' | 'errand' | 'ride' | 'prescription_list';
+  estimatedEarningsPiasters: number;
+  soundProfile?: 'radar_pulse' | 'bagour_chime' | 'urgent_dispatch' | 'soft_bell';
+}
+
+export async function createCaptainNotificationInFirestore(
+  input: CaptainNotificationFirestoreInput
+): Promise<boolean> {
+  const user = auth.currentUser;
+  if (!user) return false;
+  const safeId = sanitizeDocId(input.notifId);
+  const safeOrderId = sanitizeDocId(input.orderId);
+  const path = `captainNotifications/${safeId}`;
+
+  try {
+    await setDoc(doc(db, 'captainNotifications', safeId), {
+      id: safeId,
+      orderId: safeOrderId,
+      orderNumber: clampStr(input.orderNumber || 'MSH-NEW', BLUEPRINT_LIMITS.NOTIF_ORDER_NUM_MAX),
+      recipientScope: 'el_bagour_captains',
+      senderUid: user.uid,
+      cityId: 'el_bagour',
+      zoneArea: clampStr(input.zoneArea || 'مركز الباجور', BLUEPRINT_LIMITS.NOTIF_ZONE_MAX),
+      titleAr: clampStr(input.titleAr || 'طلب جديد في الباجور', BLUEPRINT_LIMITS.NOTIF_TITLE_MAX),
+      bodyAr: clampStr(input.bodyAr || 'طلب توصيل جديد جاهز للاستلام', BLUEPRINT_LIMITS.NOTIF_BODY_MAX),
+      serviceType: input.serviceType,
+      estimatedEarningsPiasters: Math.max(
+        0,
+        Math.min(500000, Math.round(input.estimatedEarningsPiasters || 0))
+      ),
+      soundProfile: input.soundProfile || 'radar_pulse',
+      isRead: false,
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+    });
+    return true;
+  } catch (error) {
+    handleFirestoreError(error, OperationType.CREATE, path);
+  }
+}
+
+export function subscribeToCaptainNotificationsInFirestore(
+  onNotifications: (docs: Record<string, unknown>[]) => void
+): Unsubscribe {
+  const user = auth.currentUser;
+  if (!user) return () => {};
+  const notifQuery = query(
+    collection(db, 'captainNotifications'),
+    where('recipientScope', '==', 'el_bagour_captains'),
+    limit(30)
+  );
+  return onSnapshot(
+    notifQuery,
+    (snap) => {
+      const rows: Record<string, unknown>[] = snap.docs
+        .map((d): Record<string, unknown> => ({
+          id: d.id,
+          ...(d.data() as Record<string, unknown>),
+        }))
+        .sort((a, b) => {
+          const aTime = (a.createdAt as { toMillis?: () => number } | undefined)?.toMillis?.() ?? 0;
+          const bTime = (b.createdAt as { toMillis?: () => number } | undefined)?.toMillis?.() ?? 0;
+          return bTime - aTime;
+        });
+      onNotifications(rows);
+    },
+    (error) => {
+      handleFirestoreError(error, OperationType.LIST, 'captainNotifications');
+    }
+  );
+}
+
+export async function markCaptainNotificationReadInFirestore(notifId: string): Promise<boolean> {
+  const user = auth.currentUser;
+  if (!user || !notifId) return false;
+  const safeId = sanitizeDocId(notifId);
+  const path = `captainNotifications/${safeId}`;
+  try {
+    const ref = doc(db, 'captainNotifications', safeId);
+    const snap = await getDoc(ref);
+    if (!snap.exists()) return false;
+    await updateDoc(ref, {
+      isRead: true,
+      updatedAt: serverTimestamp(),
+    });
+    return true;
+  } catch (error) {
+    handleFirestoreError(error, OperationType.UPDATE, path);
   }
 }
 

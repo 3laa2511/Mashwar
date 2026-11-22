@@ -25,6 +25,12 @@ import { AuditLogger } from '../src/security/auditLogger.js';
 import crypto from 'node:crypto';
 import { PersistentStore, convertEgpInputToPiasters } from '../src/store/persistentStore.js';
 import { convertEgpInputToPiasters as convertFrontendEgpToPiasters, DEMO_PERSONAS } from '../../src/store/marketplaceStore.js';
+import {
+  EL_BAGOUR_LANDMARKS,
+  calculateSmartGeolocationFare,
+  findNearestLandmarkByCoords,
+  estimateLandmarkDistanceKm,
+} from '../../src/lib/firestoreSchemas.js';
 import { Order, CaptainProfile, WebhookEventPayload } from '../src/types/index.js';
 import { verifyToken, generateTestToken } from '../src/security/auth.js';
 import { CaptainService } from '../src/services/captainService.js';
@@ -3863,6 +3869,50 @@ export async function runAllTests(): Promise<{
     }
   );
 
+  // --------------------------------------------------------------------------
+  // SUITE: Smart Geolocation Fare Calculator (Haversine & Nearest Landmark)
+  // --------------------------------------------------------------------------
+  console.log('\n▶ SUITE: Smart Geolocation Fare Calculator & El Bagour Landmarks');
+
+  await runTest('SmartFare', 'Matches live GPS coordinates to nearest El Bagour landmark accurately', () => {
+    // Near El Bagour Station (30.4328, 31.0339)
+    const match = findNearestLandmarkByCoords(30.4331, 31.0342, EL_BAGOUR_LANDMARKS);
+    assert(match !== null, 'Expected a landmark match');
+    assert(match!.landmark.id === 'lm_bagour_station', `Expected lm_bagour_station, got ${match!.landmark.id}`);
+    assert(match!.distanceKm < 0.2, `Expected < 0.2km from station, got ${match!.distanceKm}`);
+  });
+
+  await runTest('SmartFare', 'Computes Haversine road distance, ETA, and tier fares for El Bagour routes', () => {
+    const station = EL_BAGOUR_LANDMARKS.find((l) => l.id === 'lm_bagour_station')!;
+    const garawan = EL_BAGOUR_LANDMARKS.find((l) => l.id === 'lm_garawan')!;
+
+    const tuktukFare = calculateSmartGeolocationFare({
+      pickupLat: station.lat,
+      pickupLng: station.lng,
+      dropoffLat: garawan.lat,
+      dropoffLng: garawan.lng,
+      vehicleTier: 'tuktuk',
+      isRural: garawan.isRural,
+    });
+    const carFare = calculateSmartGeolocationFare({
+      pickupLat: station.lat,
+      pickupLng: station.lng,
+      dropoffLat: garawan.lat,
+      dropoffLng: garawan.lng,
+      vehicleTier: 'car',
+      isRural: garawan.isRural,
+    });
+
+    assert(tuktukFare.straightLineKm > 4.0, `Expected straight-line > 4km, got ${tuktukFare.straightLineKm}`);
+    assert(tuktukFare.roadDistanceKm >= tuktukFare.straightLineKm, 'Road distance must be >= straight-line distance');
+    assert(tuktukFare.ruralSurchargePiasters === 500, 'Rural surcharge must be applied for village dropoff');
+    assert(carFare.totalPiasters > tuktukFare.totalPiasters, 'Car fare must exceed TukTuk fare');
+    assert(tuktukFare.etaMinutes >= 5, 'ETA must be realistic');
+
+    const estKm = estimateLandmarkDistanceKm(station.nameAr, garawan.nameAr);
+    assert(Math.abs(estKm - tuktukFare.roadDistanceKm) <= 0.2, `Expected landmark distance ~${tuktukFare.roadDistanceKm}, got ${estKm}`);
+  });
+
   const total = results.length;
   const passed = results.filter((r) => r.passed).length;
   const failed = results.filter((r) => !r.passed).length;
@@ -3885,6 +3935,7 @@ if (import.meta.url === `file://${process.argv[1]}`) {
       if (res.failed > 0) {
         process.exit(1);
       }
+      process.exit(0);
     })
     .catch((err) => {
       console.error('Fatal test runner error:', err);

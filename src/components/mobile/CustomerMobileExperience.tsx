@@ -56,7 +56,13 @@ import {
   Repeat,
   Gift,
   Shield,
-  KeyRound
+  KeyRound,
+  Upload,
+  Loader2,
+  Battery,
+  BatteryLow,
+  BatteryCharging,
+  Calculator
 } from 'lucide-react';
 import { EgyptianMapCanvas } from './EgyptianMapCanvas';
 import { PinchZoomPan } from '../common/PinchZoomPan';
@@ -65,9 +71,11 @@ import { ActiveOrderStaticMapThumbnail } from './ActiveOrderStaticMapThumbnail';
 import { OrderTrackingStatusCard } from './OrderTrackingStatusCard';
 import { SosEmergencySheet } from './SosEmergencySheet';
 import { MultiStepOrderWizard, type WizardServiceCategory } from './MultiStepOrderWizard';
+import { SmartFareCalculatorCard, type SmartFareAppliedPayload } from './SmartFareCalculatorCard';
 import { auth } from '../../lib/firebase';
 import {
   calculateCommuteSubscriptionPricePiasters,
+  calculateSmartGeolocationFare,
   type CashChangeOptionEgp,
 } from '../../lib/firestoreSchemas';
 import {
@@ -151,6 +159,8 @@ export const CustomerMobileExperience: React.FC<CustomerMobileExperienceProps> =
   const [isViewingOrderTrackingScreen, setIsViewingOrderTrackingScreen] = useState<boolean>(false);
   const {
     currentUser,
+    isFirestoreRealtimeActive,
+    isFirestoreStoresLive,
     stores,
     products,
     cartItems,
@@ -158,7 +168,11 @@ export const CustomerMobileExperience: React.FC<CustomerMobileExperienceProps> =
     cartStoreIds,
     cartStoreGroups,
     cartMultiStopSavingsEgp,
+    cartProximityKm,
+    cartProximitySavedEgp,
+    cartDeliveryFeeBreakdownAr,
     addToCart,
+    addExtractedItemsToCart,
     removeFromCart,
     updateCartItemQty,
     forceAddToCartNewStore,
@@ -170,6 +184,7 @@ export const CustomerMobileExperience: React.FC<CustomerMobileExperienceProps> =
     submitNewOrder,
     submitRideOrPackageOrder,
     simulateInstantCaptainAccept,
+    captainVerifyRidePinAndStart,
     captainUpdateStep,
     customerCancelOrder,
     customerApproveOrderQuote,
@@ -177,6 +192,7 @@ export const CustomerMobileExperience: React.FC<CustomerMobileExperienceProps> =
     updateOrderNotes,
     updateOrderFeedback,
     updateOrderDriverTip,
+    submitDriverReview,
     refreshOrderStatus,
     activeCustomerOrder,
     activeOrderTrackingCard,
@@ -188,6 +204,7 @@ export const CustomerMobileExperience: React.FC<CustomerMobileExperienceProps> =
     isFavoriteStore,
     chatMessages,
     sendChatMessage,
+    setActiveChatThreadId,
     setIsAuthModalOpen,
     customerWalletBalanceEgp,
     walletTransactions,
@@ -199,6 +216,8 @@ export const CustomerMobileExperience: React.FC<CustomerMobileExperienceProps> =
     commuteSubscriptions,
     createCommuteSubscription,
     toggleCommuteSubscriptionStatus,
+    advanceCommuteSlotStatus,
+    toggleSkipCommuteSlot,
     loyaltyPoints,
     loyaltyCashbackBalanceEgp,
     loyaltyTier,
@@ -214,6 +233,16 @@ export const CustomerMobileExperience: React.FC<CustomerMobileExperienceProps> =
     submitComplaint,
     customerNavTab,
     setCustomerNavTab,
+    batteryLevelPercent,
+    isCharging,
+    isBatterySaverActive,
+    batterySaverPreference,
+    setBatterySaverPreference,
+    simulatedBatteryPercent,
+    setSimulatedBatteryPercent,
+    gpsUpdateIntervalMs,
+    gpsTrackingLocation,
+    forceGpsSyncNow,
   } = useMarketplace();
   const [loyaltyRedeemMsg, setLoyaltyRedeemMsg] = useState<string | null>(null);
 
@@ -250,6 +279,12 @@ export const CustomerMobileExperience: React.FC<CustomerMobileExperienceProps> =
   const [bookingError, setBookingError] = useState<string | null>(null);
   const [quoteData, setQuoteData] = useState<QuotePreviewData | null>(null);
   const [isLoadingQuote, setIsLoadingQuote] = useState<boolean>(false);
+  const [showSmartFareModal, setShowSmartFareModal] = useState<boolean>(false);
+  const [activeGpsPickupCoords, setActiveGpsPickupCoords] = useState<{
+    lat: number;
+    lng: number;
+    accuracyMeters: number | null;
+  } | null>(null);
 
   // Daily Village-to-Center Commute Subscription State
   const [commuteFrom, setCommuteFrom] = useState<string>('قرية كفر الباجور');
@@ -303,9 +338,67 @@ export const CustomerMobileExperience: React.FC<CustomerMobileExperienceProps> =
     limitReached?: boolean;
   }>({ show: false });
 
-  // Chat modal state
+  // Chat modal state & Firestore active thread binding
   const [showChatModal, setShowChatModal] = useState(false);
   const [inputChatText, setInputChatText] = useState('');
+
+  useEffect(() => {
+    if (showChatModal && activeCustomerOrder?.id) {
+      setActiveChatThreadId(activeCustomerOrder.id);
+    } else if (!showChatModal) {
+      setActiveChatThreadId(null);
+    }
+  }, [showChatModal, activeCustomerOrder?.id, setActiveChatThreadId]);
+
+  // Inline AI Photo Prescription / Handwritten List -> Cart Scanner Modal State
+  const [showAiScannerModal, setShowAiScannerModal] = useState(false);
+  const [aiScanListType, setAiScanListType] = useState<'prescription' | 'grocery'>('prescription');
+  const [aiScanStoreId, setAiScanStoreId] = useState<string>('merchant_amana');
+  const [aiScanFilePreview, setAiScanFilePreview] = useState<string | null>(null);
+  const [aiScanLoading, setAiScanLoading] = useState(false);
+  const [aiScanError, setAiScanError] = useState<string | null>(null);
+  const [aiScanSummary, setAiScanSummary] = useState<string | null>(null);
+  const [aiScanWarnings, setAiScanWarnings] = useState<string[]>([]);
+  const [aiScanExtractedItems, setAiScanExtractedItems] = useState<
+    { nameAr: string; quantity?: string; unit?: string; notes?: string; priceEgp?: number; estimatedCategory?: string }[]
+  >([]);
+  const [aiScanSuccessMsg, setAiScanSuccessMsg] = useState<string | null>(null);
+
+  // Post-Ride Rating & Feedback Modal State (saved to Firestore driverRatings)
+  const [ratingModalOrder, setRatingModalOrder] = useState<MarketplaceOrder | null>(null);
+  const [ratingModalStars, setRatingModalStars] = useState<number>(5);
+  const [ratingModalTags, setRatingModalTags] = useState<string[]>(['أخلاق عالية']);
+  const [ratingModalFeedback, setRatingModalFeedback] = useState<string>('');
+  const [ratingModalSubmitting, setRatingModalSubmitting] = useState<boolean>(false);
+  const promptedDeliveredIdsRef = useRef<Set<string>>(new Set());
+  const prevOrderStatusesRef = useRef<Record<string, string>>({});
+
+  useEffect(() => {
+    const prevMap = prevOrderStatusesRef.current;
+    for (const ord of orders) {
+      if (ord.customerId !== currentUser.id) continue;
+      const prevStatus = prevMap[ord.id];
+      if (
+        prevStatus &&
+        prevStatus !== 'delivered' &&
+        ord.status === 'delivered' &&
+        !ord.customerRating &&
+        !promptedDeliveredIdsRef.current.has(ord.id)
+      ) {
+        promptedDeliveredIdsRef.current.add(ord.id);
+        setRatingModalOrder(ord);
+        setRatingModalStars(5);
+        setRatingModalTags(['أخلاق عالية', 'سرعة الوصول']);
+        setRatingModalFeedback('');
+        break;
+      }
+    }
+    const nextMap: Record<string, string> = {};
+    for (const ord of orders) {
+      nextMap[ord.id] = ord.status;
+    }
+    prevOrderStatusesRef.current = nextMap;
+  }, [orders, currentUser.id]);
 
   // =========================================================================
   // NEW INTEGRATED MOBILE TRACKING & ORDER HISTORY UX STATES
@@ -421,7 +514,11 @@ export const CustomerMobileExperience: React.FC<CustomerMobileExperienceProps> =
     } else if (st === 'at_pickup') {
       captainUpdateStep(activeCustomerOrder.id, 'picked_up');
     } else if (st === 'picked_up') {
-      captainUpdateStep(activeCustomerOrder.id, 'in_transit');
+      if (activeCustomerOrder.ridePin) {
+        captainVerifyRidePinAndStart(activeCustomerOrder.id, activeCustomerOrder.ridePin);
+      } else {
+        captainUpdateStep(activeCustomerOrder.id, 'in_transit');
+      }
     } else if (st === 'in_transit') {
       captainUpdateStep(activeCustomerOrder.id, 'delivered');
     }
@@ -593,6 +690,87 @@ export const CustomerMobileExperience: React.FC<CustomerMobileExperienceProps> =
   const [historyFeedbackDrafts, setHistoryFeedbackDrafts] = useState<Record<string, string>>({});
   const [historyFeedbackSavedMap, setHistoryFeedbackSavedMap] = useState<Record<string, boolean>>({});
 
+  // Handle AI Image Upload & Gemini Extraction directly into Cart Scanner Modal
+  const handleAiScanImageChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setAiScanError(null);
+    setAiScanSuccessMsg(null);
+    setAiScanSummary(null);
+    setAiScanWarnings([]);
+    setAiScanExtractedItems([]);
+    setAiScanLoading(true);
+
+    const reader = new FileReader();
+    reader.onload = async () => {
+      const dataUrl = String(reader.result || '');
+      setAiScanFilePreview(dataUrl);
+      const base64Part = dataUrl.includes(',') ? dataUrl.split(',')[1] : dataUrl;
+      try {
+        const res = await fetch('/api/v1/ai/parse-prescription', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            imageBase64: base64Part,
+            mimeType: file.type || 'image/jpeg',
+            listType: aiScanListType,
+          }),
+        });
+        const json = await res.json();
+        if (!res.ok || !json.success) {
+          setAiScanError(json.errorAr || 'تعذر قراءة الصورة بالذكاء الاصطناعي. تأكد من وضوح الخط.');
+        } else {
+          const items = Array.isArray(json.data?.items) ? json.data.items : [];
+          setAiScanExtractedItems(
+            items.map((it: { nameAr: string; quantity?: string; unit?: string; notes?: string; estimatedCategory?: string }) => ({
+              nameAr: it.nameAr,
+              quantity: it.quantity || '1',
+              unit: it.unit || 'عبوة',
+              notes: it.notes,
+              estimatedCategory: it.estimatedCategory,
+              priceEgp: aiScanListType === 'prescription' ? 45 : 35,
+            }))
+          );
+          setAiScanSummary(json.data?.summaryAr || `تم استخراج ${items.length} صنف بنجاح.`);
+          setAiScanWarnings(Array.isArray(json.data?.warningsAr) ? json.data.warningsAr : []);
+        }
+      } catch {
+        setAiScanError('تعذر الاتصال بخدمة تحليل الصور الآن.');
+      } finally {
+        setAiScanLoading(false);
+      }
+    };
+    reader.readAsDataURL(file);
+  };
+
+  const handleAddScannedItemsToCombinedCart = () => {
+    if (aiScanExtractedItems.length === 0) return;
+    const res = addExtractedItemsToCart(aiScanStoreId, aiScanExtractedItems);
+    if (res.addedCount > 0) {
+      setAiScanSuccessMsg(`تمت إضافة ${res.addedCount} صنف مباشرة إلى سلتك المجمعة ✓`);
+      window.setTimeout(() => {
+        setShowAiScannerModal(false);
+        setSelectedStore(null);
+        setIsCartOpen(true);
+      }, 450);
+    } else if (res.limitReached) {
+      setAiScanError('وصلت سلتك المجمعة للحد الأقصى (٤ متاجر). أفرغ متجراً أو أتمم الطلب الحالي أولاً.');
+    }
+  };
+
+  const handleSubmitRatingModal = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!ratingModalOrder || ratingModalSubmitting) return;
+    setRatingModalSubmitting(true);
+    await submitDriverReview(ratingModalOrder.id, {
+      rating: ratingModalStars,
+      tags: ratingModalTags,
+      feedback: ratingModalFeedback.trim(),
+    });
+    setRatingModalSubmitting(false);
+    setRatingModalOrder(null);
+  };
+
   // Selected pickup & dropoff landmark objects
   const pickupLandmark = EL_BAGOUR_LANDMARKS_LIST.find((l) => l.id === pickupLandmarkId) || EL_BAGOUR_LANDMARKS_LIST[0];
   const dropoffLandmark = EL_BAGOUR_LANDMARKS_LIST.find((l) => l.id === dropoffLandmarkId) || EL_BAGOUR_LANDMARKS_LIST[1];
@@ -614,12 +792,19 @@ export const CustomerMobileExperience: React.FC<CustomerMobileExperienceProps> =
       setBookingError(null);
       setIsLoadingQuote(true);
 
-      const distKm = Number(
-        Math.max(
-          1.4,
-          Math.abs(pickupLandmark.distanceFromCenterKm - dropoffLandmark.distanceFromCenterKm) + 1.6
-        ).toFixed(1)
-      );
+      const smartGeoCalc = calculateSmartGeolocationFare({
+        pickupLat: activeGpsPickupCoords?.lat ?? pickupLandmark.lat,
+        pickupLng: activeGpsPickupCoords?.lng ?? pickupLandmark.lng,
+        dropoffLat: dropoffLandmark.lat,
+        dropoffLng: dropoffLandmark.lng,
+        vehicleTier:
+          bookingServiceMode === 'tuktuk_car'
+            ? quickVehicleTier
+            : 'scooter',
+        isRural: pickupLandmark.isRural || dropoffLandmark.isRural,
+      });
+
+      const distKm = smartGeoCalc.roadDistanceKm;
       const isRuralRoute = pickupLandmark.isRural || dropoffLandmark.isRural;
       const carMultiplierEgp = bookingServiceMode === 'tuktuk_car' && quickVehicleTier === 'car' ? 12 : 0;
 
@@ -650,7 +835,7 @@ export const CustomerMobileExperience: React.FC<CustomerMobileExperienceProps> =
             setQuoteData({
               quoteId: q.quoteId || 'qt_live',
               distanceKm: q.distanceKm || distKm,
-              etaMinutes: q.estimatedDurationMinutes || Math.max(7, Math.round(distKm * 4 + 4)),
+              etaMinutes: q.estimatedDurationMinutes || smartGeoCalc.etaMinutes,
               baseFareEgp,
               distanceFareEgp,
               ruralSurchargeEgp,
@@ -669,22 +854,22 @@ export const CustomerMobileExperience: React.FC<CustomerMobileExperienceProps> =
       }
 
       if (isMounted) {
-        const baseFareEgp = 15 + carMultiplierEgp;
-        const distanceFareEgp = Math.max(0, Math.round(Math.max(0, distKm - 1.5) * 4));
-        const ruralSurchargeEgp = isRuralRoute ? 5 : 0;
-        const platformFeeEgp = 2;
-        const totalEgp = baseFareEgp + distanceFareEgp + ruralSurchargeEgp + platformFeeEgp;
+        const baseFareEgp = Math.round(smartGeoCalc.baseFarePiasters / 100);
+        const distanceFareEgp = Math.round(smartGeoCalc.distanceFarePiasters / 100);
+        const ruralSurchargeEgp = Math.round(smartGeoCalc.ruralSurchargePiasters / 100);
+        const platformFeeEgp = Math.round(smartGeoCalc.platformFeePiasters / 100);
+        const totalEgp = smartGeoCalc.totalEgp;
         setQuoteData({
           quoteId: `qt_bagour_${Date.now().toString().slice(-4)}`,
           distanceKm: distKm,
-          etaMinutes: Math.max(7, Math.round(distKm * 4 + 4)),
+          etaMinutes: smartGeoCalc.etaMinutes,
           baseFareEgp,
           distanceFareEgp,
           ruralSurchargeEgp,
           platformFeeEgp,
           totalEgp,
-          totalPiasters: totalEgp * 100,
-          signaturePreview: 'hmac_sha256_ok',
+          totalPiasters: smartGeoCalc.totalPiasters,
+          signaturePreview: 'geo_haversine_ok',
           isLiveBackendQuote: false,
         });
         setIsLoadingQuote(false);
@@ -695,7 +880,22 @@ export const CustomerMobileExperience: React.FC<CustomerMobileExperienceProps> =
     return () => {
       isMounted = false;
     };
-  }, [pickupLandmarkId, dropoffLandmarkId, bookingServiceMode, quickVehicleTier, pickupLandmark, dropoffLandmark]);
+  }, [pickupLandmarkId, dropoffLandmarkId, bookingServiceMode, quickVehicleTier, pickupLandmark, dropoffLandmark, activeGpsPickupCoords]);
+
+  const handleApplySmartFare = (payload: SmartFareAppliedPayload) => {
+    setPickupLandmarkId(payload.pickupLandmarkId);
+    setDropoffLandmarkId(payload.dropoffLandmarkId);
+    setActiveGpsPickupCoords(payload.gpsCoords);
+    if (payload.vehicleTier === 'car' || payload.vehicleTier === 'tuktuk') {
+      setBookingServiceMode('tuktuk_car');
+      setQuickVehicleTier(payload.vehicleTier);
+    } else {
+      setBookingServiceMode('errand');
+    }
+    setUseMultiStepWizard(false);
+    setShowSmartFareModal(false);
+    setActiveTab('ride_booking');
+  };
 
   // Swap pickup and dropoff
   const handleSwapLocations = () => {
@@ -1335,6 +1535,23 @@ export const CustomerMobileExperience: React.FC<CustomerMobileExperienceProps> =
                     </button>
                   )}
 
+                  {activeCustomerOrder.status === 'delivered' && !activeCustomerOrder.customerRating && (
+                    <button
+                      type="button"
+                      data-testid="active-delivered-rate-btn"
+                      onClick={() => {
+                        setRatingModalOrder(activeCustomerOrder);
+                        setRatingModalStars(5);
+                        setRatingModalTags(['أخلاق عالية', 'سرعة الوصول']);
+                        setRatingModalFeedback('');
+                      }}
+                      className="px-2.5 py-1 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 text-[10px] font-black flex items-center gap-1 transition cursor-pointer shadow-2xs"
+                    >
+                      <Star className="w-3 h-3 fill-slate-950" />
+                      <span>قيّم الكابتن</span>
+                    </button>
+                  )}
+
                   <div className="flex items-center gap-1">
                     {/* Manual Refresh Button with Progress Bar */}
                     <button
@@ -1469,6 +1686,45 @@ export const CustomerMobileExperience: React.FC<CustomerMobileExperienceProps> =
 
                 {/* Real-Time 4-Stage Order Tracking Status Card (Received -> Preparing -> Out for Delivery -> Delivered) */}
                 <OrderTrackingStatusCard compact={true} />
+
+                {/* Adaptive GPS & Battery Saver Status Notice */}
+                <div
+                  data-testid="mobile-battery-saver-banner"
+                  className={`px-3 py-2 rounded-xl border flex items-center justify-between gap-2 text-[11px] ${
+                    isBatterySaverActive
+                      ? 'bg-amber-50 border-amber-300 text-amber-950'
+                      : 'bg-slate-50 border-slate-200/80 text-slate-700'
+                  }`}
+                >
+                  <div className="flex items-center gap-2 min-w-0">
+                    {isCharging ? (
+                      <BatteryCharging className="w-4 h-4 text-emerald-700 shrink-0" />
+                    ) : isBatterySaverActive ? (
+                      <BatteryLow className="w-4 h-4 text-amber-600 shrink-0" />
+                    ) : (
+                      <Battery className="w-4 h-4 text-emerald-700 shrink-0" />
+                    )}
+                    <span className="font-bold truncate tabular-nums">
+                      {isBatterySaverActive
+                        ? `وضع توفير الطاقة (${batteryLevelPercent}%) · تحديث GPS كل ${Math.round(gpsUpdateIntervalMs / 1000)} ث`
+                        : `تتبع GPS عالي الدقة كل ${Math.round(gpsUpdateIntervalMs / 1000)} ث · بطارية ${batteryLevelPercent}%`}
+                    </span>
+                  </div>
+                  <button
+                    type="button"
+                    data-testid="mobile-battery-quick-toggle"
+                    onClick={() =>
+                      setBatterySaverPreference(batterySaverPreference === 'always_on' ? 'auto' : 'always_on')
+                    }
+                    className={`min-h-[44px] px-2.5 rounded-lg border text-[10px] font-extrabold shrink-0 cursor-pointer ${
+                      batterySaverPreference === 'always_on'
+                        ? 'bg-amber-600 text-white border-amber-600'
+                        : 'bg-white text-slate-800 border-slate-200 hover:bg-slate-100'
+                    }`}
+                  >
+                    {batterySaverPreference === 'always_on' ? 'توفير مفعل' : 'توفير الطاقة'}
+                  </button>
+                </div>
 
                 {/* =====================================================================
                     EMBEDDED INTERACTIVE MAP THUMBNAIL INSIDE MOBILE TRACKING SHEET
@@ -2239,9 +2495,59 @@ export const CustomerMobileExperience: React.FC<CustomerMobileExperienceProps> =
                 </div>
               </div>
             ) : (
-              /* If no active order: show Complete Service Launcher (Ride / Package / Stores) + Nearby Stores */
+              /* If no active order: show Complete Service Launcher (Ride / Package / Stores) + Daily Commute Slot + Nearby Stores */
               <div className="relative z-10 mt-auto p-3.5 flex flex-col gap-2.5">
                 {activeOrderTrackingCard && <OrderTrackingStatusCard compact={true} />}
+                {commuteSubscriptions.some((s) => s.status === 'active' && (s.slots?.length || 0) > 0) && (() => {
+                  const activeSub = commuteSubscriptions.find((s) => s.status === 'active' && (s.slots?.length || 0) > 0)!;
+                  const nextSlot = activeSub.slots!.find((sl) => sl.status !== 'completed' && sl.status !== 'skipped') || activeSub.slots![0];
+                  return (
+                    <div
+                      data-testid="home-commute-slot-card"
+                      className="bg-slate-900/95 text-white rounded-2xl p-2.5 shadow-lg border border-indigo-500/40 flex items-center justify-between gap-2 text-xs"
+                    >
+                      <div className="min-w-0">
+                        <div className="flex items-center gap-1.5 text-[10px] font-black text-indigo-300">
+                          <Repeat className="w-3.5 h-3.5 text-emerald-400" />
+                          <span>ميعاد اشتراك اليوم • {nextSlot.slotLabelAr} ({nextSlot.scheduledTime})</span>
+                        </div>
+                        <div className="text-[11px] font-bold text-slate-100 truncate mt-0.5">
+                          {activeSub.fromLandmark} ← {activeSub.toLandmark}
+                        </div>
+                        <div className="text-[10px] text-emerald-300 font-bold mt-0.5 flex items-center gap-2">
+                          <span>
+                            الحالة:{' '}
+                            {nextSlot.status === 'scheduled'
+                              ? 'مجدول تلقائياً'
+                              : nextSlot.status === 'driver_assigned'
+                              ? `تم تعيين ${nextSlot.captainName || 'الكابتن'}`
+                              : nextSlot.status === 'en_route'
+                              ? 'الكابتن في الطريق إليك'
+                              : nextSlot.status === 'completed'
+                              ? 'تمت الرحلة ✓'
+                              : 'تم تخطي الميعاد'}
+                          </span>
+                          {nextSlot.ridePin && (
+                            <span className="font-mono bg-amber-400 text-slate-950 px-1.5 py-0.2 rounded font-black" dir="ltr">
+                              PIN {nextSlot.ridePin}
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setUseMultiStepWizard(false);
+                          setBookingServiceMode('commute');
+                          setActiveTab('ride_booking');
+                        }}
+                        className="px-2.5 py-1.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-[10px] font-extrabold shrink-0 cursor-pointer"
+                      >
+                        المواعيد
+                      </button>
+                    </div>
+                  );
+                })()}
                 {/* Primary Service Selection Hub */}
                 <div className="bg-white/95 backdrop-blur-md rounded-2xl p-3 shadow-xl border border-slate-100 flex flex-col gap-2.5">
                   <div className="flex items-center justify-between">
@@ -2317,6 +2623,22 @@ export const CustomerMobileExperience: React.FC<CustomerMobileExperienceProps> =
                       </div>
                     </button>
                   </div>
+
+                  {/* Smart Geolocation Fare Calculator Trigger */}
+                  <button
+                    type="button"
+                    data-testid="open-smart-fare-calculator-btn"
+                    onClick={() => setShowSmartFareModal(true)}
+                    className="w-full min-h-[44px] px-3 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 text-white flex items-center justify-between gap-2 transition cursor-pointer"
+                  >
+                    <div className="flex items-center gap-2 min-w-0">
+                      <Calculator className="w-4 h-4 text-emerald-400 shrink-0" />
+                      <span className="text-[11px] font-extrabold truncate">
+                        حاسبة الأسعار الذكية عبر GPS (احسب مشوارك قبل الطلب)
+                      </span>
+                    </div>
+                    <ChevronLeft className="w-4 h-4 text-emerald-400 shrink-0" />
+                  </button>
                 </div>
 
                 {/* Nearby Stores Carousel */}
@@ -2440,6 +2762,10 @@ export const CustomerMobileExperience: React.FC<CustomerMobileExperienceProps> =
                 onOrderCreated={() => {
                   setSelectedStore(null);
                   setActiveTab('home');
+                }}
+                onOpenCartAfterAdd={() => {
+                  setSelectedStore(null);
+                  setIsCartOpen(true);
                 }}
                 onOpenAuthModal={() => {
                   if (onOpenAuthModal) onOpenAuthModal();
@@ -2743,37 +3069,126 @@ export const CustomerMobileExperience: React.FC<CustomerMobileExperienceProps> =
                     )}
                   </div>
 
-                  {/* Active Commute Subscriptions List */}
+                  {/* Active Commute Subscriptions List with Automated Daily Slot Tracking */}
                   {commuteSubscriptions.length > 0 && (
-                    <div className="bg-white p-3 rounded-2xl border border-slate-200/80 flex flex-col gap-2 text-xs">
+                    <div
+                      data-testid="commute-subscriptions-list"
+                      className="bg-white p-3 rounded-2xl border border-slate-200/80 flex flex-col gap-2.5 text-xs"
+                    >
                       <span className="font-extrabold text-slate-900">
                         اشتراكاتك اليومية النشطة ({commuteSubscriptions.length})
                       </span>
                       {commuteSubscriptions.map((sub) => (
                         <div
                           key={sub.id}
-                          className="p-2.5 rounded-xl bg-slate-50 border border-slate-200/70 flex items-center justify-between gap-2"
+                          className="p-2.5 rounded-xl bg-slate-50 border border-slate-200/70 flex flex-col gap-2"
                         >
-                          <div className="min-w-0">
-                            <div className="font-extrabold text-slate-900 truncate">
-                              {sub.fromLandmark} ← {sub.toLandmark}
+                          <div className="flex items-center justify-between gap-2">
+                            <div className="min-w-0">
+                              <div className="font-extrabold text-slate-900 truncate">
+                                {sub.fromLandmark} ← {sub.toLandmark}
+                              </div>
+                              <div className="text-[10px] text-slate-500 mt-0.5">
+                                {sub.planType === 'monthly' ? 'شهري' : 'أسبوعي'} • {sub.morningTime}
+                                {sub.returnTime ? ` / ${sub.returnTime}` : ''} • {sub.priceEgp} ج.م
+                              </div>
                             </div>
-                            <div className="text-[10px] text-slate-500 mt-0.5">
-                              {sub.planType === 'monthly' ? 'شهري' : 'أسبوعي'} • {sub.morningTime}
-                              {sub.returnTime ? ` / ${sub.returnTime}` : ''} • {sub.priceEgp} ج.م
-                            </div>
+                            <button
+                              type="button"
+                              onClick={() => toggleCommuteSubscriptionStatus(sub.id)}
+                              className={`px-2.5 py-1 rounded-lg text-[10px] font-extrabold border shrink-0 cursor-pointer ${
+                                sub.status === 'active'
+                                  ? 'bg-emerald-50 text-emerald-800 border-emerald-200'
+                                  : 'bg-amber-50 text-amber-800 border-amber-200'
+                              }`}
+                            >
+                              {sub.status === 'active' ? 'نشط • إيقاف مؤقت' : 'موقوف • استئناف'}
+                            </button>
                           </div>
-                          <button
-                            type="button"
-                            onClick={() => toggleCommuteSubscriptionStatus(sub.id)}
-                            className={`px-2.5 py-1 rounded-lg text-[10px] font-extrabold border shrink-0 cursor-pointer ${
-                              sub.status === 'active'
-                                ? 'bg-emerald-50 text-emerald-800 border-emerald-200'
-                                : 'bg-amber-50 text-amber-800 border-amber-200'
-                            }`}
-                          >
-                            {sub.status === 'active' ? 'نشط • إيقاف مؤقت' : 'موقوف • استئناف'}
-                          </button>
+
+                          {/* Automated Daily Slots Tracking */}
+                          {sub.slots && sub.slots.length > 0 && (
+                            <div className="pt-2 border-t border-slate-200/70 flex flex-col gap-1.5">
+                              <span className="text-[10px] font-extrabold text-indigo-900">
+                                تتبع مواعيد اليوم التلقائي ({sub.slots[0].dateIso}):
+                              </span>
+                              {sub.slots.map((slot) => {
+                                const slotStatusLabel =
+                                  slot.status === 'scheduled'
+                                    ? 'مجدول تلقائياً'
+                                    : slot.status === 'driver_assigned'
+                                    ? 'تم تعيين الكابتن'
+                                    : slot.status === 'en_route'
+                                    ? 'الكابتن في الطريق'
+                                    : slot.status === 'completed'
+                                    ? 'تمت الرحلة ✓'
+                                    : 'تم تخطي اليوم';
+                                const slotBadgeStyle =
+                                  slot.status === 'completed'
+                                    ? 'bg-emerald-100 text-emerald-900 border-emerald-300'
+                                    : slot.status === 'en_route'
+                                    ? 'bg-amber-100 text-amber-900 border-amber-300'
+                                    : slot.status === 'driver_assigned'
+                                    ? 'bg-indigo-100 text-indigo-900 border-indigo-300'
+                                    : slot.status === 'skipped'
+                                    ? 'bg-slate-200 text-slate-600 border-slate-300'
+                                    : 'bg-white text-slate-700 border-slate-200';
+                                return (
+                                  <div
+                                    key={slot.id}
+                                    data-testid={`commute-slot-${slot.id}`}
+                                    className="p-2 rounded-xl bg-white border border-slate-200/80 flex flex-col gap-1.5"
+                                  >
+                                    <div className="flex items-center justify-between gap-1.5">
+                                      <div className="min-w-0">
+                                        <span className="font-extrabold text-[11px] text-slate-900">
+                                          {slot.slotLabelAr}
+                                        </span>
+                                        <span className="text-[10px] font-mono text-slate-500 mr-1.5">
+                                          ({slot.scheduledTime})
+                                        </span>
+                                      </div>
+                                      <span className={`px-2 py-0.5 rounded-full text-[9px] font-black border shrink-0 ${slotBadgeStyle}`}>
+                                        {slotStatusLabel}
+                                      </span>
+                                    </div>
+
+                                    <div className="flex items-center justify-between text-[10px] text-slate-600">
+                                      <span className="truncate">
+                                        {slot.captainName ? `الكابتن: ${slot.captainName}` : 'بانتظار إسناد الكابتن تلقائياً'}
+                                      </span>
+                                      {slot.ridePin && (
+                                        <span className="font-mono font-black text-slate-900 bg-amber-100 px-1.5 py-0.5 rounded border border-amber-300 shrink-0" dir="ltr">
+                                          PIN: {slot.ridePin}
+                                        </span>
+                                      )}
+                                    </div>
+
+                                    {slot.status !== 'completed' && (
+                                      <div className="flex items-center gap-1.5 pt-0.5">
+                                        {slot.status !== 'skipped' && (
+                                          <button
+                                            type="button"
+                                            onClick={() => advanceCommuteSlotStatus(sub.id, slot.id)}
+                                            className="flex-1 py-1 px-2 rounded-lg bg-indigo-50 hover:bg-indigo-100 text-indigo-800 border border-indigo-200 text-[10px] font-extrabold cursor-pointer"
+                                          >
+                                            تحديث حالة الميعاد ←
+                                          </button>
+                                        )}
+                                        <button
+                                          type="button"
+                                          onClick={() => toggleSkipCommuteSlot(sub.id, slot.id)}
+                                          className="py-1 px-2 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 text-[10px] font-bold cursor-pointer"
+                                        >
+                                          {slot.status === 'skipped' ? 'إلغاء التخطي' : 'تخطي اليوم'}
+                                        </button>
+                                      </div>
+                                    )}
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          )}
                         </div>
                       ))}
                     </div>
@@ -2834,16 +3249,26 @@ export const CustomerMobileExperience: React.FC<CustomerMobileExperienceProps> =
 
                   {/* Pickup & Destination Selection Card */}
                   <div className="bg-white p-3 rounded-2xl border border-slate-200/90 shadow-2xs flex flex-col gap-2.5">
-                    <div className="flex items-center justify-between">
+                    <div className="flex items-center justify-between gap-1.5">
                       <span className="text-[11px] font-extrabold text-slate-800">٢. تحديد نقطة الانطلاق والوصول بالباجور:</span>
-                      <button
-                        type="button"
-                        onClick={handleSwapLocations}
-                        className="px-2 py-1 rounded-lg bg-slate-100 hover:bg-emerald-50 text-slate-700 hover:text-emerald-800 text-[10px] font-bold flex items-center gap-1 cursor-pointer"
-                      >
-                        <ArrowUpDown className="w-3 h-3" />
-                        <span>عكس المسار</span>
-                      </button>
+                      <div className="flex items-center gap-1 shrink-0">
+                        <button
+                          type="button"
+                          onClick={() => setShowSmartFareModal(true)}
+                          className="min-h-[36px] px-2 py-1 rounded-lg bg-slate-900 hover:bg-slate-800 text-emerald-300 text-[10px] font-bold flex items-center gap-1 cursor-pointer"
+                        >
+                          <Calculator className="w-3 h-3" />
+                          <span>حاسبة GPS</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={handleSwapLocations}
+                          className="min-h-[36px] px-2 py-1 rounded-lg bg-slate-100 hover:bg-emerald-50 text-slate-700 hover:text-emerald-800 text-[10px] font-bold flex items-center gap-1 cursor-pointer"
+                        >
+                          <ArrowUpDown className="w-3 h-3" />
+                          <span>عكس</span>
+                        </button>
+                      </div>
                     </div>
 
                     {/* Pickup Select */}
@@ -3082,11 +3507,22 @@ export const CustomerMobileExperience: React.FC<CustomerMobileExperienceProps> =
                 </div>
 
                 {/* Multi-Stop Combined Basket Policy Banner */}
-                <div className="bg-emerald-50 px-4 py-2 border-b border-emerald-200/60 flex items-center justify-between text-[11px] text-emerald-900">
-                  <span className="font-semibold">
-                    🛒 سلة الباجور المجمعة: أضف من حتى ٤ محلات بتوصيلة واحدة ({cartStoreIds.length}/4)
+                <div className="bg-emerald-50 px-4 py-2 border-b border-emerald-200/60 flex items-center justify-between gap-2 text-[11px] text-emerald-900">
+                  <span className="font-semibold truncate">
+                    🛒 سلة الباجور المجمعة ({cartStoreIds.length}/4): {cartStoreIds.length > 1 ? cartDeliveryFeeBreakdownAr : 'أضف من حتى ٤ محلات بتوصيلة موحدة'}
                   </span>
-                  <span className="font-bold text-emerald-800">توصيل موفر ١٥ ج.م</span>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setAiScanStoreId(selectedStore.id);
+                      setAiScanListType(selectedStore.category === 'pharmacy' ? 'prescription' : 'grocery');
+                      setShowAiScannerModal(true);
+                    }}
+                    className="px-2 py-1 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white font-black text-[10px] shrink-0 flex items-center gap-1 cursor-pointer"
+                  >
+                    <Camera className="w-3 h-3" />
+                    <span>مسح قائمة للسلة</span>
+                  </button>
                 </div>
 
                 {/* Product Catalog */}
@@ -3209,9 +3645,31 @@ export const CustomerMobileExperience: React.FC<CustomerMobileExperienceProps> =
             ) : (
               /* STORES DIRECTORY WITH CATEGORY TABS */
               <div className="flex-1 p-4 flex flex-col gap-3.5">
-                <div>
-                  <h2 className="font-extrabold text-base text-slate-900">متاجر ومطاعم الباجور</h2>
-                  <p className="text-xs text-slate-500">اطلب من أي متجر محلي مع توصيل كباتن مشوار الفوري</p>
+                <div className="flex items-start justify-between gap-2">
+                  <div>
+                    <div className="flex items-center gap-1.5">
+                      <h2 className="font-extrabold text-base text-slate-900">متاجر ومطاعم الباجور</h2>
+                      {isFirestoreStoresLive && (
+                        <span className="text-[9px] font-black px-1.5 py-0.5 rounded-full bg-emerald-100 text-emerald-800 border border-emerald-300">
+                          Firestore مباشر
+                        </span>
+                      )}
+                    </div>
+                    <p className="text-xs text-slate-500">سلة مجمعة من عدة محلات بتكلفة توصيل حسب التقارب</p>
+                  </div>
+                  <button
+                    type="button"
+                    data-testid="stores-ai-scanner-btn"
+                    onClick={() => {
+                      setAiScanStoreId(stores.find((s) => s.category === 'pharmacy')?.id || stores[0]?.id || 'merchant_amana');
+                      setAiScanListType('prescription');
+                      setShowAiScannerModal(true);
+                    }}
+                    className="px-2.5 py-1.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-[10px] font-black flex items-center gap-1 shadow-xs shrink-0 cursor-pointer"
+                  >
+                    <Sparkles className="w-3.5 h-3.5 text-amber-300" />
+                    <span>مسح روشتة / مقاضي</span>
+                  </button>
                 </div>
 
                 {/* Search Bar */}
@@ -3569,7 +4027,7 @@ export const CustomerMobileExperience: React.FC<CustomerMobileExperienceProps> =
                       </div>
 
                       {/* Post-Delivery 1-5 Star Rating System inside Mobile History */}
-                      <div className="pt-2 border-t border-slate-100 flex items-center justify-between gap-2">
+                      <div className="pt-2 border-t border-slate-100 flex items-center justify-between gap-2 flex-wrap">
                         <div className="flex items-center gap-1">
                           <span className="text-[11px] font-extrabold text-slate-700">تقييم الكابتن:</span>
                           {currentRating > 0 && (
@@ -3585,7 +4043,14 @@ export const CustomerMobileExperience: React.FC<CustomerMobileExperienceProps> =
                               <button
                                 key={starVal}
                                 type="button"
-                                onClick={() => rateOrderCaptain(ord.id, starVal)}
+                                onClick={() => {
+                                  rateOrderCaptain(ord.id, starVal);
+                                  submitDriverReview(ord.id, {
+                                    rating: starVal,
+                                    tags: ord.customerRatingTags || [],
+                                    feedback: feedbackDraft.trim(),
+                                  });
+                                }}
                                 className={`px-2 py-1 rounded-lg border text-[10px] font-extrabold flex items-center gap-0.5 transition cursor-pointer ${
                                   isFilled
                                     ? 'bg-amber-50 border-amber-300 text-amber-700'
@@ -3601,6 +4066,20 @@ export const CustomerMobileExperience: React.FC<CustomerMobileExperienceProps> =
                               </button>
                             );
                           })}
+                          {ord.status === 'delivered' && (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setRatingModalOrder(ord);
+                                setRatingModalStars(ord.customerRating || 5);
+                                setRatingModalTags(ord.customerRatingTags || ['أخلاق عالية']);
+                                setRatingModalFeedback(feedbackDraft);
+                              }}
+                              className="px-2 py-1 rounded-lg bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-200 text-[10px] font-extrabold cursor-pointer"
+                            >
+                              تقييم مفصل
+                            </button>
+                          )}
                         </div>
                       </div>
 
@@ -3609,6 +4088,11 @@ export const CustomerMobileExperience: React.FC<CustomerMobileExperienceProps> =
                         onSubmit={(e) => {
                           e.preventDefault();
                           updateOrderFeedback(ord.id, feedbackDraft.trim());
+                          submitDriverReview(ord.id, {
+                            rating: currentRating > 0 ? currentRating : 5,
+                            tags: ord.customerRatingTags || [],
+                            feedback: feedbackDraft.trim(),
+                          });
                           setHistoryFeedbackSavedMap((prev) => ({ ...prev, [ord.id]: true }));
                         }}
                         className="pt-2 border-t border-slate-100 flex flex-col gap-1.5"
@@ -3619,7 +4103,7 @@ export const CustomerMobileExperience: React.FC<CustomerMobileExperienceProps> =
                           </label>
                           {isFeedbackSaved && (
                             <span className="text-[9px] font-extrabold text-emerald-700 bg-emerald-50 px-1.5 py-0.5 rounded">
-                              تم حفظ التعليق ✓
+                              تم الحفظ والمزامنة ✓
                             </span>
                           )}
                         </div>
@@ -3993,6 +4477,102 @@ export const CustomerMobileExperience: React.FC<CustomerMobileExperienceProps> =
                 </div>
               )}
             </div>
+
+            {/* Battery Saver Mode & GPS Rate Control Card */}
+            <div
+              data-testid="profile-battery-saver-card"
+              className="bg-white rounded-2xl border border-slate-200/80 p-3.5 shadow-2xs flex flex-col gap-2.5 text-xs"
+            >
+              <div className="flex items-center justify-between gap-2">
+                <div className="flex items-center gap-2">
+                  <div
+                    className={`w-8 h-8 rounded-xl flex items-center justify-center ${
+                      isBatterySaverActive
+                        ? 'bg-amber-100 text-amber-700'
+                        : 'bg-emerald-100 text-emerald-700'
+                    }`}
+                  >
+                    {isCharging ? (
+                      <BatteryCharging className="w-4 h-4" />
+                    ) : isBatterySaverActive ? (
+                      <BatteryLow className="w-4 h-4" />
+                    ) : (
+                      <Battery className="w-4 h-4" />
+                    )}
+                  </div>
+                  <div>
+                    <h4 className="font-extrabold text-slate-900">وضع توفير الطاقة وتتبع GPS</h4>
+                    <span className="text-[10px] text-slate-500 tabular-nums">
+                      الشحن الحالي: {batteryLevelPercent}% · تحديث GPS كل {Math.round(gpsUpdateIntervalMs / 1000)} ثانية
+                    </span>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={forceGpsSyncNow}
+                  className="min-h-[44px] px-2.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-800 text-[10px] font-extrabold cursor-pointer"
+                >
+                  تحديث GPS
+                </button>
+              </div>
+
+              <div className="p-2.5 rounded-xl bg-slate-50 border border-slate-200/70 text-[11px] text-slate-700 flex items-center justify-between gap-2 tabular-nums">
+                <span>
+                  {isBatterySaverActive
+                    ? 'تم تقليل تردد GPS إلى كل ١٥ ثانية لحفظ البطارية'
+                    : 'يعمل GPS بأقصى دقة (كل ٣ ثوانٍ)'}
+                </span>
+                <span className="text-[10px] text-slate-500 shrink-0">
+                  {gpsTrackingLocation.lastUpdatedAt}
+                </span>
+              </div>
+
+              <div className="grid grid-cols-3 gap-1.5">
+                {([
+                  { id: 'auto', label: 'تلقائي (< ٢٠٪)' },
+                  { id: 'always_on', label: 'تشغيل دائم' },
+                  { id: 'off', label: 'إيقاف' },
+                ] as const).map((opt) => (
+                  <button
+                    key={opt.id}
+                    type="button"
+                    data-testid={`profile-battery-mode-${opt.id}`}
+                    onClick={() => setBatterySaverPreference(opt.id)}
+                    className={`min-h-[44px] px-2 rounded-xl border text-[10px] font-extrabold cursor-pointer transition ${
+                      batterySaverPreference === opt.id
+                        ? 'bg-emerald-700 text-white border-emerald-700'
+                        : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-50'
+                    }`}
+                  >
+                    {opt.label}
+                  </button>
+                ))}
+              </div>
+
+              <div className="flex items-center justify-between gap-2 pt-1 border-t border-slate-100">
+                <span className="text-[10px] text-slate-500 font-semibold">
+                  اختبار خفض البطارية عن ٢٠٪:
+                </span>
+                <button
+                  type="button"
+                  data-testid="profile-simulate-low-battery-btn"
+                  onClick={() =>
+                    setSimulatedBatteryPercent(
+                      simulatedBatteryPercent !== null && simulatedBatteryPercent < 20 ? null : 15
+                    )
+                  }
+                  className={`min-h-[44px] px-3 rounded-xl border text-[10px] font-extrabold cursor-pointer ${
+                    simulatedBatteryPercent !== null && simulatedBatteryPercent < 20
+                      ? 'bg-amber-500 text-slate-950 border-amber-500'
+                      : 'bg-slate-900 text-white border-slate-900 hover:bg-slate-800'
+                  }`}
+                >
+                  {simulatedBatteryPercent !== null && simulatedBatteryPercent < 20
+                    ? 'إعادة الشحن ٨٥٪'
+                    : 'محاكاة شحن ١٥٪'}
+                </button>
+              </div>
+            </div>
           </div>
         )}
       </div>
@@ -4208,17 +4788,46 @@ export const CustomerMobileExperience: React.FC<CustomerMobileExperienceProps> =
             </div>
 
             {cartItems.length === 0 ? (
-              <div className="py-8 text-center text-xs text-slate-500">
-                السلة فارغة حالياً. أضف منتجات من متاجر الباجور (حتى ٤ محلات بتوصيلة واحدة).
+              <div className="py-8 text-center text-xs text-slate-500 space-y-3">
+                <p>السلة فارغة حالياً. أضف منتجات من متاجر الباجور (حتى ٤ محلات بتوصيلة واحدة).</p>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setIsCartOpen(false);
+                    setShowAiScannerModal(true);
+                  }}
+                  className="mx-auto px-3.5 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-extrabold text-xs inline-flex items-center gap-1.5 cursor-pointer"
+                >
+                  <Camera className="w-3.5 h-3.5" />
+                  <span>مسح روشتة أو ورقة مقاضي بالذكاء الاصطناعي</span>
+                </button>
               </div>
             ) : (
               <>
-                {cartStoreIds.length > 1 && (
-                  <div className="p-2.5 rounded-xl bg-emerald-50 border border-emerald-200 text-[11px] font-bold text-emerald-900 flex items-center justify-between">
-                    <span>🚚 توصيلة واحدة مجمعة لـ {cartStoreIds.length} محلات</span>
-                    <span className="text-emerald-700 font-black">وفّرت {cartMultiStopSavingsEgp} ج.م!</span>
+                <div
+                  data-testid="cart-proximity-summary"
+                  className="p-2.5 rounded-xl bg-emerald-50 border border-emerald-200 text-[11px] font-bold text-emerald-900 flex flex-col gap-1"
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <span>
+                      🚚 {cartStoreIds.length > 1 ? `توصيلة مجمعة لـ ${cartStoreIds.length} محلات` : 'توصيلة سريعة من الباجور'}
+                      {cartProximityKm > 0 ? ` • تقارب ${cartProximityKm} كم` : ''}
+                    </span>
+                    {(cartProximitySavedEgp > 0 || cartMultiStopSavingsEgp > 0) && (
+                      <span className="text-emerald-700 font-black shrink-0">
+                        وفّرت {Math.max(cartProximitySavedEgp, cartMultiStopSavingsEgp)} ج.م!
+                      </span>
+                    )}
                   </div>
-                )}
+                  <div className="text-[10px] text-emerald-800/90 flex items-center justify-between gap-2">
+                    <span className="truncate">{cartDeliveryFeeBreakdownAr}</span>
+                    {isFirestoreStoresLive && (
+                      <span className="text-[9px] bg-white px-1.5 py-0.5 rounded border border-emerald-200 shrink-0">
+                        بيانات Firestore ✓
+                      </span>
+                    )}
+                  </div>
+                </div>
 
                 {/* Items Grouped by Store */}
                 <div className="space-y-2.5">
@@ -4553,7 +5162,7 @@ export const CustomerMobileExperience: React.FC<CustomerMobileExperienceProps> =
                   </h4>
                   <span className="text-[10px] text-emerald-700 font-bold flex items-center gap-1">
                     <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-ping" />
-                    متصل الآن في الباجور
+                    {isFirestoreRealtimeActive ? 'متصل لحظياً عبر Firestore' : 'متصل الآن في الباجور'}
                   </span>
                 </div>
               </div>
@@ -4565,9 +5174,12 @@ export const CustomerMobileExperience: React.FC<CustomerMobileExperienceProps> =
               </button>
             </div>
 
-            {/* Messages stream */}
+            {/* Messages stream scoped to active order */}
             <div className="flex-1 overflow-y-auto p-2 space-y-2 text-xs">
-              {chatMessages.map((msg) => {
+              {(activeCustomerOrder
+                ? chatMessages.filter((m) => m.orderId === activeCustomerOrder.id || m.orderId === 'all')
+                : chatMessages
+              ).map((msg) => {
                 const isMe = msg.senderRole === 'customer';
                 return (
                   <div
@@ -4632,6 +5244,25 @@ export const CustomerMobileExperience: React.FC<CustomerMobileExperienceProps> =
                 <Send className="w-4 h-4" />
               </button>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* Smart Geolocation Fare Calculator Modal */}
+      {showSmartFareModal && (
+        <div
+          data-testid="smart-fare-modal"
+          className="absolute inset-0 z-50 bg-black/60 backdrop-blur-2xs flex flex-col justify-end p-2.5"
+        >
+          <div className="max-h-[90%] overflow-y-auto rounded-2xl">
+            <SmartFareCalculatorCard
+              initialPickupId={pickupLandmarkId}
+              initialDropoffId={dropoffLandmarkId}
+              initialVehicleTier={quickVehicleTier}
+              fallbackGpsLocation={gpsTrackingLocation}
+              onApplyCalculation={handleApplySmartFare}
+              onClose={() => setShowSmartFareModal(false)}
+            />
           </div>
         </div>
       )}
@@ -4954,6 +5585,285 @@ export const CustomerMobileExperience: React.FC<CustomerMobileExperienceProps> =
         orderId={activeCustomerOrder?.id}
         orderNumber={activeCustomerOrder?.orderNumber}
       />
+
+      {/* AI Prescription & Handwritten List Image -> Auto-Add to Combined Cart Modal */}
+      {showAiScannerModal && (
+        <div
+          data-testid="ai-scanner-cart-modal"
+          className="absolute inset-0 z-50 bg-black/60 backdrop-blur-2xs flex flex-col justify-end"
+        >
+          <div className="bg-white rounded-t-3xl p-4 shadow-2xl max-h-[88%] overflow-y-auto flex flex-col gap-3 text-xs">
+            <div className="flex items-center justify-between border-b border-slate-100 pb-2.5">
+              <div className="flex items-center gap-2">
+                <div className="w-9 h-9 rounded-xl bg-indigo-600 text-white flex items-center justify-center shrink-0">
+                  <Sparkles className="w-4 h-4 text-amber-300" />
+                </div>
+                <div>
+                  <h4 className="font-black text-sm text-slate-900">
+                    مسح الروشتة / ورقة المقاضي للسلة بالذكاء الاصطناعي
+                  </h4>
+                  <p className="text-[10px] text-slate-500">
+                    ارفع صورة واضحة وسيتم قراءة الأصناف وإضافتها مباشرة إلى سلتك المجمعة
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowAiScannerModal(false)}
+                className="w-7 h-7 rounded-full bg-slate-100 text-slate-500 flex items-center justify-center cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="grid grid-cols-2 gap-2">
+              <button
+                type="button"
+                onClick={() => setAiScanListType('prescription')}
+                className={`py-2 rounded-xl border font-extrabold text-[11px] cursor-pointer ${
+                  aiScanListType === 'prescription'
+                    ? 'bg-indigo-700 text-white border-indigo-700'
+                    : 'bg-slate-50 text-slate-700 border-slate-200'
+                }`}
+              >
+                💊 روشتة طبية / صيدلية
+              </button>
+              <button
+                type="button"
+                onClick={() => setAiScanListType('grocery')}
+                className={`py-2 rounded-xl border font-extrabold text-[11px] cursor-pointer ${
+                  aiScanListType === 'grocery'
+                    ? 'bg-emerald-700 text-white border-emerald-700'
+                    : 'bg-slate-50 text-slate-700 border-slate-200'
+                }`}
+              >
+                📝 ورقة مقاضي / سوبرماركت
+              </button>
+            </div>
+
+            <div>
+              <label className="text-[10px] font-bold text-slate-600 block mb-1">
+                المتجر المستهدف لإضافة الأصناف إليه في السلة:
+              </label>
+              <select
+                value={aiScanStoreId}
+                onChange={(e) => setAiScanStoreId(e.target.value)}
+                className="w-full px-2.5 py-2 rounded-xl border border-slate-200 bg-slate-50 text-xs font-bold text-slate-900"
+              >
+                {stores.map((st) => (
+                  <option key={st.id} value={st.id}>
+                    {st.nameAr} ({st.categoryAr})
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <label className="w-full py-3 px-4 rounded-2xl border-2 border-dashed border-indigo-300 bg-indigo-50/70 hover:bg-indigo-50 text-indigo-900 font-extrabold text-xs flex flex-col items-center justify-center gap-1.5 cursor-pointer">
+              {aiScanLoading ? (
+                <>
+                  <Loader2 className="w-5 h-5 animate-spin text-indigo-700" />
+                  <span>جاري قراءة الصورة واستخراج الأصناف عبر Gemini...</span>
+                </>
+              ) : (
+                <>
+                  <Upload className="w-5 h-5 text-indigo-700" />
+                  <span>اختر صورة الروشتة أو قائمة الطلبات اليدوية</span>
+                </>
+              )}
+              <input
+                type="file"
+                accept="image/*"
+                onChange={handleAiScanImageChange}
+                className="hidden"
+              />
+            </label>
+
+            {aiScanFilePreview && (
+              <div className="rounded-xl overflow-hidden border border-slate-200 max-h-32 bg-slate-100">
+                <img src={aiScanFilePreview} alt="معاينة الصورة" className="w-full h-32 object-contain" />
+              </div>
+            )}
+
+            {aiScanError && (
+              <div className="p-2.5 rounded-xl bg-rose-50 border border-rose-200 text-rose-800 text-[11px] font-bold">
+                {aiScanError}
+              </div>
+            )}
+
+            {aiScanSummary && (
+              <div className="p-2.5 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-950 text-[11px] font-bold">
+                {aiScanSummary}
+              </div>
+            )}
+
+            {aiScanWarnings.length > 0 && (
+              <div className="p-2 rounded-xl bg-amber-50 border border-amber-200 text-amber-900 text-[10px] font-bold space-y-0.5">
+                {aiScanWarnings.map((w, i) => (
+                  <div key={i}>• {w}</div>
+                ))}
+              </div>
+            )}
+
+            {aiScanExtractedItems.length > 0 && (
+              <div className="space-y-1.5">
+                <div className="font-extrabold text-[11px] text-slate-800">
+                  الأصناف المستخرجة الجاهزة للسلة ({aiScanExtractedItems.length}):
+                </div>
+                <div className="space-y-1.5 max-h-40 overflow-y-auto">
+                  {aiScanExtractedItems.map((it, idx) => (
+                    <div
+                      key={`${it.nameAr}_${idx}`}
+                      className="p-2 rounded-xl bg-slate-50 border border-slate-200 flex items-center justify-between gap-2"
+                    >
+                      <div className="min-w-0 flex-1">
+                        <div className="font-extrabold text-slate-900 truncate">{it.nameAr}</div>
+                        <div className="text-[10px] text-slate-500">
+                          الكمية: {it.quantity || '1'} {it.unit || ''}
+                          {it.notes ? ` • ${it.notes}` : ''}
+                        </div>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setAiScanExtractedItems((prev) => prev.filter((_, i) => i !== idx))
+                        }
+                        className="text-rose-500 hover:text-rose-700 p-1 cursor-pointer"
+                        title="إزالة الصنف"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+                {aiScanSuccessMsg && (
+                  <div className="p-2 rounded-xl bg-emerald-100 text-emerald-900 font-black text-center text-[11px]">
+                    {aiScanSuccessMsg}
+                  </div>
+                )}
+                <button
+                  type="button"
+                  data-testid="ai-scanner-add-to-cart-btn"
+                  onClick={handleAddScannedItemsToCombinedCart}
+                  className="w-full py-2.5 rounded-xl bg-emerald-700 hover:bg-emerald-800 text-white font-black text-xs shadow-md flex items-center justify-center gap-1.5 cursor-pointer"
+                >
+                  <ShoppingBag className="w-4 h-4" />
+                  <span>إضافة الأصناف للسلة المجمعة وفتح الدفع</span>
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Post-Ride & Delivery Rating + Feedback Modal (Saved to Firestore driverRatings) */}
+      {ratingModalOrder && (
+        <div
+          data-testid="post-ride-rating-modal"
+          className="absolute inset-0 z-50 bg-black/60 backdrop-blur-2xs flex flex-col justify-end"
+        >
+          <form
+            onSubmit={handleSubmitRatingModal}
+            className="bg-white rounded-t-3xl p-4 shadow-2xl flex flex-col gap-3 text-xs"
+          >
+            <div className="flex items-center justify-between border-b border-slate-100 pb-2.5">
+              <div>
+                <h4 className="font-black text-sm text-slate-900">
+                  تقييم رحلتك وتوصيل {ratingModalOrder.orderNumber}
+                </h4>
+                <p className="text-[10px] text-slate-500 font-bold">
+                  {ratingModalOrder.assignedCaptainName || 'الكابتن المعتمد'} • يُحفظ في Firestore لتحسين جودة الخدمة
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setRatingModalOrder(null)}
+                className="w-7 h-7 rounded-full bg-slate-100 text-slate-500 flex items-center justify-center cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="flex items-center justify-center gap-2 py-1">
+              {[1, 2, 3, 4, 5].map((starVal) => (
+                <button
+                  key={starVal}
+                  type="button"
+                  data-testid={`rating-modal-star-${starVal}`}
+                  onClick={() => setRatingModalStars(starVal)}
+                  className={`w-10 h-10 rounded-xl border flex items-center justify-center transition cursor-pointer ${
+                    starVal <= ratingModalStars
+                      ? 'bg-amber-50 border-amber-400 text-amber-500 scale-105'
+                      : 'bg-slate-50 border-slate-200 text-slate-300'
+                  }`}
+                >
+                  <Star
+                    className={`w-5 h-5 ${
+                      starVal <= ratingModalStars ? 'fill-amber-400 text-amber-500' : ''
+                    }`}
+                  />
+                </button>
+              ))}
+            </div>
+
+            <div className="flex flex-wrap gap-1.5">
+              {[
+                'سرعة الوصول',
+                'أخلاق عالية',
+                'قيادة آمنة',
+                'فكة مظبوطة',
+                'نظافة المركبة',
+                'التزام بكود الأمان',
+              ].map((tag) => {
+                const selected = ratingModalTags.includes(tag);
+                return (
+                  <button
+                    key={tag}
+                    type="button"
+                    onClick={() =>
+                      setRatingModalTags((prev) =>
+                        prev.includes(tag) ? prev.filter((t) => t !== tag) : [...prev, tag]
+                      )
+                    }
+                    className={`px-2.5 py-1 rounded-lg border text-[10px] font-extrabold cursor-pointer ${
+                      selected
+                        ? 'bg-emerald-700 text-white border-emerald-700'
+                        : 'bg-slate-50 text-slate-600 border-slate-200'
+                    }`}
+                  >
+                    {tag}
+                  </button>
+                );
+              })}
+            </div>
+
+            <textarea
+              rows={2}
+              value={ratingModalFeedback}
+              onChange={(e) => setRatingModalFeedback(e.target.value)}
+              placeholder="اكتب ملاحظاتك أو شكرك للكابتن (اختياري)..."
+              className="w-full px-3 py-2 rounded-xl bg-slate-50 border border-slate-200 text-xs text-slate-800 focus:outline-hidden focus:border-emerald-600 resize-none"
+            />
+
+            <div className="grid grid-cols-3 gap-2">
+              <button
+                type="button"
+                onClick={() => setRatingModalOrder(null)}
+                className="py-2.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs cursor-pointer"
+              >
+                لاحقاً
+              </button>
+              <button
+                type="submit"
+                disabled={ratingModalSubmitting}
+                data-testid="rating-modal-submit-btn"
+                className="col-span-2 py-2.5 rounded-xl bg-emerald-700 hover:bg-emerald-800 text-white font-black text-xs shadow-sm cursor-pointer disabled:opacity-60"
+              >
+                {ratingModalSubmitting ? 'جاري الحفظ...' : `إرسال التقييم (${ratingModalStars}/5 ★)`}
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
 
 
       {/* Customer Mobile Bottom Navigation Bar (5 Unified Destinations, Touch Targets >= 44px) */}

@@ -207,6 +207,17 @@
         "isOpen": {
           "type": "boolean"
         },
+        "lat": {
+          "type": "number"
+        },
+        "lng": {
+          "type": "number"
+        },
+        "zoneCluster": {
+          "type": "string",
+          "minLength": 0,
+          "maxLength": 40
+        },
         "updatedAt": {
           "type": "string",
           "format": "date-time"
@@ -826,6 +837,125 @@
       },
       "required": ["id", "senderUid", "senderRole", "senderName", "text", "createdAt"]
     },
+    "CommuteSlot": {
+      "title": "CommuteSlot",
+      "description": "Automated daily commute slot tracking record under a commute subscription.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "subscriptionId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "passengerId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "slotType": {
+          "type": "string",
+          "enum": ["morning_go", "evening_return"]
+        },
+        "dateIso": {
+          "type": "string",
+          "minLength": 8,
+          "maxLength": 20
+        },
+        "scheduledTime": {
+          "type": "string",
+          "minLength": 4,
+          "maxLength": 12
+        },
+        "status": {
+          "type": "string",
+          "enum": ["scheduled", "driver_assigned", "en_route", "completed", "skipped"]
+        },
+        "captainName": {
+          "type": "string",
+          "minLength": 0,
+          "maxLength": 80
+        },
+        "ridePin": {
+          "type": "string",
+          "minLength": 4,
+          "maxLength": 6
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "id",
+        "subscriptionId",
+        "passengerId",
+        "slotType",
+        "dateIso",
+        "scheduledTime",
+        "status",
+        "updatedAt"
+      ]
+    },
+    "DriverRating": {
+      "title": "DriverRating",
+      "description": "Post-ride or post-delivery customer rating and feedback saved for driver performance metrics.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 80,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "orderId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 80,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "driverId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "driverName": {
+          "type": "string",
+          "minLength": 2,
+          "maxLength": 80
+        },
+        "customerId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "rating": {
+          "type": "integer"
+        },
+        "tags": {
+          "type": "array"
+        },
+        "feedback": {
+          "type": "string",
+          "minLength": 0,
+          "maxLength": 300
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["id", "orderId", "driverId", "driverName", "customerId", "rating", "tags", "feedback", "createdAt"]
+    },
     "WalletTransaction": {
       "title": "WalletTransaction",
       "description": "Immutable loyalty cashback credit, top-up proof, referral bonus, or redemption entry.",
@@ -879,6 +1009,104 @@
         }
       },
       "required": ["id", "userId", "type", "amountPiasters", "refId", "titleAr", "createdAt"]
+    },
+    "CaptainNotification": {
+      "title": "CaptainNotification",
+      "description": "Real-time Firestore in-app dispatch alert for El Bagour captains when a new order or ride enters searching_captain or ready_for_pickup.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "orderId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "orderNumber": {
+          "type": "string",
+          "minLength": 2,
+          "maxLength": 32
+        },
+        "recipientScope": {
+          "type": "string",
+          "enum": ["el_bagour_captains", "specific_captain"]
+        },
+        "targetCaptainUid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "senderUid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "cityId": {
+          "type": "string",
+          "enum": ["el_bagour"]
+        },
+        "zoneArea": {
+          "type": "string",
+          "minLength": 2,
+          "maxLength": 80
+        },
+        "titleAr": {
+          "type": "string",
+          "minLength": 2,
+          "maxLength": 140
+        },
+        "bodyAr": {
+          "type": "string",
+          "minLength": 2,
+          "maxLength": 320
+        },
+        "serviceType": {
+          "type": "string",
+          "enum": ["restaurant_store", "package", "errand", "ride", "prescription_list"]
+        },
+        "estimatedEarningsPiasters": {
+          "type": "integer"
+        },
+        "soundProfile": {
+          "type": "string",
+          "enum": ["radar_pulse", "bagour_chime", "urgent_dispatch", "soft_bell"]
+        },
+        "isRead": {
+          "type": "boolean"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "id",
+        "orderId",
+        "orderNumber",
+        "recipientScope",
+        "senderUid",
+        "cityId",
+        "zoneArea",
+        "titleAr",
+        "bodyAr",
+        "serviceType",
+        "estimatedEarningsPiasters",
+        "soundProfile",
+        "isRead",
+        "createdAt",
+        "updatedAt"
+      ]
     }
   },
   "firestore": {
@@ -894,9 +1122,13 @@
       "schema": { "$ref": "#/entities/DriverProfile" },
       "description": "Publicly readable verified driver summary with family trust badge and cash ceiling."
     },
+    "/driverRatings/{ratingId}": {
+      "schema": { "$ref": "#/entities/DriverRating" },
+      "description": "Post-ride and post-delivery ratings and feedback for driver performance metrics."
+    },
     "/stores/{storeId}": {
       "schema": { "$ref": "#/entities/StoreFront" },
-      "description": "Publicly readable local merchant storefronts."
+      "description": "Publicly readable local merchant storefronts with El Bagour coordinates."
     },
     "/products/{productId}": {
       "schema": { "$ref": "#/entities/CatalogProduct" },
@@ -914,6 +1146,10 @@
       "schema": { "$ref": "#/entities/CommuteSubscription" },
       "description": "Recurring daily village-to-center commute subscriptions."
     },
+    "/commuteSubscriptions/{subId}/slots/{slotId}": {
+      "schema": { "$ref": "#/entities/CommuteSlot" },
+      "description": "Automated daily commute slot status records."
+    },
     "/promoCodes/{code}": {
       "schema": { "$ref": "#/entities/PromoCode" },
       "description": "Active discount coupons for El Bagour users."
@@ -925,6 +1161,10 @@
     "/threads/{threadId}/messages/{messageId}": {
       "schema": { "$ref": "#/entities/ChatMessage" },
       "description": "Real-time participant chat messages scoped to an order or ride."
+    },
+    "/captainNotifications/{notifId}": {
+      "schema": { "$ref": "#/entities/CaptainNotification" },
+      "description": "Real-time El Bagour in-app dispatch alerts for captains."
     }
   }
 }

@@ -10,8 +10,10 @@ import {
   RefreshCw,
   AlertTriangle,
   HeadphonesIcon,
+  BatteryLow,
 } from 'lucide-react';
 import { auth, triggerRideSafetySosInFirestore } from '../../lib/firebase';
+import { useMarketplace } from '../../store/marketplaceStore';
 
 export interface SosGpsCoordinates {
   lat: number;
@@ -44,6 +46,12 @@ export const SosEmergencySheet: React.FC<SosEmergencySheetProps> = ({
   orderNumber,
   supportPhone = '01000019019',
 }) => {
+  const {
+    gpsHighAccuracy,
+    isBatterySaverActive,
+    batteryLevelPercent,
+    gpsUpdateIntervalMs,
+  } = useMarketplace();
   const [coords, setCoords] = useState<SosGpsCoordinates>(EL_BAGOUR_DEFAULT_COORDS);
   const [isLocating, setIsLocating] = useState<boolean>(false);
   const [gpsStatusNote, setGpsStatusNote] = useState<string | null>(null);
@@ -94,12 +102,12 @@ export const SosEmergencySheet: React.FC<SosEmergencySheetProps> = ({
         }
       },
       {
-        enableHighAccuracy: true,
+        enableHighAccuracy: gpsHighAccuracy,
         timeout: 6000,
-        maximumAge: 10000,
+        maximumAge: isBatterySaverActive ? 15000 : 5000,
       }
     );
-  }, []);
+  }, [gpsHighAccuracy, isBatterySaverActive]);
 
   useEffect(() => {
     if (!isOpen) return;
@@ -240,6 +248,15 @@ export const SosEmergencySheet: React.FC<SosEmergencySheetProps> = ({
             <div className="flex items-start gap-1.5 text-[10px] font-bold text-amber-900 bg-amber-50 border border-amber-200 rounded-xl px-2.5 py-1.5">
               <AlertTriangle className="w-3.5 h-3.5 text-amber-600 shrink-0 mt-0.5" />
               <span>{gpsStatusNote}</span>
+            </div>
+          )}
+
+          {isBatterySaverActive && (
+            <div className="flex items-center gap-1.5 text-[10px] font-bold text-amber-900 pt-0.5">
+              <BatteryLow className="w-3.5 h-3.5 text-amber-600 shrink-0" />
+              <span className="tabular-nums">
+                وضع توفير الطاقة نشط ({batteryLevelPercent}%) · تحديد GPS اقتصادي كل {Math.round(gpsUpdateIntervalMs / 1000)} ث
+              </span>
             </div>
           )}
 

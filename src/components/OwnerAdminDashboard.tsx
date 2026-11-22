@@ -34,8 +34,21 @@ import {
   FileText,
   BadgeAlert,
   Truck,
-  Bike
+  Bike,
+  BarChart3
 } from 'lucide-react';
+import {
+  ResponsiveContainer,
+  AreaChart,
+  Area,
+  BarChart,
+  Bar,
+  XAxis,
+  YAxis,
+  CartesianGrid,
+  Tooltip,
+  Legend,
+} from 'recharts';
 
 export type AdminRole = 'owner' | 'operations_dispatcher' | 'support_agent';
 
@@ -210,6 +223,8 @@ export function OwnerAdminDashboard() {
   const [cancelOrderModal, setCancelOrderModal] = useState<OrderItem | null>(null);
   const [cancellationReason, setCancellationReason] = useState<string>('');
   const [statusFilter, setStatusFilter] = useState<string>('all');
+  const [analyticsRange, setAnalyticsRange] = useState<'7d' | '14d'>('7d');
+  const [analyticsZone, setAnalyticsZone] = useState<'all' | 'urban' | 'rural'>('all');
 
   const [actionAlert, setActionAlert] = useState<{ type: 'error' | 'success'; message: string } | null>(null);
   const [liveZonesSummary, setLiveZonesSummary] = useState<{ activeCities: number; activeZones: number }>({
@@ -243,6 +258,63 @@ export function OwnerAdminDashboard() {
   const onlineCaptainsCount = captains.filter((c) => c.isOnline).length;
   const totalPlatformFeesEgp = ((orders.filter((o) => o.status === 'delivered').length * settings.platformFeePiasters) / 100).toFixed(2);
   const totalUnremittedCashEgp = (captains.reduce((sum, c) => sum + c.cashHoldingPiasters, 0) / 100).toFixed(2);
+
+  // El Bagour Daily Earnings & Completed Orders Dataset for Recharts (merges live delivered orders onto today's bar/area)
+  const deliveredOrdersToday = orders.filter((o) => o.status === 'delivered');
+  const liveUrbanOrdersToday = deliveredOrdersToday.filter((o) => !o.isRural).length;
+  const liveRuralOrdersToday = deliveredOrdersToday.filter((o) => o.isRural).length;
+  const liveUrbanEarningsToday = Math.round(
+    deliveredOrdersToday.filter((o) => !o.isRural).reduce((sum, o) => sum + o.totalFarePiasters, 0) / 100
+  );
+  const liveRuralEarningsToday = Math.round(
+    deliveredOrdersToday.filter((o) => o.isRural).reduce((sum, o) => sum + o.totalFarePiasters, 0) / 100
+  );
+  const platformFeePerOrderEgp = settings.platformFeePiasters / 100;
+
+  const fullElBagourAnalytics = [
+    { dayLabel: 'منذ ١٣ يوم', urbanOrders: 18, ruralOrders: 9, urbanEarningsEgp: 1320, ruralEarningsEgp: 810 },
+    { dayLabel: 'منذ ١٢ يوم', urbanOrders: 21, ruralOrders: 11, urbanEarningsEgp: 1540, ruralEarningsEgp: 980 },
+    { dayLabel: 'منذ ١١ يوم', urbanOrders: 19, ruralOrders: 10, urbanEarningsEgp: 1410, ruralEarningsEgp: 890 },
+    { dayLabel: 'منذ ١٠ أيام', urbanOrders: 24, ruralOrders: 13, urbanEarningsEgp: 1790, ruralEarningsEgp: 1160 },
+    { dayLabel: 'منذ ٩ أيام', urbanOrders: 27, ruralOrders: 15, urbanEarningsEgp: 2050, ruralEarningsEgp: 1340 },
+    { dayLabel: 'منذ ٨ أيام', urbanOrders: 22, ruralOrders: 12, urbanEarningsEgp: 1680, ruralEarningsEgp: 1090 },
+    { dayLabel: 'منذ ٧ أيام', urbanOrders: 26, ruralOrders: 14, urbanEarningsEgp: 1960, ruralEarningsEgp: 1250 },
+    { dayLabel: 'منذ ٦ أيام', urbanOrders: 29, ruralOrders: 16, urbanEarningsEgp: 2210, ruralEarningsEgp: 1420 },
+    { dayLabel: 'منذ ٥ أيام', urbanOrders: 31, ruralOrders: 17, urbanEarningsEgp: 2380, ruralEarningsEgp: 1510 },
+    { dayLabel: 'منذ ٤ أيام', urbanOrders: 28, ruralOrders: 15, urbanEarningsEgp: 2140, ruralEarningsEgp: 1360 },
+    { dayLabel: 'منذ ٣ أيام', urbanOrders: 34, ruralOrders: 19, urbanEarningsEgp: 2640, ruralEarningsEgp: 1710 },
+    { dayLabel: 'أول أمس', urbanOrders: 36, ruralOrders: 21, urbanEarningsEgp: 2820, ruralEarningsEgp: 1890 },
+    { dayLabel: 'أمس', urbanOrders: 39, ruralOrders: 22, urbanEarningsEgp: 3090, ruralEarningsEgp: 1980 },
+    {
+      dayLabel: 'اليوم (حي)',
+      urbanOrders: 32 + liveUrbanOrdersToday,
+      ruralOrders: 18 + liveRuralOrdersToday,
+      urbanEarningsEgp: 2560 + liveUrbanEarningsToday,
+      ruralEarningsEgp: 1620 + liveRuralEarningsToday,
+    },
+  ].map((entry) => {
+    const urbanOrders = analyticsZone === 'rural' ? 0 : entry.urbanOrders;
+    const ruralOrders = analyticsZone === 'urban' ? 0 : entry.ruralOrders;
+    const urbanEarnings = analyticsZone === 'rural' ? 0 : entry.urbanEarningsEgp;
+    const ruralEarnings = analyticsZone === 'urban' ? 0 : entry.ruralEarningsEgp;
+    const completedOrders = urbanOrders + ruralOrders;
+    const totalEarningsEgp = urbanEarnings + ruralEarnings;
+    const platformFeesEgp = Math.round(completedOrders * platformFeePerOrderEgp);
+    return {
+      dayLabel: entry.dayLabel,
+      urbanOrders,
+      ruralOrders,
+      completedOrders,
+      totalEarningsEgp,
+      platformFeesEgp,
+    };
+  });
+
+  const visibleAnalyticsData =
+    analyticsRange === '7d' ? fullElBagourAnalytics.slice(-7) : fullElBagourAnalytics;
+  const periodTotalEarningsEgp = visibleAnalyticsData.reduce((sum, d) => sum + d.totalEarningsEgp, 0);
+  const periodCompletedOrders = visibleAnalyticsData.reduce((sum, d) => sum + d.completedOrders, 0);
+  const periodPlatformFeesEgp = visibleAnalyticsData.reduce((sum, d) => sum + d.platformFeesEgp, 0);
 
   // Handle Manual Dispatch
   const handleAssignCaptain = (captainId: string) => {
@@ -604,6 +676,203 @@ export function OwnerAdminDashboard() {
               <p className="text-[10px] text-slate-400 mt-2">
                 تغطي خطوط قرى الباجور والجامعة • كباتن العائلات: {captains.filter((c) => c.isFamilyTrusted).length}
               </p>
+            </div>
+          </div>
+
+          {/* El Bagour Recharts Analytics: Daily Earnings & Completed Orders */}
+          <div
+            data-testid="owner-el-bagour-charts"
+            className="bg-slate-900 border border-slate-800 rounded-2xl p-5 shadow-xl flex flex-col gap-5"
+          >
+            <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3 border-b border-slate-800 pb-4">
+              <div>
+                <h3 className="text-sm font-black text-white flex items-center gap-2">
+                  <BarChart3 className="w-4 h-4 text-amber-400" />
+                  <span>التحليلات المالية والتشغيلية — منطقة الباجور</span>
+                </h3>
+                <p className="text-xs text-slate-400 mt-1 tabular-nums">
+                  إجمالي الأرباح: <strong className="text-emerald-400">{periodTotalEarningsEgp.toLocaleString('ar-EG')} ج.م</strong>
+                  {' · '}
+                  الطلبات المكتملة: <strong className="text-amber-300">{periodCompletedOrders.toLocaleString('ar-EG')} طلب</strong>
+                  {' · '}
+                  عائد رسوم المنصة: <strong className="text-sky-300">{periodPlatformFeesEgp.toLocaleString('ar-EG')} ج.م</strong>
+                </p>
+              </div>
+
+              <div className="flex flex-wrap items-center gap-2">
+                <div className="bg-slate-950 p-1 rounded-xl border border-slate-800 flex items-center gap-1">
+                  {([
+                    { id: 'all', label: 'كل الباجور' },
+                    { id: 'urban', label: 'المدينة' },
+                    { id: 'rural', label: 'القرى' },
+                  ] as const).map((zone) => (
+                    <button
+                      key={zone.id}
+                      type="button"
+                      data-testid={`chart-zone-filter-${zone.id}`}
+                      onClick={() => setAnalyticsZone(zone.id)}
+                      className={`px-3 py-1.5 rounded-lg text-xs font-bold transition cursor-pointer ${
+                        analyticsZone === zone.id
+                          ? 'bg-emerald-600 text-white'
+                          : 'text-slate-400 hover:text-white'
+                      }`}
+                    >
+                      {zone.label}
+                    </button>
+                  ))}
+                </div>
+
+                <div className="bg-slate-950 p-1 rounded-xl border border-slate-800 flex items-center gap-1">
+                  <button
+                    type="button"
+                    data-testid="chart-range-7d"
+                    onClick={() => setAnalyticsRange('7d')}
+                    className={`px-3 py-1.5 rounded-lg text-xs font-bold transition cursor-pointer ${
+                      analyticsRange === '7d'
+                        ? 'bg-amber-500 text-slate-950'
+                        : 'text-slate-400 hover:text-white'
+                    }`}
+                  >
+                    آخر ٧ أيام
+                  </button>
+                  <button
+                    type="button"
+                    data-testid="chart-range-14d"
+                    onClick={() => setAnalyticsRange('14d')}
+                    className={`px-3 py-1.5 rounded-lg text-xs font-bold transition cursor-pointer ${
+                      analyticsRange === '14d'
+                        ? 'bg-amber-500 text-slate-950'
+                        : 'text-slate-400 hover:text-white'
+                    }`}
+                  >
+                    آخر ١٤ يوماً
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
+              {/* Chart 1: Daily Total Earnings AreaChart */}
+              <div
+                data-testid="owner-daily-earnings-chart"
+                className="bg-slate-950 border border-slate-800 rounded-xl p-4 min-w-0 flex flex-col gap-3"
+              >
+                <div className="flex items-center justify-between gap-2">
+                  <div>
+                    <h4 className="text-xs font-extrabold text-white">إجمالي الأرباح اليومية في الباجور (ج.م)</h4>
+                    <span className="text-[11px] text-slate-400">إجمالي حجم التداول اليومي مقابل رسوم دعم المنصة</span>
+                  </div>
+                  <span className="text-xs font-black text-emerald-400 tabular-nums">
+                    اليوم: {visibleAnalyticsData[visibleAnalyticsData.length - 1]?.totalEarningsEgp.toLocaleString('ar-EG')} ج.م
+                  </span>
+                </div>
+
+                <div className="w-full h-[280px]" dir="ltr">
+                  <ResponsiveContainer width="100%" height={280}>
+                    <AreaChart data={visibleAnalyticsData} margin={{ top: 10, right: 12, left: 0, bottom: 4 }}>
+                      <defs>
+                        <linearGradient id="bagourEarningsGradient" x1="0" y1="0" x2="0" y2="1">
+                          <stop offset="5%" stopColor="#10b981" stopOpacity={0.45} />
+                          <stop offset="95%" stopColor="#10b981" stopOpacity={0.02} />
+                        </linearGradient>
+                        <linearGradient id="bagourFeesGradient" x1="0" y1="0" x2="0" y2="1">
+                          <stop offset="5%" stopColor="#f59e0b" stopOpacity={0.35} />
+                          <stop offset="95%" stopColor="#f59e0b" stopOpacity={0.02} />
+                        </linearGradient>
+                      </defs>
+                      <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
+                      <XAxis dataKey="dayLabel" stroke="#94a3b8" tick={{ fontSize: 11, fill: '#94a3b8' }} />
+                      <YAxis stroke="#94a3b8" tick={{ fontSize: 11, fill: '#94a3b8' }} width={52} />
+                      <Tooltip
+                        contentStyle={{
+                          backgroundColor: '#0f172a',
+                          borderColor: '#334155',
+                          borderRadius: '12px',
+                          color: '#f8fafc',
+                          fontSize: '12px',
+                          direction: 'rtl',
+                          textAlign: 'right',
+                        }}
+                        formatter={(value, name) => [
+                          `${Number(value ?? 0).toLocaleString('ar-EG')} ج.م`,
+                          name === 'totalEarningsEgp' ? 'إجمالي الأرباح اليومية' : 'رسوم المنصة',
+                        ]}
+                      />
+                      <Legend
+                        wrapperStyle={{ fontSize: '11px', paddingTop: '8px' }}
+                        formatter={(value) =>
+                          value === 'totalEarningsEgp' ? 'إجمالي الأرباح اليومية (ج.م)' : 'رسوم دعم المنصة (ج.م)'
+                        }
+                      />
+                      <Area
+                        type="monotone"
+                        dataKey="totalEarningsEgp"
+                        stroke="#10b981"
+                        strokeWidth={2.5}
+                        fillOpacity={1}
+                        fill="url(#bagourEarningsGradient)"
+                      />
+                      <Area
+                        type="monotone"
+                        dataKey="platformFeesEgp"
+                        stroke="#f59e0b"
+                        strokeWidth={2}
+                        fillOpacity={1}
+                        fill="url(#bagourFeesGradient)"
+                      />
+                    </AreaChart>
+                  </ResponsiveContainer>
+                </div>
+              </div>
+
+              {/* Chart 2: Daily Completed Orders BarChart */}
+              <div
+                data-testid="owner-completed-orders-chart"
+                className="bg-slate-950 border border-slate-800 rounded-xl p-4 min-w-0 flex flex-col gap-3"
+              >
+                <div className="flex items-center justify-between gap-2">
+                  <div>
+                    <h4 className="text-xs font-extrabold text-white">عدد الطلبات المكتملة اليومية بالباجور</h4>
+                    <span className="text-[11px] text-slate-400">مقارنة الطلبات المكتملة بين مركز الباجور والقرى المحيطة</span>
+                  </div>
+                  <span className="text-xs font-black text-amber-400 tabular-nums">
+                    اليوم: {visibleAnalyticsData[visibleAnalyticsData.length - 1]?.completedOrders.toLocaleString('ar-EG')} طلب
+                  </span>
+                </div>
+
+                <div className="w-full h-[280px]" dir="ltr">
+                  <ResponsiveContainer width="100%" height={280}>
+                    <BarChart data={visibleAnalyticsData} margin={{ top: 10, right: 12, left: 0, bottom: 4 }}>
+                      <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
+                      <XAxis dataKey="dayLabel" stroke="#94a3b8" tick={{ fontSize: 11, fill: '#94a3b8' }} />
+                      <YAxis stroke="#94a3b8" tick={{ fontSize: 11, fill: '#94a3b8' }} width={40} allowDecimals={false} />
+                      <Tooltip
+                        contentStyle={{
+                          backgroundColor: '#0f172a',
+                          borderColor: '#334155',
+                          borderRadius: '12px',
+                          color: '#f8fafc',
+                          fontSize: '12px',
+                          direction: 'rtl',
+                          textAlign: 'right',
+                        }}
+                        formatter={(value, name) => [
+                          `${Number(value ?? 0).toLocaleString('ar-EG')} طلب`,
+                          name === 'urbanOrders' ? 'مدينة ومركز الباجور' : 'قرى الباجور',
+                        ]}
+                      />
+                      <Legend
+                        wrapperStyle={{ fontSize: '11px', paddingTop: '8px' }}
+                        formatter={(value) =>
+                          value === 'urbanOrders' ? 'طلبات مركز الباجور' : 'طلبات قرى الباجور'
+                        }
+                      />
+                      <Bar dataKey="urbanOrders" stackId="orders" fill="#f59e0b" radius={[0, 0, 4, 4]} />
+                      <Bar dataKey="ruralOrders" stackId="orders" fill="#10b981" radius={[6, 6, 0, 0]} />
+                    </BarChart>
+                  </ResponsiveContainer>
+                </div>
+              </div>
             </div>
           </div>
 
