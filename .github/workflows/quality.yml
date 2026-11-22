@@ -15,6 +15,20 @@ jobs:
   backend-and-web:
     name: Backend & Web (Typecheck, Test, Build)
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: mashwar_test
+          POSTGRES_PASSWORD: mashwar_test
+          POSTGRES_DB: mashwar_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U mashwar_test -d mashwar_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -32,6 +46,13 @@ jobs:
 
       - name: Execute backend security & integration tests
         run: bun run test
+
+      - name: Execute migrations against disposable PostgreSQL
+        env:
+          DATABASE_URL: postgres://mashwar_test:mashwar_test@localhost:5432/mashwar_test
+          NODE_ENV: test
+        run: |
+          bun -e 'import { verifyOrRunMigrations } from "./backend/src/database/migrator.ts"; const first = await verifyOrRunMigrations(true); if (first.mode !== "live_postgres") throw new Error("Expected live PostgreSQL execution"); console.log("First migration pass:", first.migrationsExecuted.join(", ")); const second = await verifyOrRunMigrations(true); if (second.mode !== "live_postgres") throw new Error("Expected live PostgreSQL execution on repeat"); console.log("Repeat migration pass:", second.migrationsExecuted.join(", "));'
 
       - name: Build web application
         run: bun run build
@@ -51,7 +72,7 @@ jobs:
             echo "flutter_mashwar project detected."
           else
             echo "present=false" >> "$GITHUB_OUTPUT"
-            echo "flutter_mashwar project not found in checkout."
+            echo "flutter_mashwar project not found in this checkout."
           fi
 
       - name: Setup Flutter SDK
