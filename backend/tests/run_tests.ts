@@ -37,6 +37,7 @@ import { CaptainService } from '../src/services/captainService.js';
 import { CashCollectionService } from '../src/services/cashCollectionService.js';
 import { MerchantService } from '../src/services/merchantService.js';
 import { ComplaintService } from '../src/services/complaintService.js';
+import { buildPgSslConfig } from '../src/database/db.js';
 import { verifyOrRunMigrations } from '../src/database/migrator.js';
 import { createRateLimiter, resetAllRateLimiters } from '../src/security/rateLimiter.js';
 import { createServer } from '../src/api/server.js';
@@ -120,6 +121,48 @@ export async function runAllTests(): Promise<{
   console.log(' MASHWAR — BACKEND INTEGRATION TEST SUITE (EL BAGOUR HUB)');
   console.log(' Execution Environment: Node.js / TypeScript / Pure Integer Units');
   console.log('================================================================\n');
+
+  // --------------------------------------------------------------------------
+  // SUITE: PostgreSQL TLS Configuration
+  // --------------------------------------------------------------------------
+  console.log('▶ SUITE: PostgreSQL TLS Configuration');
+
+  await runTest('PostgresTLS', 'Requires verified TLS in production without a custom CA', () => {
+    const ssl = buildPgSslConfig('postgresql://db.example.com:5432/app', 'production', undefined);
+    assert(ssl !== false && ssl.rejectUnauthorized === true, 'Production must require verified TLS');
+  });
+
+  await runTest('PostgresTLS', 'Requires verified TLS for Supabase URLs', () => {
+    const ssl = buildPgSslConfig('postgresql://postgres:secret@db.example.supabase.co:5432/postgres', 'development', undefined);
+    assert(ssl !== false && ssl.rejectUnauthorized === true, 'Supabase must require verified TLS');
+  });
+
+  await runTest('PostgresTLS', 'Honors sslmode=require outside production', () => {
+    const ssl = buildPgSslConfig('postgresql://db.example.com:5432/app?sslmode=require', 'development', undefined);
+    assert(ssl !== false && ssl.rejectUnauthorized === true, 'sslmode=require must not be overridden by ssl:false');
+  });
+
+  await runTest('PostgresTLS', 'Honors sslmode=verify-full outside production', () => {
+    const ssl = buildPgSslConfig('postgresql://db.example.com:5432/app?sslmode=verify-full', 'test', undefined);
+    assert(ssl !== false && ssl.rejectUnauthorized === true, 'sslmode=verify-full must require verified TLS');
+  });
+
+  await runTest('PostgresTLS', 'Keeps local development without an SSL mode on ssl:false', () => {
+    const ssl = buildPgSslConfig('postgresql://localhost:5432/app?sslmode=disable', 'development', undefined);
+    assert(ssl === false, 'Local development must remain non-TLS when explicitly disabled');
+  });
+
+  await runTest('PostgresTLS', 'Omits an empty or whitespace-only custom CA', () => {
+    const ssl = buildPgSslConfig('postgresql://db.example.supabase.co:5432/app', 'development', '  \n  ');
+    assert(ssl !== false && ssl.rejectUnauthorized === true, 'TLS must remain enabled');
+    assert(!('ca' in ssl), 'Whitespace-only PG_SSL_CA must be omitted');
+  });
+
+  await runTest('PostgresTLS', 'Normalizes escaped newlines in a custom PEM CA', () => {
+    const pem = '-----BEGIN CERTIFICATE-----\\nQUJDREVGRw==\\n-----END CERTIFICATE-----';
+    const ssl = buildPgSslConfig('postgresql://db.example.supabase.co:5432/app', 'production', pem);
+    assert(ssl !== false && ssl.ca === '-----BEGIN CERTIFICATE-----\nQUJDREVGRw==\n-----END CERTIFICATE-----', 'Escaped newlines must become real PEM line breaks');
+  });
 
   // --------------------------------------------------------------------------
   // SUITE 1: Authoritative Pricing & Piasters Precision
