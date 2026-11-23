@@ -46,9 +46,9 @@ class _PhoneAuthScreenState extends ConsumerState<PhoneAuthScreen> {
             Container(
               padding: const EdgeInsets.all(20),
               decoration: BoxDecoration(
-                color: AppColors.secondary.withOpacity(0.1),
+                color: AppColors.secondary.withValues(alpha: 0.1),
                 borderRadius: BorderRadius.circular(20),
-                border: Border.all(color: AppColors.secondary.withOpacity(0.25)),
+                border: Border.all(color: AppColors.secondary.withValues(alpha: 0.25)),
               ),
               child: const Column(
                 children: [
@@ -72,9 +72,9 @@ class _PhoneAuthScreenState extends ConsumerState<PhoneAuthScreen> {
               Container(
                 padding: const EdgeInsets.all(12),
                 decoration: BoxDecoration(
-                  color: AppColors.error.withOpacity(0.1),
+                  color: AppColors.error.withValues(alpha: 0.1),
                   borderRadius: BorderRadius.circular(12),
-                  border: Border.all(color: AppColors.error.withOpacity(0.3)),
+                  border: Border.all(color: AppColors.error.withValues(alpha: 0.3)),
                 ),
                 child: Text(
                   authState.errorMessage!,
@@ -115,7 +115,7 @@ class _PhoneAuthScreenState extends ConsumerState<PhoneAuthScreen> {
                       margin: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
                       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
                       decoration: BoxDecoration(
-                        color: AppColors.secondary.withOpacity(0.12),
+                        color: AppColors.secondary.withValues(alpha: 0.12),
                         borderRadius: BorderRadius.circular(10),
                       ),
                       child: const Row(

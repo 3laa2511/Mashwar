@@ -1,9 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
-import '../../../app/theme/app_colors.dart';
-import '../../../shared/models/order_model.dart';
-import '../../../shared/providers/orders_provider.dart';
+import '../../../../app/theme/app_colors.dart';
+import '../../../../shared/models/order_model.dart';
+import '../../../../shared/providers/orders_provider.dart';
 
 class OrderTrackingScreen extends ConsumerWidget {
   final String orderId;
@@ -79,7 +79,7 @@ class OrderTrackingScreen extends ConsumerWidget {
                 border: Border.all(color: AppColors.slate800),
                 boxShadow: [
                   BoxShadow(
-                    color: Colors.black.withOpacity(0.12),
+                    color: Colors.black.withValues(alpha: 0.12),
                     blurRadius: 10,
                     offset: const Offset(0, 4),
                   ),
@@ -172,7 +172,7 @@ class OrderTrackingScreen extends ConsumerWidget {
                           child: Container(
                             padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
                             decoration: BoxDecoration(
-                              color: Colors.black.withOpacity(0.85),
+                              color: Colors.black.withValues(alpha: 0.85),
                               borderRadius: BorderRadius.circular(8),
                               border: Border.all(color: AppColors.slate700),
                             ),
@@ -182,7 +182,7 @@ class OrderTrackingScreen extends ConsumerWidget {
                                 const Icon(Icons.access_time_rounded, color: Colors.amber, size: 12),
                                 const SizedBox(width: 4),
                                 Text(
-                                  '~${order.estimatedDuration ?? 18} د • ${order.distanceKm ?? 2.4} كم',
+                                  '~${(order.distanceKm * 2.4 + 5).ceil()} د • ${order.distanceKm} كم',
                                   style: const TextStyle(color: Colors.white, fontSize: 10, fontWeight: FontWeight.bold),
                                 ),
                               ],

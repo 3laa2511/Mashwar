@@ -60,9 +60,9 @@ class MultiStepOrderScreen extends ConsumerWidget {
                 padding: const EdgeInsets.all(12),
                 margin: const EdgeInsets.only(bottom: 8),
                 decoration: BoxDecoration(
-                  color: AppColors.error.withOpacity(0.1),
+                  color: AppColors.error.withValues(alpha: 0.1),
                   borderRadius: BorderRadius.circular(12),
-                  border: Border.all(color: AppColors.error.withOpacity(0.35)),
+                  border: Border.all(color: AppColors.error.withValues(alpha: 0.35)),
                 ),
                 child: Text(
                   flowState.errorMessage!,
@@ -218,7 +218,7 @@ class _ServiceChoiceStep extends StatelessWidget {
         ),
         const SizedBox(height: 6),
         const Text(
-          'يمكنك طلب توصيل من مطاعم ومتاجر الباجور أو حجز مشوار توكتوك أو سيارة ملاكي.',
+          'يمكنك طلب توصيل من مطاعم ومتاجر الباجور. خدمة نقل الركاب معلقة مؤقتاً لحين استيفاء التراخيص.',
           style: TextStyle(fontSize: 13, color: AppColors.slate500),
         ),
         const SizedBox(height: 16),
@@ -231,11 +231,19 @@ class _ServiceChoiceStep extends StatelessWidget {
         ),
         const SizedBox(height: 12),
         _ServiceOptionCard(
-          title: 'مشوار ركاب — توكتوك أو سيارة (Ride)',
-          subtitle: 'تنقل سريع وآمن بتسعيرة محددة مقدماً بدون فصال',
+          title: 'نقل الركاب معلق مؤقتاً',
+          subtitle: 'تم تعطيل حجز التوكتوك والسيارات لحين اعتماد التراخيص الرسمية واشتراطات السلامة.',
           icon: Icons.directions_car_rounded,
-          isSelected: selected == OrderFlowServiceCategory.ride,
-          onTap: () => onSelect(OrderFlowServiceCategory.ride),
+          isSelected: false,
+          isSuspended: true,
+          onTap: () {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(
+                content: Text('حرصاً على سلامتك، تم تعطيل نقل الركاب لحين استيفاء التراخيص الرسمية.'),
+                backgroundColor: AppColors.slate700,
+              ),
+            );
+          },
         ),
       ],
     );
@@ -247,6 +255,7 @@ class _ServiceOptionCard extends StatelessWidget {
   final String subtitle;
   final IconData icon;
   final bool isSelected;
+  final bool isSuspended;
   final VoidCallback onTap;
 
   const _ServiceOptionCard({
@@ -254,6 +263,7 @@ class _ServiceOptionCard extends StatelessWidget {
     required this.subtitle,
     required this.icon,
     required this.isSelected,
+    this.isSuspended = false,
     required this.onTap,
   });
 
@@ -265,13 +275,15 @@ class _ServiceOptionCard extends StatelessWidget {
       child: Container(
         padding: const EdgeInsets.all(16),
         decoration: BoxDecoration(
-          color: isSelected
-              ? AppColors.secondary.withOpacity(0.08)
-              : Colors.white,
+          color: isSuspended
+              ? AppColors.slate100
+              : isSelected
+                  ? AppColors.secondary.withValues(alpha: 0.08)
+                  : Colors.white,
           borderRadius: BorderRadius.circular(16),
           border: Border.all(
-            color: isSelected ? AppColors.secondary : AppColors.borderLight,
-            width: isSelected ? 2 : 1,
+            color: isSelected && !isSuspended ? AppColors.secondary : AppColors.borderLight,
+            width: isSelected && !isSuspended ? 2 : 1,
           ),
         ),
         child: Row(
@@ -279,10 +291,10 @@ class _ServiceOptionCard extends StatelessWidget {
             CircleAvatar(
               radius: 24,
               backgroundColor:
-                  isSelected ? AppColors.secondary : AppColors.slate100,
+                  isSelected && !isSuspended ? AppColors.secondary : AppColors.slate200,
               child: Icon(
                 icon,
-                color: isSelected ? Colors.white : AppColors.slate700,
+                color: isSelected && !isSuspended ? Colors.white : AppColors.slate500,
               ),
             ),
             const SizedBox(width: 14),
@@ -338,7 +350,9 @@ class _ConfigureDetailsStep extends StatelessWidget {
           ),
           const SizedBox(height: 8),
           DropdownButtonFormField<String>(
-            value: state.selectedMerchantId,
+            key: ValueKey('merchant_${state.selectedMerchantId}'),
+            initialValue: state.selectedMerchantId,
+            isExpanded: true,
             items: elBagourMerchants
                 .map(
                   (m) => DropdownMenuItem(
@@ -388,7 +402,9 @@ class _ConfigureDetailsStep extends StatelessWidget {
           ),
           const SizedBox(height: 8),
           DropdownButtonFormField<String>(
-            value: state.dropoffLandmark,
+            key: ValueKey('delivery_dropoff_${state.dropoffLandmark}'),
+            initialValue: state.dropoffLandmark,
+            isExpanded: true,
             items: MockDataRepository.elBagourLandmarks
                 .map((lm) => DropdownMenuItem(value: lm, child: Text(lm)))
                 .toList(),
@@ -439,7 +455,9 @@ class _ConfigureDetailsStep extends StatelessWidget {
         ),
         const SizedBox(height: 8),
         DropdownButtonFormField<String>(
-          value: state.pickupLandmark,
+          key: ValueKey('ride_pickup_${state.pickupLandmark}'),
+          initialValue: state.pickupLandmark,
+          isExpanded: true,
           items: MockDataRepository.elBagourLandmarks
               .map((lm) => DropdownMenuItem(value: lm, child: Text(lm)))
               .toList(),
@@ -454,7 +472,9 @@ class _ConfigureDetailsStep extends StatelessWidget {
         ),
         const SizedBox(height: 8),
         DropdownButtonFormField<String>(
-          value: state.dropoffLandmark,
+          key: ValueKey('ride_dropoff_${state.dropoffLandmark}'),
+          initialValue: state.dropoffLandmark,
+          isExpanded: true,
           items: MockDataRepository.elBagourLandmarks
               .map((lm) => DropdownMenuItem(value: lm, child: Text(lm)))
               .toList(),
@@ -490,7 +510,7 @@ class _VehicleChoiceChip extends StatelessWidget {
       child: Container(
         padding: const EdgeInsets.all(14),
         decoration: BoxDecoration(
-          color: selected ? AppColors.primary.withOpacity(0.15) : Colors.white,
+          color: selected ? AppColors.primary.withValues(alpha: 0.15) : Colors.white,
           borderRadius: BorderRadius.circular(14),
           border: Border.all(
             color: selected ? AppColors.primaryDark : AppColors.borderLight,
@@ -591,7 +611,9 @@ class _ReviewAndConfirmStep extends StatelessWidget {
         ),
         const SizedBox(height: 8),
         DropdownButtonFormField<String>(
-          value: state.paymentMethod,
+          key: ValueKey('payment_${state.paymentMethod}'),
+          initialValue: state.paymentMethod,
+          isExpanded: true,
           items: const [
             DropdownMenuItem(value: 'cash', child: Text('كاش عند الاستلام')),
             DropdownMenuItem(value: 'vodafone_cash', child: Text('فودافون كاش')),

@@ -1,10 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
-import '../../../app/theme/app_colors.dart';
-import '../../../shared/models/order_model.dart';
-import '../../../shared/providers/orders_provider.dart';
-import '../../../shared/providers/role_provider.dart';
+import '../../../../app/theme/app_colors.dart';
+import '../../../../shared/models/order_model.dart';
+import '../../../../shared/providers/orders_provider.dart';
+import '../../../../shared/providers/role_provider.dart';
 
 class CaptainDashboardScreen extends ConsumerStatefulWidget {
   const CaptainDashboardScreen({super.key});
@@ -37,7 +37,7 @@ class _CaptainDashboardScreenState extends ConsumerState<CaptainDashboardScreen>
         actions: [
           Switch(
             value: _isOnline,
-            activeColor: AppColors.secondary,
+            activeThumbColor: AppColors.secondary,
             onChanged: (val) {
               setState(() => _isOnline = val);
               ScaffoldMessenger.of(context).showSnackBar(
@@ -87,7 +87,7 @@ class _CaptainDashboardScreenState extends ConsumerState<CaptainDashboardScreen>
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
               decoration: BoxDecoration(
-                color: _isOnline ? AppColors.secondary.withOpacity(0.12) : Colors.grey.shade200,
+                color: _isOnline ? AppColors.secondary.withValues(alpha: 0.12) : Colors.grey.shade200,
                 borderRadius: BorderRadius.circular(16),
                 border: Border.all(
                   color: _isOnline ? AppColors.secondary : Colors.grey.shade400,
@@ -161,7 +161,7 @@ class _CaptainDashboardScreenState extends ConsumerState<CaptainDashboardScreen>
               Container(
                 padding: const EdgeInsets.all(14),
                 decoration: BoxDecoration(
-                  color: AppColors.primary.withOpacity(0.12),
+                  color: AppColors.primary.withValues(alpha: 0.12),
                   borderRadius: BorderRadius.circular(16),
                   border: Border.all(color: AppColors.primary, width: 1.5),
                 ),
@@ -240,7 +240,7 @@ class _CaptainDashboardScreenState extends ConsumerState<CaptainDashboardScreen>
                         Container(
                           padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
                           decoration: BoxDecoration(
-                            color: AppColors.primary.withOpacity(0.15),
+                            color: AppColors.primary.withValues(alpha: 0.15),
                             borderRadius: BorderRadius.circular(8),
                           ),
                           child: Text('طلب #${activeOrder.id}', style: const TextStyle(fontWeight: FontWeight.bold)),

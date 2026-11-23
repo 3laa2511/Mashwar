@@ -12,6 +12,8 @@ final orderRepositoryProvider = Provider<IOrderRepository>((ref) {
 class OrdersNotifier extends StateNotifier<List<OrderModel>> {
   final IOrderRepository? _repository;
 
+  IOrderRepository? get repository => _repository;
+
   OrdersNotifier([this._repository]) : super(MockDataRepository.getInitialMockOrders());
 
   /// Adds a newly created order from the booking flow
@@ -78,7 +80,7 @@ class OrdersNotifier extends StateNotifier<List<OrderModel>> {
 
 /// Global Riverpod Provider for Orders state
 final ordersProvider = StateNotifierProvider<OrdersNotifier, List<OrderModel>>((ref) {
-  return OrdersNotifier();
+  return OrdersNotifier(ref.watch(orderRepositoryProvider));
 });
 
 /// Selector for a single order by ID

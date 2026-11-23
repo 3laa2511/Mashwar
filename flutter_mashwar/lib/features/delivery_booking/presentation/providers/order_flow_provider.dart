@@ -191,11 +191,16 @@ class OrderFlowNotifier extends StateNotifier<OrderFlowState> {
         ));
 
   void selectServiceCategory(OrderFlowServiceCategory category) {
+    if (category == OrderFlowServiceCategory.ride) {
+      state = state.copyWith(
+        serviceCategory: OrderFlowServiceCategory.delivery,
+        errorMessage: 'نقل الركاب معلق مؤقتاً لحين استيفاء التراخيص الرسمية واشتراطات السلامة.',
+      );
+      return;
+    }
     state = state.copyWith(
       serviceCategory: category,
-      pickupLandmark: category == OrderFlowServiceCategory.delivery
-          ? state.selectedMerchant.landmark
-          : MockDataRepository.elBagourLandmarks.first,
+      pickupLandmark: state.selectedMerchant.landmark,
       clearError: true,
     );
   }
@@ -290,6 +295,13 @@ class OrderFlowNotifier extends StateNotifier<OrderFlowState> {
   }
 
   Future<String?> submitOrder({String? customerPhone}) async {
+    if (state.serviceCategory == OrderFlowServiceCategory.ride) {
+      state = state.copyWith(
+        isSubmitting: false,
+        errorMessage: 'نقل الركاب معلق مؤقتاً لحين استيفاء التراخيص الرسمية واشتراطات السلامة.',
+      );
+      return null;
+    }
     state = state.copyWith(isSubmitting: true, clearError: true);
 
     final orderNumber = 'MSH-${DateTime.now().millisecondsSinceEpoch % 10000}';

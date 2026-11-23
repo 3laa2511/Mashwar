@@ -1,9 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
-import '../../../app/theme/app_colors.dart';
-import '../../../shared/models/order_model.dart';
-import '../../../shared/providers/orders_provider.dart';
+import '../../../../app/theme/app_colors.dart';
+import '../../../../shared/models/order_model.dart';
+import '../../../../shared/providers/orders_provider.dart';
 
 class OrderHistoryScreen extends ConsumerWidget {
   const OrderHistoryScreen({super.key});
@@ -50,8 +50,8 @@ class OrderHistoryScreen extends ConsumerWidget {
                                     padding: const EdgeInsets.all(8),
                                     decoration: BoxDecoration(
                                       color: isDelivered
-                                          ? AppColors.secondary.withOpacity(0.12)
-                                          : AppColors.primary.withOpacity(0.12),
+                                          ? AppColors.secondary.withValues(alpha: 0.12)
+                                          : AppColors.primary.withValues(alpha: 0.12),
                                       shape: BoxShape.circle,
                                     ),
                                     child: Icon(
@@ -71,8 +71,8 @@ class OrderHistoryScreen extends ConsumerWidget {
                                 padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
                                 decoration: BoxDecoration(
                                   color: isDelivered
-                                      ? AppColors.secondary.withOpacity(0.15)
-                                      : AppColors.primary.withOpacity(0.15),
+                                      ? AppColors.secondary.withValues(alpha: 0.15)
+                                      : AppColors.primary.withValues(alpha: 0.15),
                                   borderRadius: BorderRadius.circular(8),
                                 ),
                                 child: Text(
