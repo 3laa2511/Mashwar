@@ -10,8 +10,6 @@ environment:
 dependencies:
   flutter:
     sdk: flutter
-  flutter_localizations:
-    sdk: flutter
 
   # State Management
   flutter_riverpod: ^2.5.1
@@ -35,6 +33,7 @@ dependencies:
   shared_preferences: ^2.2.2
 
   # UI, Icons, Typography & Localization
+  material_ui: ^1.0.0
   google_fonts: ^6.1.0
   intl: ^0.20.3
   lucide_icons: ^0.252.0
