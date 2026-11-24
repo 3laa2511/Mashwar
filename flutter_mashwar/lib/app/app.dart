@@ -1,5 +1,4 @@
-import 'package:flutter/material.dart';
-import 'package:flutter_localizations/flutter_localizations.dart';
+import 'package:material_ui/material_ui.dart';
 import 'router/app_router.dart';
 import 'theme/app_theme.dart';
 
@@ -20,11 +19,7 @@ class MashwarApp extends StatelessWidget {
         Locale('ar', 'EG'),
         Locale('en', 'US'),
       ],
-      localizationsDelegates: const [
-        GlobalMaterialLocalizations.delegate,
-        GlobalWidgetsLocalizations.delegate,
-        GlobalCupertinoLocalizations.delegate,
-      ],
+      localizationsDelegates: GlobalMaterialLocalizations.delegates,
       routerConfig: appRouter,
     );
   }
