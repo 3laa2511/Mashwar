@@ -8,8 +8,17 @@ import path from 'node:path';
 import express from 'express';
 import { createServer as createViteServer } from 'vite';
 import { router as apiRouter } from './backend/src/api/routes.js';
+import { isPostgresConfigured } from './backend/src/database/db.js';
+import { assertMigrationsCurrent } from './backend/src/database/migrator.js';
 
 async function startServer() {
+  if (process.env.NODE_ENV === 'production' && !isPostgresConfigured()) {
+    throw new Error('DATABASE_URL is required in production. Refusing to start with in-memory persistence.');
+  }
+  if (isPostgresConfigured()) {
+    await assertMigrationsCurrent();
+  }
+
   const app = express();
   const PORT = Number(process.env.PORT) || 3000;
 
