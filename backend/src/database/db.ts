@@ -26,8 +26,9 @@ export function getDb(): Kysely<Database> | null {
   if (!dbInstance) {
     pgPoolInstance = new Pool({
       connectionString,
+      // Verify the server certificate. Never disable TLS verification for managed databases.
       ssl: process.env.NODE_ENV === 'production' || connectionString.includes('supabase')
-        ? { rejectUnauthorized: false }
+        ? { rejectUnauthorized: true }
         : false,
       max: Number(process.env.PG_MAX_POOL || 20),
       idleTimeoutMillis: 30000,
