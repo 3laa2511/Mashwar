@@ -69,6 +69,27 @@ export async function runMigrations(): Promise<MigrationExecutionReport> {
   };
 }
 
+/** Refuse API startup when a configured database has pending migrations. */
+export async function assertMigrationsCurrent(): Promise<void> {
+  if (!isPostgresConfigured()) {
+    throw new Error('DATABASE_URL is required for the production API runtime.');
+  }
+  const db = getDb() as Kysely<any> | null;
+  if (!db) throw new Error('PostgreSQL connection could not be initialized.');
+
+  const relation = await sql<{ table_name: string | null }>`select to_regclass('public.schema_migrations')::text as table_name`.execute(db);
+  if (!relation.rows[0]?.table_name) {
+    throw new Error('Database schema is not initialized. Run `bun run db:migrate` before starting Mashwar.');
+  }
+
+  const appliedRows = await db.selectFrom('schema_migrations').select('name').execute();
+  const applied = new Set(appliedRows.map((row: { name: string }) => row.name));
+  const pending = MIGRATIONS.map((migration) => migration.name).filter((name) => !applied.has(name));
+  if (pending.length) {
+    throw new Error(`Database has pending migrations: ${pending.join(', ')}. Run `bun run db:migrate` before starting Mashwar.`);
+  }
+}
+
 /** Compile migration DDL without connecting to or mutating a database. */
 export async function verifyOrRunMigrations(runAgainstLiveDb: boolean = false): Promise<MigrationExecutionReport> {
   if (runAgainstLiveDb) return runMigrations();
