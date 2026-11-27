@@ -50,13 +50,17 @@ export function setCustomDb(customDb: Kysely<Database> | null): void {
 }
 
 export async function closeDb(): Promise<void> {
-  if (dbInstance) {
-    await dbInstance.destroy();
-    dbInstance = null;
-  }
-  if (pgPoolInstance) {
-    await pgPoolInstance.end();
-    pgPoolInstance = null;
+  const db = dbInstance;
+  const pool = pgPoolInstance;
+  dbInstance = null;
+  pgPoolInstance = null;
+
+  // Kysely's PostgresDialect owns and closes the pool on destroy().
+  // Calling pool.end() again after db.destroy() rejects with "Called end on pool more than once".
+  if (db) {
+    await db.destroy();
+  } else if (pool) {
+    await pool.end();
   }
 }
 
