@@ -79,14 +79,14 @@ export async function assertMigrationsCurrent(): Promise<void> {
 
   const relation = await sql<{ table_name: string | null }>`select to_regclass('public.schema_migrations')::text as table_name`.execute(db);
   if (!relation.rows[0]?.table_name) {
-    throw new Error('Database schema is not initialized. Run `bun run db:migrate` before starting Mashwar.');
+    throw new Error('Database schema is not initialized. Run "bun run db:migrate" before starting Mashwar.');
   }
 
   const appliedRows = await db.selectFrom('schema_migrations').select('name').execute();
   const applied = new Set(appliedRows.map((row: { name: string }) => row.name));
   const pending = MIGRATIONS.map((migration) => migration.name).filter((name) => !applied.has(name));
   if (pending.length) {
-    throw new Error(`Database has pending migrations: ${pending.join(', ')}. Run `bun run db:migrate` before starting Mashwar.`);
+    throw new Error('Database has pending migrations: ' + pending.join(', ') + '. Run "bun run db:migrate" before starting Mashwar.');
   }
 }
 
