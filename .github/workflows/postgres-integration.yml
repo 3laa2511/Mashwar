@@ -44,5 +44,8 @@ jobs:
       - name: Install dependencies
         run: bun install --frozen-lockfile
 
+      - name: Apply pending database migrations
+        run: bun run db:migrate
+
       - name: Run backend suite with live PostgreSQL enabled
         run: bun run test
