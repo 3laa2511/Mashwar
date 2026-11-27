@@ -1,8 +1,6 @@
-/**
- * Mashwar — PostgreSQL Migration Registry & Dry-Run Schema Validator
- */
+/** Mashwar PostgreSQL migration registry with durable, transactional history. */
 
-import { Kysely, DummyDriver, PostgresAdapter, PostgresIntrospector, PostgresQueryCompiler } from 'kysely';
+import { Kysely, DummyDriver, PostgresAdapter, PostgresIntrospector, PostgresQueryCompiler, sql } from 'kysely';
 import { getDb, isPostgresConfigured } from './db.js';
 import * as migration001 from './migrations/001_security_hardening.js';
 import * as migration002 from './migrations/002_complete_platform_schema.js';
@@ -21,30 +19,61 @@ export const MIGRATIONS = [
 ];
 
 /**
- * Compiles all migrations against Kysely's PostgreSQL dialect (or executes against live PostgreSQL if configured)
- * to verify DDL syntax, column types, foreign keys, and indexes.
+ * Applies pending migrations once, in order. Each migration and its history row
+ * commit atomically. A transaction-scoped advisory lock serializes deploys.
  */
-export async function verifyOrRunMigrations(runAgainstLiveDb: boolean = false): Promise<MigrationExecutionReport> {
-  if (runAgainstLiveDb && isPostgresConfigured()) {
-    const db = getDb();
-    if (db) {
-      const executed: string[] = [];
-      for (const m of MIGRATIONS) {
-        await m.up(db);
-        executed.push(m.name);
-      }
-      return {
-        mode: 'live_postgres',
-        migrationsExecuted: executed,
-        compiledStatementsCount: executed.length,
-        sampleSqlStatements: [],
-      };
-    }
+export async function runMigrations(): Promise<MigrationExecutionReport> {
+  if (!isPostgresConfigured()) {
+    throw new Error('DATABASE_URL is required to run database migrations.');
   }
 
-  // Dry-run compile using Kysely PostgresQueryCompiler + custom capturing driver
-  const capturedSql: string[] = [];
+  const db = getDb() as Kysely<any> | null;
+  if (!db) throw new Error('PostgreSQL connection could not be initialized.');
 
+  await db.schema
+    .createTable('schema_migrations')
+    .ifNotExists()
+    .addColumn('name', 'varchar(160)', (column) => column.primaryKey())
+    .addColumn('applied_at', 'timestamptz', (column) => column.notNull().defaultTo(sql`CURRENT_TIMESTAMP`))
+    .execute();
+
+  const executed: string[] = [];
+  for (const migration of MIGRATIONS) {
+    const applied = await db.transaction().execute(async (trx) => {
+      await sql`select pg_advisory_xact_lock(hashtext('mashwar:schema_migrations'))`.execute(trx);
+
+      const existing = await trx
+        .selectFrom('schema_migrations')
+        .select('name')
+        .where('name', '=', migration.name)
+        .executeTakeFirst();
+
+      if (existing) return false;
+
+      await migration.up(trx);
+      await trx
+        .insertInto('schema_migrations')
+        .values({ name: migration.name })
+        .execute();
+      return true;
+    });
+
+    if (applied) executed.push(migration.name);
+  }
+
+  return {
+    mode: 'live_postgres',
+    migrationsExecuted: executed,
+    compiledStatementsCount: executed.length,
+    sampleSqlStatements: [],
+  };
+}
+
+/** Compile migration DDL without connecting to or mutating a database. */
+export async function verifyOrRunMigrations(runAgainstLiveDb: boolean = false): Promise<MigrationExecutionReport> {
+  if (runAgainstLiveDb) return runMigrations();
+
+  const capturedSql: string[] = [];
   class CapturingDriver extends DummyDriver {
     async acquireConnection() {
       return {
@@ -67,9 +96,9 @@ export async function verifyOrRunMigrations(runAgainstLiveDb: boolean = false): 
   });
 
   const executed: string[] = [];
-  for (const m of MIGRATIONS) {
-    await m.up(dryRunDb);
-    executed.push(m.name);
+  for (const migration of MIGRATIONS) {
+    await migration.up(dryRunDb);
+    executed.push(migration.name);
   }
 
   return {
