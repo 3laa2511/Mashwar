@@ -62,16 +62,16 @@ export class CashCollectionService {
   private static idempotencyCache: Map<string, IdempotencyCacheEntry> = new Map();
 
   /**
-   * Primary entry point.
-   * Unit tests deliberately use the in-memory implementation because their fixtures
-   * are created in PersistentStore. The live PostgreSQL integration test calls the
-   * explicit recordCashCollectionPostgres method with database-backed fixtures.
-   * Non-test runtimes always use PostgreSQL when DATABASE_URL is configured.
+   * Primary entry point: Routes to PostgreSQL transactional engine if DB is available,
+   * otherwise falls back to memory mutex engine for offline testing.
    */
   public static async recordCashCollection(
     request: CashCollectionRequest,
     customDb?: Kysely<Database> | null
   ): Promise<CashCollectionResult> {
+    // Unit-test fixtures live in PersistentStore; the dedicated live PostgreSQL
+    // integration test calls recordCashCollectionPostgres with database-backed rows.
+    // Never route in-memory test fixtures into PostgreSQL just because CI has DATABASE_URL.
     if (customDb === undefined && process.env.NODE_ENV === 'test') {
       return this.recordCashCollectionInMemory(request);
     }
@@ -436,7 +436,7 @@ export class CashCollectionService {
         throw err;
       }
 
-      // 7b. Prevent duplicate cash collection on an already-paid order when using a different idempotency key
+      // 7b. Prevent duplicate cash collection if order is already marked paid with a different idempotency key
       if (order.isPaid && order.cashCollectedPiasters !== undefined && order.cashCollectedPiasters > 0) {
         const err = new Error('تم تحصيل قيمة هذا الطلب مسبقاً.');
         (err as any).code = 'ORDER_ALREADY_PAID';
@@ -465,4 +465,79 @@ export class CashCollectionService {
 
       if (updatedOrder.status === 'in_transit') {
         updatedOrder.status = 'delivered';
-      
+      }
+
+      PersistentStore.saveOrder(updatedOrder);
+
+      // 10. Read latest Captain state inside lock & update Cash Holding + 100,000 piasters (1,000 EGP) ceiling
+      const storedCaptain = PersistentStore.getCaptainById(captain.id) || captain;
+      const previousHolding = storedCaptain.cashHoldingPiasters;
+      const newHolding = previousHolding + amountPiasters;
+      storedCaptain.cashHoldingPiasters = newHolding;
+      captain.cashHoldingPiasters = newHolding;
+
+      const ceilingExceeded = newHolding > storedCaptain.maxCashHoldingPiasters;
+      if (ceilingExceeded && storedCaptain.subscriptionStatus === 'active') {
+        storedCaptain.subscriptionStatus = 'suspended';
+        captain.subscriptionStatus = 'suspended';
+      }
+
+      PersistentStore.saveCaptain(storedCaptain);
+
+      // 11. Immutable Ledger Insertion
+      const ledgerEntryId = `ledger_${crypto.randomBytes(8).toString('hex')}`;
+      AuditLogger.record({
+        actorId: storedCaptain.userId,
+        actorRole: 'captain',
+        actorName: storedCaptain.fullName,
+        actionType: 'CAPTAIN_CASH_SETTLED',
+        targetEntity: 'order',
+        targetId: order.id,
+        descriptionAr: `تحصيل نقدي عند التوصيل بقيمة ${(amountPiasters / 100).toFixed(2)} ج.م للطلب ${order.orderNumber}. رصيد العهدة الحالي: ${(newHolding / 100).toFixed(2)} ج.م.`,
+        previousState: { cashHoldingPiasters: previousHolding, isPaid: false },
+        newState: {
+          cashHoldingPiasters: newHolding,
+          isPaid: true,
+          subscriptionStatus: storedCaptain.subscriptionStatus,
+          ceilingExceeded,
+        },
+        notes: notes || (ceilingExceeded ? 'تجاوز حد العهدة المسموح به (1,000 ج.م) وتم تعليق الحساب مؤقتاً لحين التوريد' : undefined),
+      });
+
+      const result: CashCollectionResult = {
+        success: true,
+        orderId: order.id,
+        amountCollectedPiasters: amountPiasters,
+        formattedAmountEgp: `${(amountPiasters / 100).toFixed(2)} ج.م`,
+        captainCurrentCashPiasters: newHolding,
+        formattedCaptainCashEgp: `${(newHolding / 100).toFixed(2)} ج.م`,
+        ceilingExceeded,
+        customerConfirmed: Boolean(customerConfirmed),
+        idempotencyKey: effectiveKey,
+        isIdempotentReplay: false,
+        ledgerEntryId,
+        recordedAt: nowIso,
+      };
+
+      this.idempotencyCache.set(effectiveKey, {
+        result,
+        orderId,
+        captainId: captain.id,
+        amountPiasters,
+      });
+      return result;
+    } finally {
+      releaseCaptainLock();
+      releaseOrderLock();
+    }
+  }
+
+  /**
+   * Resets the cache for testing isolation.
+   */
+  public static clearCache(): void {
+    this.idempotencyCache.clear();
+    this.orderLocks.clear();
+    this.captainLocks.clear();
+  }
+}
