@@ -69,6 +69,13 @@ export class CashCollectionService {
     request: CashCollectionRequest,
     customDb?: Kysely<Database> | null
   ): Promise<CashCollectionResult> {
+    // Unit-test fixtures live in PersistentStore; the dedicated live PostgreSQL
+    // integration test calls recordCashCollectionPostgres with database-backed rows.
+    // Never route in-memory test fixtures into PostgreSQL just because CI has DATABASE_URL.
+    if (customDb === undefined && process.env.NODE_ENV === 'test') {
+      return this.recordCashCollectionInMemory(request);
+    }
+
     const db = customDb !== undefined ? customDb : getDb();
     if (db) {
       return this.recordCashCollectionPostgres(db, request);

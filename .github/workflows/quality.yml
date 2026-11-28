@@ -67,6 +67,12 @@ jobs:
           cd flutter_mashwar
           flutter pub get
 
+      - name: Verify Material UI migration is complete
+        if: steps.check_flutter.outputs.present == 'true'
+        run: |
+          cd flutter_mashwar
+          dart fix --dry-run --code=migrate_design_widgets
+
       - name: Analyze Flutter codebase
         if: steps.check_flutter.outputs.present == 'true'
         run: |

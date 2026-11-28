@@ -1,4 +1,4 @@
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 
 /// Mashwar Design System Color Palette
 /// Tailored for high legibility in bright Egyptian sunlight with warm Nile Delta accents.
